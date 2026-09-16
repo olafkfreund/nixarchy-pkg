@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+# nixarchy-pkg -- what the nixarchy.pkg panel needs to know, as JSON.
+#
+# The panel is QML inside the Omarchy shell and cannot run a package
+# manager. This script is the whole of its contact with the machine: it
+# reads the two selection files, searches the nixpkgs index, and calls the
+# nixarchy writers that already know how to edit those files safely.
+#
+#   state                        the catalogue and what is selected
+#   search <query> [--kind K] [--limit N]
+#                                rows from the nixpkgs/options index
+#   toggle app|service <id>      turn a catalogue row on or off
+#   pkg add|remove <attr> [--stable|--unstable]
+#                                a raw nixpkgs attribute
+#   opt describe <path>          an option's type, default and example
+#   opt set <path> <nix-value>   write a value for it
+#   opt remove <path>            take it out again
+#   draft new <url> | draft undraft <name>
+#   pending                      what is queued but not yet applied
+#   apply                        copy into the flake and rebuild
+#   reindex                      rebuild the search index
+#
+# Every subcommand prints ONE object and exits 0, including on failure:
+# a panel with `{"ok":false,"error":...}` can say what went wrong, where a
+# panel with a non-zero exit and no output can only show an empty card.
+#
+# Nothing here reimplements a writer. Marker placement, catalogue drift,
+# unfree policy, the pkgsOther channel escape, backups and the parse check
+# all live in nixarchy-app-enable, nixarchy-service-enable,
+# nixarchy-pkg-add, nixarchy-opt-remove and nixarchy-apply. A second
+# implementation of any of them is a second set of bugs, and the #@opt
+# line format is byte-exact -- nixarchy-opt-remove walks a comment block
+# keyed on those bytes and nixarchy's checks.options asserts them.
+#
+# JSON is built with jq and never with printf: a package description or an
+# option's documentation may contain a quote, a backslash or a newline,
+# and the panel parses whatever this prints.
+
+set -euo pipefail
+umask 077
+
+readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/nixarchy"
+readonly CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/nixarchy"
+readonly APPS="$CONFIG_DIR/apps.nix"
+readonly SERVICES="$CONFIG_DIR/services.nix"
+readonly INDEX="$CACHE_DIR/index.tsv"
+readonly STAMP="$CACHE_DIR/stamp"
+
+# Anything this prints is the panel's only account of what happened, so a
+# failure is a value rather than an exit code.
+die() {
+  jq -nc --arg e "$1" '{ok: false, error: $e}'
+  exit 0
+}
+
+need() {
+  command -v "$1" >/dev/null 2>&1 || die "$1 is not on PATH"
+}
+
+# The paths nixarchy-search bakes in at build time: options.json and the
+# six others that key the index. Read out of the installed script rather
+# than hardcoded, so they follow the system generation instead of going
+# stale the first time nixpkgs moves. A missing one is not fatal -- the
+# features that need it say so individually.
+searched() {
+  local var=$1 path
+  path=$(command -v nixarchy-search 2>/dev/null) || return 0
+  sed -n "s/^${var}=\\(.*\\)$/\\1/p" "$path" | head -1
+}
+
+
+# nixarchy's own staleness test, reproduced rather than guessed: the stamp
+# holds what the index was built FROM, so an index built by an older
+# nixarchy-search does not merely lag nixpkgs -- it can be missing whole
+# fields. The unfree and broken flags arrived in #493, and an index from
+# before it reports every package as free. The panel must be able to say
+# so rather than quietly dropping the warning.
+index_stale() {
+  local key
+  [ -s "$INDEX" ] || return 0
+  key=$(printf '%s\n' \
+    "$(searched nixpkgs)" "$(searched walk)" "$(searched optionsjson)" \
+    "$(searched appindex)" "$(searched apptable)" \
+    "$(searched flatpakrows)" "$(searched pkgnewrow)")
+  [ "$(cat "$STAMP" 2>/dev/null)" != "$key" ]
+}
+
+# One selection file's marked rows, as TSV for jq to pick up.
+#
+# A row is a line carrying `#@ <id>`, under the most recent `── Name ──`
+# header. It is on when the line's first non-space character is not a
+# comment -- the same question nixarchy-service-enable asks, and a more
+# honest one than grepping for `<id>.enable`, because it does not answer
+# "yes" to `enable = false;`.
+#
+# The id is taken whole, so `#@ tailscale` and `#@ tailscale.settings` are
+# two different rows and the settings row is reported separately rather
+# than being mistaken for the service.
+rows_tsv() {
+  local file=$1 kind=$2
+  [ -f "$file" ] || return 0
+  awk -F'\t' -v kind="$kind" '
+    # A section header, e.g. `  # \u2500\u2500 Network \u2500\u2500\u2500\u2500`. The rule is the
+    # box-drawing character itself, so a comment that merely starts with a
+    # word cannot be mistaken for one.
+    /^[[:space:]]*#[[:space:]]*\xe2\x94\x80/ {
+      line = $0
+      gsub(/\xe2\x94\x80/, "", line)
+      sub(/^[[:space:]]*#[[:space:]]*/, "", line)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+      if (line != "") category = line
+      next
+    }
+
+    # A marked row.
+    /#@ [^ \t]+/ {
+      if (match($0, /#@ [^ \t]+/) == 0) next
+      id = substr($0, RSTART + 3, RLENGTH - 3)
+
+      body = $0
+      sub(/[[:space:]]*#@ .*$/, "", body)          # drop the marker onwards
+      enabled = (body ~ /^[[:space:]]*[^#[:space:]]/) ? "true" : "false"
+      sub(/^[[:space:]]*#[[:space:]]?/, "", body)  # uncomment for display
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", body)
+
+      note = $0
+      sub(/^.*#@ [^ \t]+[[:space:]]*/, "", note)   # whatever trails the marker
+      sub(/^#[[:space:]]*/, "", note)
+      gsub(/\t/, " ", note)
+
+      printf "%s\t%s\t%s\t%s\t%s\t%s\n", kind, id, category, enabled, body, note
+    }
+  ' "$file"
+}
+
+# The `#@pkg`, `#@opt` and `#@draft` lines, which are not catalogue rows:
+# they are what the user added themselves. An option line is either a set
+# value or a commented scaffold, and the panel needs to tell them apart.
+extras_tsv() {
+  [ -f "$APPS" ] || return 0
+  awk '
+    match($0, /#@pkg-other [^ \t]+/) {
+      print "pkg\t" substr($0, RSTART + 12, RLENGTH - 12) "\tother"; next
+    }
+    match($0, /#@pkg [^ \t]+/) {
+      print "pkg\t" substr($0, RSTART + 6, RLENGTH - 6) "\tdefault"; next
+    }
+    match($0, /#@opt [^ \t]+/) {
+      path = substr($0, RSTART + 6, RLENGTH - 6)
+      set = ($0 ~ /^[[:space:]]*#/) ? "false" : "true"
+      body = $0
+      sub(/[[:space:]]*#@opt .*$/, "", body)
+      sub(/^[[:space:]]*#[[:space:]]?/, "", body)
+      gsub(/\t/, " ", body)
+      print "opt\t" path "\t" set "\t" body; next
+    }
+    match($0, /#@draft [^ \t]+/) {
+      print "draft\t" substr($0, RSTART + 8, RLENGTH - 8) "\t"; next
+    }
+  ' "$APPS"
+}
+
+# Nicer labels for the app rows, when the index has them: field 3 of an
+# `app` row reads "Brave (Browser)". Absent or stale index, the id stands
+# on its own, which is what the selection file shows anyway.
+labels_tsv() {
+  [ -s "$INDEX" ] || return 0
+  awk -F'\t' '$1 == "app" { print $2 "\t" $3 }' "$INDEX"
+}
+
+cmd_state() {
+  local stale=false
+  index_stale && stale=true
+
+  jq -n \
+    --rawfile apps <(rows_tsv "$APPS" app) \
+    --rawfile services <(rows_tsv "$SERVICES" service) \
+    --rawfile extras <(extras_tsv) \
+    --rawfile labels <(labels_tsv) \
+    --argjson stale "$stale" \
+    --arg appsFile "$APPS" \
+    --arg servicesFile "$SERVICES" \
+    '
+    def lines: split("\n") | map(select(length > 0));
+    def cols:  lines | map(split("\t"));
+
+    ($labels | cols | map({key: .[0], value: .[1]}) | from_entries) as $label |
+
+    {
+      ok: true,
+      indexStale: $stale,
+      files: { apps: $appsFile, services: $servicesFile },
+      apps: ($apps | cols | map({
+        id: .[1], category: (.[2] // ""), enabled: (.[3] == "true"),
+        line: (.[4] // ""), note: (.[5] // ""),
+        label: ($label[.[1]] // .[1]),
+        settings: (.[1] | test("\\.settings$"))
+      })),
+      services: ($services | cols | map({
+        id: .[1], category: (.[2] // ""), enabled: (.[3] == "true"),
+        line: (.[4] // ""), note: (.[5] // ""),
+        label: ($label[.[1]] // .[1]),
+        settings: (.[1] | test("\\.settings$"))
+      })),
+      packages: ($extras | cols | map(select(.[0] == "pkg") | {
+        attr: .[1], channel: (.[2] // "default")
+      })),
+      options: ($extras | cols | map(select(.[0] == "opt") | {
+        path: .[1], set: (.[2] == "true"), line: (.[3] // "")
+      })),
+      drafts: ($extras | cols | map(select(.[0] == "draft") | { name: .[1] }))
+    }'
+}
+
+main() {
+  need jq
+  local cmd=${1-}
+  [ -n "$cmd" ] || die "usage: nixarchy-pkg <state|search|toggle|pkg|opt|draft|pending|apply|reindex>"
+  shift
+  case "$cmd" in
+    state) cmd_state "$@" ;;
+    *) die "no such command: $cmd" ;;
+  esac
+}
+
+main "$@"
