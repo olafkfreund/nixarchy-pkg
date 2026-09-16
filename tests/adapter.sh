@@ -48,6 +48,41 @@ check "settings rows are marked"   jq -e '.apps | map(select(.settings)) | lengt
 check "reports index staleness"    jq -e '.indexStale | type == "boolean"' <<<"$state"
 rm -rf "$CONFIG"
 
+echo "search"
+if [ -s "${XDG_CACHE_HOME:-$HOME/.cache}/nixarchy/index.tsv" ]; then
+  hits=$("$ADAPTER" search ripgrep --kind pkg --limit 5)
+  check "finds a package"            jq -e '.rows | length > 0'      <<<"$hits"
+  check "ranks the exact name first" jq -e '.rows[0].name == "ripgrep"' <<<"$hits"
+  check "honours --limit"            jq -e '.rows | length <= 5'     <<<"$hits"
+  check "package rows carry no type" jq -e '.rows | all(.type == "")' <<<"$hits"
+  opts=$("$ADAPTER" search openssh.ports --kind opt --limit 3)
+  check "option rows carry a type"   jq -e '.rows[0].type | length > 0' <<<"$opts"
+  check "preview is unescaped"       jq -e '.rows[0].preview | contains("\n")' <<<"$hits"
+  check "a bad --limit is a value"   jq -e '.ok == false' <<<"$("$ADAPTER" search x --limit abc)"
+  check "a bad --kind is a value"    jq -e '.ok == false' <<<"$("$ADAPTER" search x --kind nope)"
+else
+  echo "  skip (no search index; run nixarchy-pkg reindex)"
+fi
+
+echo "writers"
+CONFIG=$(fresh_config); export XDG_CONFIG_HOME="$CONFIG"
+on=$("$ADAPTER" toggle app brave)
+check "toggling on reports enabled" jq -e '.apps[] | select(.id=="brave") | .enabled' <<<"$on"
+check "the file really changed"     grep -qE '^[[:space:]]*brave\.enable = true;  #@ brave$' "$CONFIG/nixarchy/apps.nix"
+off=$("$ADAPTER" toggle app brave)
+check "toggling off reports disabled" jq -e '.apps[] | select(.id=="brave") | .enabled | not' <<<"$off"
+svc=$("$ADAPTER" toggle service openssh)
+check "services use their own file" jq -e '.services[] | select(.id=="openssh") | .enabled' <<<"$svc"
+check "an unknown id is a value"    jq -e '.ok == false' <<<"$("$ADAPTER" toggle app nosuchapp)"
+check "an unknown kind is a value"  jq -e '.ok == false' <<<"$("$ADAPTER" toggle widget brave)"
+
+added=$("$ADAPTER" pkg add ripgrep)
+check "pkg add lands in the list"   jq -e '.packages | map(.attr) | index("ripgrep")' <<<"$added"
+removed=$("$ADAPTER" pkg remove ripgrep)
+check "pkg remove takes it out"     jq -e '.packages | map(.attr) | index("ripgrep") | not' <<<"$removed"
+check "apps.nix still parses"       nix-instantiate --parse "$CONFIG/nixarchy/apps.nix"
+rm -rf "$CONFIG"
+
 echo "failure is a value, not an exit code"
 out=$("$ADAPTER" nosuchcommand); rc=$?
 check "exits 0 on an unknown command" test "$rc" = 0
