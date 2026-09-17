@@ -33,6 +33,12 @@ jobs:
             exit 1
           fi
 
+      # The plugin validator checks the manifest's entry points and nothing
+      # else, so a mark that failed to ship would pass every other gate and
+      # draw an empty widget on someone's bar.
+      - name: the bar mark ships
+        run: test -f ./result/assets/package.svg
+
       - name: every entry point the manifest names exists
         run: |
           for f in $(nix run nixpkgs#jq -- -r '.entryPoints[]' manifest.json); do

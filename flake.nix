@@ -37,6 +37,11 @@
                        ${./PkgModel.qml} ${./OptionForm.qml}; do
                 cp "$f" "$out/$(basename "$f" | sed 's/^[a-z0-9]*-//')"
               done
+              # The bar mark. Without it the widget draws nothing, and the
+              # validator does not catch a missing asset -- only the manifest's
+              # own entry points.
+              mkdir -p "$out/assets"
+              cp ${./assets/package.svg} "$out/assets/package.svg"
               cp ${./bin/nixarchy-pkg}      "$out/bin/nixarchy-pkg"
               cp ${./bin/nixarchy-pkg-keys} "$out/bin/nixarchy-pkg-keys"
               chmod +x "$out/bin/"*
