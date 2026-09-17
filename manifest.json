@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "nixarchy.pkg",
+  "name": "nixarchy packages",
+  "version": "0.1.0",
+  "author": "olafkfreund",
+  "license": "MIT",
+  "description": "Search nixpkgs, turn apps and services on, set NixOS options, and apply -- from the shell, on the keyboard.",
+  "homepage": "https://github.com/olafkfreund/nixarchy-pkg",
+  "kinds": ["menu", "bar-widget"],
+  "entryPoints": {
+    "menu": "Menu.qml",
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "nixarchy",
+    "description": "What is queued for the next rebuild, and a way to queue more.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  },
+  "keepLoaded": true
+}
