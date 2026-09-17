@@ -136,6 +136,12 @@ check "a toggle counts once"   jq -e '.count == 1 and .changes[0].change == "on"
 check "a package counts once"  jq -e '.count == 2' <<<"$("$ADAPTER" pending)"
 "$ADAPTER" toggle app brave >/dev/null
 check "toggling back drops it" jq -e '.count == 1' <<<"$("$ADAPTER" pending)"
+# A row that is commented out on both sides is not a queued change, however
+# much its text moved. Topping a catalogue up appends commented rows, and
+# counting those reported sixteen things waiting to be built when the answer
+# was none.
+printf '\n    # newthing.enable = true;  #@ newthing\n' >> "$CONFIG/nixarchy/apps.nix"
+check "a commented row is not a change" jq -e '.count == 1' <<<"$("$ADAPTER" pending)"
 rm -rf "$CONFIG" "$FLAKE"; unset NIXARCHY_FLAKE
 
 echo "apply"

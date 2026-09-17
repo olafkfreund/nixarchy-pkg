@@ -510,13 +510,22 @@ flake_base() {
 # A machine that has never applied has no copy at all. That is not an
 # error and not "nothing queued" -- it is everything currently selected,
 # and the panel is told which of the two it is looking at.
-# A file's marked lines, indentation and block scaffolding removed. The
-# systemPackages block's #@pkgs-begin / #@pkgs-end wrappers are created by
-# pkg-add on first use and are not choices anyone made, so counting them
-# would report three changes for one package.
+# A file's LIVE marked lines, indentation and block scaffolding removed.
+#
+# Live only, and that is the whole point: a row that is commented out on
+# both sides is not a queued change, however much its text moved. Topping
+# a catalogue up with nixarchy-catalogue-diff --add appends sixteen
+# commented rows, and counting those told the user sixteen things were
+# waiting to be built when nothing was.
+#
+# The #@pkgs-begin / #@pkgs-end wrappers are scaffolding pkg-add creates
+# on first use rather than choices anyone made, so they go too --
+# otherwise picking one package reports three changes.
 marked() {
-  grep -E '#@' "$1" 2>/dev/null | grep -vE '#@pkgs-(begin|end)' | sed 's/^[[:space:]]*//' || true
+  grep -E '^[[:space:]]*[^#[:space:]].*#@' "$1" 2>/dev/null |
+    grep -vE '#@pkgs-(begin|end)' | sed 's/^[[:space:]]*//' || true
 }
+
 
 cmd_pending() {
   local base; base=$(flake_base)
@@ -530,17 +539,12 @@ cmd_pending() {
         src="$CONFIG_DIR/$part.nix"
         dst="$base/nixarchy/$part.nix"
         [ -f "$src" ] || continue
-        if [ -f "$dst" ]; then
-          diff <(marked "$dst") <(marked "$src") 2>/dev/null |
-            awk -v part="$part" '
-              /^> / { print "+\t" part "\t" substr($0, 3) }
-              /^< / { print "-\t" part "\t" substr($0, 3) }'
-        else
-          # Never applied: every live marked line is a change.
-          grep -E '^[[:space:]]*[^#[:space:]].*#@' "$src" 2>/dev/null |
-            grep -vE '#@pkgs-(begin|end)' | sed 's/^[[:space:]]*//' |
-            awk -v part="$part" '{ print "+\t" part "\t" $0 }'
-        fi
+        # A machine that has never applied has no copy, which is the same
+        # question asked against an empty one.
+        diff <([ -f "$dst" ] && marked "$dst" || true) <(marked "$src") 2>/dev/null |
+          awk -v part="$part" '
+            /^> / { print "+\t" part "\t" substr($0, 3) }
+            /^< / { print "-\t" part "\t" substr($0, 3) }' 
       done
     ) \
     --argjson never "$never" \
@@ -562,11 +566,14 @@ cmd_pending() {
             marker: $any.marker,
             file:   $any.file,
             line:   (($arrived // $any).line),
+            # A catalogue row (an empty marker type) goes on or off; a
+            # package, option or draft line is added or removed.
             change:
-              if $arrived == null then "removed"
-              elif ($arrived.line | test("^[[:space:]]*#")) then "off"
-              elif (($c | map(select(.marker == $any.marker and .change == "-")) | length) > 0) then "on"
-              else "added" end
+              if $arrived == null then
+                (if ($any.marker | startswith(":")) then "off" else "removed" end)
+              else
+                (if ($any.marker | startswith(":")) then "on" else "added" end)
+              end
           })) as $collapsed
     | { ok: true, neverApplied: $never, base: $base,
         count: ($collapsed | length), changes: $collapsed }'
