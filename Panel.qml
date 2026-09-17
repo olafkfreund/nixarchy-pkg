@@ -25,8 +25,12 @@ BarWidget {
   property int queued: 0
   property bool neverApplied: false
 
-  // nf-md-nix, the snowflake this desktop already uses for anything Nix.
-  readonly property string icon: "\u2744"
+  // nf-linux-nixos. NOT U+2744 SNOWFLAKE, which looks like the obvious
+  // choice and is in no Nerd Font on this system -- it renders as a tofu
+  // box in the bar, which is how this widget spent its first outing
+  // looking as though it had not loaded at all. nixi-button hand-draws its
+  // snowflake for the same reason.
+  readonly property string icon: "\uf313"
 
   // The adapter, next to this file, so nothing needs to be on $PATH.
   readonly property string script:
@@ -69,7 +73,15 @@ BarWidget {
     onTriggered: root.refresh()
   }
 
+  // BarWidget is a bare Item and sizes itself from nothing, so a widget that
+  // does not publish an implicit size is 0x0 and draws nothing at all --
+  // which is exactly what this did. Every first-party widget lifts its size
+  // off its button; this one now does too.
+  implicitWidth: button.implicitWidth
+  implicitHeight: button.implicitHeight
+
   WidgetButton {
+    id: button
     anchors.fill: parent
     bar: root.bar
     text: root.queued > 0 ? root.icon + " " + root.queued : root.icon
