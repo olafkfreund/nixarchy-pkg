@@ -26,7 +26,7 @@ BarWidget {
   property bool neverApplied: false
 
   // nf-md-nix, the snowflake this desktop already uses for anything Nix.
-  readonly property string icon: "❄"
+  readonly property string icon: "\u2744"
 
   // The adapter, next to this file, so nothing needs to be on $PATH.
   readonly property string script:
@@ -87,7 +87,7 @@ BarWidget {
 
   PanelToolTip {
     text: root.queued === 0
-      ? "nixarchy · nothing queued"
+      ? "nixarchy \u00b7 nothing queued"
       : root.queued + (root.queued === 1 ? " change" : " changes")
         + " waiting for a rebuild"
         + (root.neverApplied ? "\nthis machine has never run nixarchy-apply" : "")

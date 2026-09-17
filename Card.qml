@@ -13,15 +13,21 @@ Item {
 
   property var model: null
   property real maxHeight: 0
-  property real textScale: 1.0
+  // The shell's base sizes are tuned for the bar and for small panels.
+  // This is a full-screen list read like a document, so it sets its own
+  // scale rather than inheriting one meant for a 24px-high widget.
+  property real textScale: 1.45
 
   readonly property color fg: Color.menu.text
   readonly property color dim: Qt.darker(fg, 1.6)
   readonly property string fontFamily: Style.font.family
 
-  readonly property real rowHeight: Math.round(Style.spacing.controlHeight * 1.1)
-  readonly property real bodyHeight: header.height + list.contentHeightCapped + footer.height
-                                     + Style.space(18)
+  readonly property real rowHeight: Math.round(px(Style.font.body) * 2.2)
+  // Deliberately NOT derived from the list's contentHeight: the surface
+  // sizes itself from this, the list sizes itself from the surface, and
+  // reading the content back closes the circle. Qt reported that as a
+  // binding loop and drew the card at whatever height it got to first.
+  readonly property real bodyHeight: header.height + footer.height + Style.space(28)
 
   signal requestEdit(var row)
 
@@ -86,8 +92,6 @@ Item {
     preferredHighlightEnd: height * 0.75
     highlightRangeMode: ListView.ApplyRange
 
-    readonly property real contentHeightCapped:
-      Math.min(contentHeight, root.maxHeight > 0 ? root.maxHeight * 0.7 : contentHeight)
 
     delegate: Rectangle {
       required property int index
@@ -115,8 +119,13 @@ Item {
         Text {
           anchors.verticalCenter: parent.verticalCenter
           width: root.px(Style.font.body)
-          text: modelData.enabled === undefined ? "·"
-                                                : (modelData.enabled ? "■" : "□")
+          // A .settings row is the attrset that configures an app, not a
+          // thing with two states, so it must not draw a box implying one.
+          // Glyphs as \u escapes, so the source survives an editor or a
+          // patch that mangles them.
+          text: modelData.settings === true      ? "\u2261"
+              : modelData.enabled === undefined  ? "\u00b7"
+              : modelData.enabled                ? "\u25a0" : "\u25a1"
           textFormat: Text.PlainText
           font.family: root.fontFamily
           font.pixelSize: root.px(Style.font.body)
@@ -176,7 +185,7 @@ Item {
       horizontalAlignment: Text.AlignHCenter
       wrapMode: Text.Wrap
       text: !root.model ? ""
-          : root.model.searching ? "nothing matches “" + root.model.query + "”"
+          : root.model.searching ? "nothing matches \u201c" + root.model.query + "\u201d"
           : root.model.indexTab ? "type to search nixpkgs"
           : "nothing here yet"
       textFormat: Text.PlainText
@@ -228,7 +237,7 @@ Item {
           if (root.model.queued === 0) return "nothing queued"
           var n = root.model.queued
           return n + (n === 1 ? " change queued" : " changes queued")
-              + (root.model.neverApplied ? " · never applied" : "")
+              + (root.model.neverApplied ? " \u00b7 never applied" : "")
         }
         textFormat: Text.PlainText
         font.family: root.fontFamily
@@ -242,7 +251,7 @@ Item {
       Text {
         anchors { horizontalCenter: parent.horizontalCenter; verticalCenter: parent.verticalCenter }
         visible: root.model && root.model.indexStale
-        text: "index stale — R to rebuild"
+        text: "index stale \u2014 R to rebuild"
         textFormat: Text.PlainText
         font.family: root.fontFamily
         font.pixelSize: root.px(Style.font.caption)
@@ -251,7 +260,7 @@ Item {
 
       Text {
         anchors { right: parent.right; verticalCenter: parent.verticalCenter }
-        text: root.model && root.model.busy ? "working…" : "? keys   a apply   esc close"
+        text: root.model && root.model.busy ? "working\u2026" : "? keys   a apply   esc close"
         textFormat: Text.PlainText
         font.family: root.fontFamily
         font.pixelSize: root.px(Style.font.caption)

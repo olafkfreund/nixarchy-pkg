@@ -214,6 +214,17 @@ QtObject {
       if (tab === 2) write(["pkg", "add", row.name])
       return
     }
+    // A `.settings` row is not an app and has no enable to flip: it is the
+    // attrset that configures one, and nixarchy-app-enable rightly refuses
+    // it ("'firefox.settings' is not an app id"). Sending it anyway put
+    // that refusal on screen as a desktop notification, which is a bug
+    // here rather than there.
+    if (row.settings === true) {
+      root.message = "\u201c" + row.id + "\u201d configures "
+        + String(row.id).replace(/\.settings$/, "")
+        + " \u2014 edit it in " + (root.state.files ? root.state.files.apps : "apps.nix")
+      return
+    }
     switch (tab) {
       case 0: write(["toggle", "app", row.id]); break
       case 1: write(["toggle", "service", row.id]); break

@@ -113,6 +113,12 @@ rows_tsv() {
     }
 
     # A marked row.
+    #
+    # The marker alone is not enough to recognise one. These files explain
+    # their own format in prose -- "the `#@ name` markers are how the menu
+    # finds a line to uncomment" -- and that sentence is not a catalogue
+    # row, though it carries the marker. What tells them apart is that a
+    # row is a Nix assignment: it ends in a semicolon, and prose does not.
     /#@ [^ \t]+/ {
       if (match($0, /#@ [^ \t]+/) == 0) next
       id = substr($0, RSTART + 3, RLENGTH - 3)
@@ -122,6 +128,7 @@ rows_tsv() {
       enabled = (body ~ /^[[:space:]]*[^#[:space:]]/) ? "true" : "false"
       sub(/^[[:space:]]*#[[:space:]]?/, "", body)  # uncomment for display
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", body)
+      if (body !~ /=.*;$/) next
 
       note = $0
       sub(/^.*#@ [^ \t]+[[:space:]]*/, "", note)   # whatever trails the marker

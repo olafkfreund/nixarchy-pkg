@@ -25,7 +25,13 @@ Item {
   // does not move to another screen while it is being read.
   property var targetScreen: null
 
-  readonly property int cardWidth: Style.space(900)
+  readonly property int cardWidth: Style.space(1100)
+
+  // One scale for the whole surface, passed to the card so the search
+  // line, the list and the log all grow together. A catalogue read at
+  // full screen is read like a document, not like a bar widget.
+  readonly property real textScale: 1.45
+  function px(base) { return Math.round(base * root.textScale) }
 
   function focusedScreen() {
     var monitor = Hyprland.focusedMonitor
@@ -91,7 +97,10 @@ Item {
     BorderSurface {
       id: surface
       width: Math.min(root.cardWidth, Math.round(panel.width * 0.72))
-      height: Math.min(Math.max(Style.space(420), card.bodyHeight + padding * 2),
+      // A share of the screen rather than a measurement of the contents:
+      // the list fills the card and the card cannot ask the list how tall
+      // it would like to be without the two chasing each other.
+      height: Math.min(Math.round(panel.height * 0.78),
                        panel.height - Style.gapsOut * 2)
       anchors.horizontalCenter: parent.horizontalCenter
       y: Math.max(Style.gapsOut, Math.round((panel.height - height) / 2))
@@ -172,7 +181,7 @@ Item {
         TextField {
           id: search
           anchors { top: parent.top; left: parent.left; right: parent.right }
-          placeholderText: pkg.indexTab ? "search nixpkgs…" : "filter…"
+          placeholderText: pkg.indexTab ? "search nixpkgs\u2026" : "filter\u2026"
           foreground: Color.menu.text
           onTextChanged: pkg.setQuery(text)
           Keys.onPressed: function (event) {
@@ -199,6 +208,7 @@ Item {
           }
           visible: !pkg.applying && pkg.applyLog.length === 0 && !root.keysOpen
           model: pkg
+          textScale: root.textScale
           maxHeight: surface.height - surface.padding * 2 - search.height
           onRequestEdit: function (row) { form.begin(row) }
         }
@@ -225,7 +235,7 @@ Item {
             textFormat: Text.PlainText
             wrapMode: Text.Wrap
             font.family: Style.font.family
-            font.pixelSize: Style.font.caption
+            font.pixelSize: root.px(Style.font.caption)
             color: Color.menu.text
           }
         }
@@ -241,11 +251,12 @@ Item {
           textFormat: Text.PlainText
           wrapMode: Text.Wrap
           font.family: Style.font.family
-          font.pixelSize: Style.font.body
+          font.pixelSize: root.px(Style.font.body)
           color: Color.menu.text
+          lineHeight: 1.5
           text: [
-            "j / k   or   ↓ ↑        move",
-            "h / l   or   ← →        change tab",
+            "j / k   or   \u2193 \u2191        move",
+            "h / l   or   \u2190 \u2192        change tab",
             "TAB                     next tab",
             "/                       search",
             "SPACE                   turn the row on or off",

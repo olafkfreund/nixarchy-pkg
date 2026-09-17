@@ -303,7 +303,7 @@ Item {
       width: parent.width
       text: root.widget === "boolean" ? "SPACE toggles   RETURN writes   ESC cancels"
           : root.widget === "enum"    ? "j / k choose    RETURN writes   ESC cancels"
-          : "RETURN writes   ESC cancels   — empty keeps the default"
+          : "RETURN writes   ESC cancels   \u2014 empty keeps the default"
       textFormat: Text.PlainText
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption
