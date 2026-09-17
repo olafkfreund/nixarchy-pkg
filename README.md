@@ -86,6 +86,24 @@ o.bind("SUPER + ALT + N", "nixarchy packages",
 Nix installs the plugin; enabling it stays runtime state in `shell.json`,
 deliberately.
 
+### In the Omarchy menu
+
+The Hyprland binding appears in `omarchy menu keybindings` on its own, because
+`o.bind` carries a description. The menu's *own* keys cannot: they exist only
+while the menu holds the keyboard, so Hyprland never sees them.
+
+`share/omarchy-menu.jsonc` has two rows to paste into
+`~/.config/omarchy/extensions/omarchy-menu.jsonc` — one that opens the plugin
+from the launcher, one that shows its key sheet under **Learn**, beside
+Herdr's. Nothing writes that file for you: nixarchy leaves it alone on
+purpose, and `nixarchy doctor` fails a run that finds it symlinked or
+unwritable.
+
+The keys are listed in `aliases` rather than `description`, so that searching
+the Omarchy menu for `apply` or `reindex` finds them. The extension file's own
+comment calls `description` "extra search text"; on a running shell it is not
+searched, only `label` and `aliases` are.
+
 ## Applying
 
 `nixarchy-apply` asks two questions on stdin and then runs `nh os switch`,

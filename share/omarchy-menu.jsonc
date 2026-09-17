@@ -1,0 +1,49 @@
+// nixarchy.pkg rows for the Omarchy menu.
+//
+// Paste these into ~/.config/omarchy/extensions/omarchy-menu.jsonc, which is
+// the file Omarchy merges over its own defaults. Nothing writes it for you --
+// nixarchy deliberately leaves it alone, and `nixarchy doctor` fails a run
+// that finds it symlinked or unwritable.
+//
+// The first row opens the menu from the Omarchy launcher; the second shows
+// the plugin's own key sheet under Learn, beside Herdr's.
+//
+// The keys live in `aliases`, not in `description`. The extension file's own
+// comment calls description "extra search text", but the menu matches on
+// label and aliases only -- searching "reindex" against a description finds
+// nothing. Verified on a running shell.
+"nixarchy-packages": {
+    "icon": "❄",
+    "label": "nixarchy packages",
+    "description": "Search nixpkgs, turn apps and services on, set NixOS options, apply · Super+Alt+N",
+    "aliases": [
+      "packages",
+      "install",
+      "nixpkgs",
+      "apps",
+      "services",
+      "options",
+      "pkg"
+    ],
+    "action": "omarchy-shell shell toggle nixarchy.pkg '{}'"
+  },
+  "learn.nixarchy-pkg-keybindings": {
+    "icon": "❄",
+    "label": "nixarchy packages keys",
+    "description": "Every key the packages menu answers while it holds the keyboard · Super+Alt+N",
+    "aliases": [
+      "keys",
+      "keybindings",
+      "shortcuts",
+      "apply",
+      "reindex",
+      "toggle",
+      "search packages",
+      "queue",
+      "unfree",
+      "options",
+      "nixpkgs",
+      "nixarchy keys"
+    ],
+    "action": "~/.config/omarchy/plugins/nixarchy.pkg/bin/nixarchy-pkg-keys"
+  }
