@@ -22,7 +22,11 @@ import qs.Ui
 //
 // A field left untouched writes NOTHING. A copied-out default is a line
 // that reads as a choice and is not one.
-Item {
+//
+// A FocusScope rather than an Item: the widgets that take typing need the
+// keyboard on the field itself, and the ones that do not -- a checkbox, a
+// list of choices -- need it on the scope, where the key handler lives.
+FocusScope {
   id: root
 
   property var model: null
@@ -106,7 +110,15 @@ Item {
       ? option.example : (option.default || "")
     enumIndex = 0
     touched = false
-    Qt.callLater(function () { root.forceActiveFocus() })
+    // Whatever they are about to type into, focused -- otherwise the
+    // keystrokes fall through to the surface behind and land in its
+    // search box, which is exactly what happened the first time this
+    // was driven from the keyboard.
+    Qt.callLater(function () {
+      if (root.widget === "string")        textField.forceActiveFocus()
+      else if (root.widget === "scaffold") scaffoldField.forceActiveFocus()
+      else                                 root.forceActiveFocus()
+    })
   }
 
   property bool boolValue: false
@@ -120,7 +132,12 @@ Item {
   // The widget's value as Nix source. Empty means "write nothing", which
   // the adapter understands and reports as keeping the default.
   function nixValue() {
-    if (!touched && widget !== "scaffold") return ""
+    // Scaffolds are not exempt, though their field arrives pre-filled. The
+    // seed is the option's own example or default, shown as a starting
+    // shape to edit -- and writing it back unedited would put a line in
+    // the file that reads as a decision and is not one. Nobody chose
+    // "prohibit-password" by opening a form and pressing RETURN.
+    if (!touched) return ""
     switch (widget) {
       case "boolean": return boolValue ? "true" : "false"
       case "enum":    return choices.length > 0 ? String(choices[enumIndex]) : ""
@@ -262,6 +279,13 @@ Item {
       placeholderText: "leave empty to keep the default"
       foreground: Color.menu.text
       onTextChanged: root.touched = true
+      Keys.onPressed: function (event) {
+        if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+          root.commit(); event.accepted = true
+        } else if (event.key === Qt.Key_Escape) {
+          root.finish(); event.accepted = true
+        }
+      }
     }
 
     Column {
@@ -285,6 +309,16 @@ Item {
         id: scaffoldField
         width: parent.width
         foreground: Color.menu.text
+        // seed() fills this and then clears `touched`, so the seed itself
+        // never counts as an edit -- only what is typed afterwards does.
+        onTextChanged: root.touched = true
+        Keys.onPressed: function (event) {
+          if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+            root.commit(); event.accepted = true
+          } else if (event.key === Qt.Key_Escape) {
+            root.finish(); event.accepted = true
+          }
+        }
       }
     }
 
