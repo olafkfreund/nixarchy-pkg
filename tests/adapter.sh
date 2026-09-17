@@ -83,6 +83,44 @@ check "pkg remove takes it out"     jq -e '.packages | map(.attr) | index("ripgr
 check "apps.nix still parses"       nix-instantiate --parse "$CONFIG/nixarchy/apps.nix"
 rm -rf "$CONFIG"
 
+echo "options"
+if [ -n "$(command -v nixarchy-search)" ]; then
+  d=$("$ADAPTER" opt describe services.openssh.enable)
+  check "boolean maps to a checkbox"  jq -e '.widget == "boolean"' <<<"$d"
+  d=$("$ADAPTER" opt describe services.openssh.ports)
+  check "a list falls through to a scaffold" jq -e '.widget == "scaffold"' <<<"$d"
+  check "literalExpression is unwrapped"     jq -e '.default | contains("22")' <<<"$d"
+  d=$("$ADAPTER" opt describe networking.hostName)
+  check "a string maps to a field"    jq -e '.widget == "string"' <<<"$d"
+  d=$("$ADAPTER" opt describe boot.binfmt.registrations.\<name\>.recognitionType)
+  check "an enum offers its choices"  jq -e '.widget == "enum" and (.choices | length == 2)' <<<"$d"
+  check "an unknown option is a value" jq -e '.ok == false' <<<"$("$ADAPTER" opt describe not.a.real.option)"
+fi
+
+CONFIG=$(fresh_config); export XDG_CONFIG_HOME="$CONFIG"
+set_out=$("$ADAPTER" opt set services.openssh.settings.PermitRootLogin '"no"')
+check "opt set reports ok" jq -e '.ok' <<<"$set_out"
+# The bytes nixarchy-opt-remove walks and checks.options asserts. A near
+# miss here is a line nothing can ever remove again.
+check "the line is byte-exact" \
+  grep -qx '  services.openssh.settings.PermitRootLogin = "no";  #@opt services.openssh.settings.PermitRootLogin' \
+  "$CONFIG/nixarchy/apps.nix"
+check "the file still parses" nix-instantiate --parse "$CONFIG/nixarchy/apps.nix"
+# awk -v would process escapes in the value; ENVIRON does not.
+"$ADAPTER" opt set networking.hostName '"a\"b"' >/dev/null
+check "a backslash in the value survives" \
+  grep -qx '  networking.hostName = "a\\"b";  #@opt networking.hostName' "$CONFIG/nixarchy/apps.nix"
+rm_out=$("$ADAPTER" opt remove services.openssh.settings.PermitRootLogin)
+check "nixarchy-opt-remove finds what we wrote" \
+  jq -e '.options | map(.path) | index("services.openssh.settings.PermitRootLogin") | not' <<<"$rm_out"
+check "an empty value writes nothing" \
+  jq -e '.message | contains("kept the default")' <<<"$("$ADAPTER" opt set services.journald.storage '')"
+broken=$("$ADAPTER" opt set boot.kernelParams '[ "quiet"')
+check "a broken value is refused"      jq -e '.ok == false' <<<"$broken"
+check "and the backup is restored"     nix-instantiate --parse "$CONFIG/nixarchy/apps.nix"
+check "a duplicate path is refused"    jq -e '.ok == false' <<<"$("$ADAPTER" opt set networking.hostName '"z"')"
+rm -rf "$CONFIG"
+
 echo "failure is a value, not an exit code"
 out=$("$ADAPTER" nosuchcommand); rc=$?
 check "exits 0 on an unknown command" test "$rc" = 0

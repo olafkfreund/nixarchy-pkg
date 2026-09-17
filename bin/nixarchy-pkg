@@ -350,6 +350,141 @@ cmd_draft() {
   emit_state
 }
 
+# An option's declared type, documentation, default and example, straight
+# out of options.json.
+#
+# `default` and `example` are rendered `{_type: literalExpression, text:
+# ...}` in a modern options.json and a bare JSON value in an older one, so
+# both shapes are handled. They are read structurally here and never
+# re-parsed out of the index's preview text, which flattened them for
+# display.
+#
+# `widget` is this script's answer to "what can the panel draw for this?".
+# The patterns are the ones nixarchy-search's own option picker uses, and
+# they are anchored exactly as it anchors them: `list of string` and `null
+# or path` deliberately fall through to the scaffold, because their value
+# is not one prompted word and a form that pretended otherwise would write
+# plausible-looking wrong configuration.
+cmd_opt_describe() {
+  local path=${1-}
+  [ -n "$path" ] || die "usage: nixarchy-pkg opt describe <path>"
+  local oj; oj=$(searched optionsjson)
+  [ -n "$oj" ] && [ -f "$oj" ] || die "no options.json on this system -- it builds no manual"
+  jq --arg p "$path" '
+    def literal: if type == "object" then (.text // tostring) else tojson end;
+    .[$p] as $o
+    | if $o == null then {ok: false, error: ("no such option: " + $p)}
+      else
+        ($o.type // "") as $t
+        | {
+            ok: true,
+            path: $p,
+            type: $t,
+            description: ($o.description // ""),
+            readOnly: ($o.readOnly // false),
+            declarations: ($o.declarations // []),
+            default: (if $o.default == null then "" else ($o.default | literal) end),
+            example: (if $o.example == null then "" else ($o.example | literal) end),
+            widget:
+              if   $t == "boolean" then "boolean"
+              elif ($t | startswith("one of ")) then "enum"
+              elif ($t | test("^(signed integer|unsigned integer|positive integer)")
+                    or ($t | test("^[0-9]+ bit unsigned integer"))) then "integer"
+              elif ($t | test("^(string|path|absolute path)([,[:space:]]|$)")) then "string"
+              else "scaffold" end,
+            # For an enum, the alternatives as the panel should offer them,
+            # quotes included: they are written into the file verbatim.
+            choices:
+              (if ($t | startswith("one of "))
+               then [ $t | ltrimstr("one of ") | scan("\"[^\"]*\"") ]
+               else [] end)
+          }
+      end' "$oj"
+}
+
+# Write a value for an option.
+#
+# The line is byte-exact and that is not style: nixarchy-opt-remove walks
+# the comment block above a scaffold keyed on `# <path> = ;  #@opt <path>`,
+# and nixarchy's checks.options asserts both forms, seed included. A near
+# miss here is a line nothing can ever remove again.
+#
+#   <path> = <value>;  #@opt <path>       a set value
+#   # <path> = ;  #@opt <path>            a scaffold's marked line
+#
+# It goes into apps.nix, where nixarchy-search puts option lines and where
+# nixarchy-opt-remove looks for them -- not advanced.nix, which would be a
+# line no remover could find.
+#
+# An empty value writes NOTHING and says so. A copied-out default is a line
+# that reads as a choice and is not one.
+cmd_opt_set() {
+  local path=${1-} value=${2-}
+  [ -n "$path" ] || die "usage: nixarchy-pkg opt set <path> <nix-value>"
+  [ -f "$APPS" ] || die "no $APPS -- log in again to have it created"
+
+  case "$path" in
+    *[!a-zA-Z0-9._-]* | "" ) die "'$path' is not an option path" ;;
+  esac
+
+  if grep -q "#@opt ${path//./\\.}\$" "$APPS"; then
+    die "$path is already in $APPS -- remove it first"
+  fi
+
+  if [ -z "${value//[[:space:]]/}" ]; then
+    state_with true "kept the default for $path -- nothing written"
+    return 0
+  fi
+
+  local backup; backup=$(mktemp)
+  cp "$APPS" "$backup"
+  # shellcheck disable=SC2064  # $backup is fixed at trap time, deliberately
+  trap "rm -f '$backup'" RETURN
+
+  local tmp; tmp=$(mktemp)
+  # Through the environment, not `awk -v`: -v processes escape sequences in
+  # the value it is given, so a Nix string containing a backslash would
+  # arrive mangled. ENVIRON does no such processing. The newlines are
+  # printf's inside awk for the same reason -- a $(...) payload would have
+  # its trailing newline stripped, and the line would land on the closing
+  # brace.
+  #
+  # Inserted before the module's closing brace, which is where
+  # nixarchy-search puts its own option lines.
+  NIXARCHY_PKG_PATH="$path" NIXARCHY_PKG_VALUE="$value" awk '
+    !ins && /^}[[:space:]]*$/ {
+      printf "\n  %s = %s;  #@opt %s\n",
+        ENVIRON["NIXARCHY_PKG_PATH"], ENVIRON["NIXARCHY_PKG_VALUE"],
+        ENVIRON["NIXARCHY_PKG_PATH"]
+      ins = 1
+    }
+    { print }
+  ' "$APPS" > "$tmp"
+  mv "$tmp" "$APPS"
+
+  if ! nix-instantiate --parse "$APPS" >/dev/null 2>&1; then
+    cp "$backup" "$APPS"
+    die "that value would have left $APPS unparseable. Nothing was changed."
+  fi
+
+  state_with true "set $path = $value"
+}
+
+cmd_opt() {
+  local action=${1-}; shift || true
+  case "$action" in
+    describe) cmd_opt_describe "$@" ;;
+    set)      cmd_opt_set "$@" ;;
+    remove)
+      [ $# -gt 0 ] || die "usage: nixarchy-pkg opt remove <path>"
+      need nixarchy-opt-remove
+      run_writer nixarchy-opt-remove "$@"
+      emit_state
+      ;;
+    *) die "opt takes describe, set or remove, not '${action:-nothing}'" ;;
+  esac
+}
+
 cmd_state() {
   local stale=false
   index_stale && stale=true
@@ -405,6 +540,7 @@ main() {
     toggle) cmd_toggle "$@" ;;
     pkg)    cmd_pkg "$@" ;;
     draft)  cmd_draft "$@" ;;
+    opt)    cmd_opt "$@" ;;
     *) die "no such command: $cmd" ;;
   esac
 }
