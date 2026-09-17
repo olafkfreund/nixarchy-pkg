@@ -5,14 +5,18 @@
 // nixarchy deliberately leaves it alone, and `nixarchy doctor` fails a run
 // that finds it symlinked or unwritable.
 //
-// The first row opens the menu from the Omarchy launcher; the second shows
-// the plugin's own key sheet under Learn, beside Herdr's.
+// The first row sits under System, beside Lock and Backup and recovery,
+// rather than dangling on the root menu next to the submenus. The second
+// shows the plugin's own key sheet under Learn, beside Herdr's.
+//
+// The parent is inferred from the dotted id, so moving a row anywhere in the
+// menu is a rename and nothing else.
 //
 // The keys live in `aliases`, not in `description`. The extension file's own
 // comment calls description "extra search text", but the menu matches on
 // label and aliases only -- searching "reindex" against a description finds
 // nothing. Verified on a running shell.
-"nixarchy-packages": {
+"system.nixarchy-packages": {
     "icon": "❄",
     "label": "nixarchy packages",
     "description": "Search nixpkgs, turn apps and services on, set NixOS options, apply · Super+Alt+N",
