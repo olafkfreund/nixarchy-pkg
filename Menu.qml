@@ -46,15 +46,34 @@ Item {
 
   // Plugin lifecycle. The host calls open(payloadJson) after
   // `omarchy-shell shell summon nixarchy.pkg ...` and close() when hidden.
+  // Summoned fresh every time. The plugin is keepLoaded, so without this
+  // the menu comes back holding the last search, on the last tab, with the
+  // keyboard still in the search box -- and the first `l` meant to change
+  // tab types an l into a stale query instead.
   function open(payloadJson) {
     root.targetScreen = root.focusedScreen()
+    root.keysOpen = false
+    search.text = ""
+    pkg.setQuery("")
+    pkg.setTab(0)
+    pkg.message = ""
     root.opened = true
     pkg.refresh()
+    // The field's focus is cleared explicitly first. forceActiveFocus() on a
+    // FocusScope hands the keyboard to whichever child held it last, so
+    // asking the scope alone gives it straight back to the search box --
+    // and the next `l` meant to change tab is typed into the query.
+    search.focus = false
     Qt.callLater(function () { keys.forceActiveFocus() })
   }
 
   function close() {
     root.keysOpen = false
+    // The form holds the keyboard while it is up, and the key handler above
+    // steps aside for it. Closing the menu from outside -- a click away, or
+    // `omarchy-shell shell hide` -- left it open, so the menu came back
+    // deaf to every key with nothing on screen to explain why.
+    if (form.open) form.finish()
     root.opened = false
   }
 
@@ -162,6 +181,16 @@ Item {
               break
           }
 
+          // `?` is shift+/ on every layout, so it is handled before the
+          // no-modifier block below -- inside it, the key sheet could never
+          // be opened at all.
+          if (!search.activeFocus && event.key === Qt.Key_Question) {
+            if (root.keyText.length === 0) keySheet.running = true
+            root.keysOpen = true
+            event.accepted = true
+            return
+          }
+
           // Single letters, only while the search field does not have the
           // keyboard -- otherwise "a" could not be typed into a query.
           if (!search.activeFocus && event.modifiers === Qt.NoModifier) {
@@ -171,9 +200,6 @@ Item {
               case Qt.Key_H: pkg.setTab(pkg.tab - 1); event.accepted = true; return
               case Qt.Key_L: pkg.setTab(pkg.tab + 1); event.accepted = true; return
               case Qt.Key_Slash: search.forceActiveFocus(); event.accepted = true; return
-              case Qt.Key_Question:
-                if (root.keyText.length === 0) keySheet.running = true
-                root.keysOpen = true; event.accepted = true; return
               case Qt.Key_A: pkg.apply(); event.accepted = true; return
               case Qt.Key_R: pkg.reindex(); event.accepted = true; return
             }
@@ -286,6 +312,7 @@ Item {
           id: form
           anchors.fill: parent
           model: pkg
+          textScale: root.textScale
           onClosed: Qt.callLater(function () { keys.forceActiveFocus() })
         }
       }

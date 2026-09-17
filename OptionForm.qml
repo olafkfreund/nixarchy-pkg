@@ -42,6 +42,25 @@ FocusScope {
   readonly property string widget: option.widget || ""
   readonly property string fontFamily: Style.font.family
 
+  // The same scale the card uses, passed in rather than assumed: a form is
+  // read at the distance the list behind it is.
+  property real textScale: 1.0
+  function px(base) { return Math.round(base * root.textScale) }
+
+  // nixpkgs documentation is hard-wrapped prose -- real newlines at about
+  // seventy columns, meant for a terminal. PlainText honours them, so the
+  // text would wrap at the author's width rather than this card's. Single
+  // breaks become spaces and blank lines stay as paragraph breaks, which
+  // is what the source meant rather than what it contains.
+  function reflow(s) {
+    return String(s || "")
+      .replace(/\r/g, "")
+      .split(/\n[ \t]*\n/)
+      .map(function (p) { return p.replace(/\n[ \t]*/g, " ").trim() })
+      .filter(function (p) { return p.length > 0 })
+      .join("\n\n")
+  }
+
   Process {
     id: describe
     stdout: StdioCollector {
@@ -200,7 +219,7 @@ FocusScope {
       textFormat: Text.PlainText
       elide: Text.ElideMiddle
       font.family: root.fontFamily
-      font.pixelSize: Style.font.subtitle
+      font.pixelSize: root.px(Style.font.subtitle)
       color: Color.menu.selectedText
     }
 
@@ -211,7 +230,7 @@ FocusScope {
       textFormat: Text.PlainText
       wrapMode: Text.Wrap
       font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
+      font.pixelSize: root.px(Style.font.caption)
       color: Qt.darker(Color.menu.text, 1.5)
     }
 
@@ -221,13 +240,13 @@ FocusScope {
     Text {
       width: parent.width
       visible: (root.option.description || "").length > 0
-      text: root.option.description || ""
+      text: root.reflow(root.option.description)
       textFormat: Text.PlainText
       wrapMode: Text.Wrap
       maximumLineCount: 8
       elide: Text.ElideRight
       font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
+      font.pixelSize: root.px(Style.font.caption)
       color: Color.menu.text
     }
 
@@ -238,7 +257,7 @@ FocusScope {
       textFormat: Text.PlainText
       elide: Text.ElideRight
       font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
+      font.pixelSize: root.px(Style.font.caption)
       color: Qt.darker(Color.menu.text, 1.5)
     }
 
@@ -246,7 +265,9 @@ FocusScope {
 
     Toggle {
       visible: root.widget === "boolean"
-      label: root.path
+      // The full path is the heading above; repeating it here only elides
+      // it into something less readable than the heading already is.
+      label: "value"
       checked: root.boolValue
       onClicked: { root.boolValue = !root.boolValue; root.touched = true }
     }
@@ -301,7 +322,7 @@ FocusScope {
         textFormat: Text.PlainText
         wrapMode: Text.Wrap
         font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
+        font.pixelSize: root.px(Style.font.caption)
         color: Qt.darker(Color.menu.text, 1.4)
       }
 
@@ -329,7 +350,7 @@ FocusScope {
       textFormat: Text.PlainText
       wrapMode: Text.Wrap
       font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
+      font.pixelSize: root.px(Style.font.caption)
       color: Color.urgent
     }
 
@@ -340,7 +361,7 @@ FocusScope {
           : "RETURN writes   ESC cancels   \u2014 empty keeps the default"
       textFormat: Text.PlainText
       font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
+      font.pixelSize: root.px(Style.font.caption)
       color: Qt.darker(Color.menu.text, 1.6)
     }
   }
