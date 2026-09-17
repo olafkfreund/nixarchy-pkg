@@ -438,6 +438,17 @@ cmd_opt_set() {
     die "$path is already in $APPS -- remove it first"
   fi
 
+  # One physical line, whatever the editor allowed.
+  #
+  # nixarchy-opt-remove deletes the single line carrying the marker. A value
+  # written across several lines leaves the earlier ones orphaned, so the
+  # removal makes the file unparseable, its guard reverts, and the option
+  # can never be taken out again except by hand. The multiline editor exists
+  # because an example like services.postgresql.package's default is nine
+  # lines; it is collapsed here rather than refused, because Nix does not
+  # care about the newlines and the remover does.
+  value=$(printf '%s' "$value" | tr '\n' ' ' | tr -s ' ')
+
   if [ -z "${value//[[:space:]]/}" ]; then
     state_with true "kept the default for $path -- nothing written"
     return 0
@@ -469,9 +480,16 @@ cmd_opt_set() {
   ' "$APPS" > "$tmp"
   mv "$tmp" "$APPS"
 
-  if ! nix-instantiate --parse "$APPS" >/dev/null 2>&1; then
+  # Nix's own words, not a guess at them. `--parse` also resolves names, so
+  # the commonest failure here is not a syntax error at all: a value that
+  # says `pkgs.foo` in a file whose header is `{ ... }:` fails with
+  # "undefined variable 'pkgs'", and "that would have left the file
+  # unparseable" sends the reader looking for a typo that is not there.
+  local why
+  if ! why=$(nix-instantiate --parse "$APPS" 2>&1 >/dev/null); then
     cp "$backup" "$APPS"
-    die "that value would have left $APPS unparseable. Nothing was changed."
+    why=$(printf '%s' "$why" | grep -E "^error:" | head -1)
+    die "that value was refused, so nothing was changed. ${why:-nix could not parse the result}"
   fi
 
   state_with true "set $path = $value"
