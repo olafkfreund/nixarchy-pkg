@@ -12,6 +12,10 @@ chord and a list. This makes package management one too.
 
 ![the menu](assets/screenshot.png)
 
+**[See every surface →](assets/showcase/)** — Apps, Services, nixpkgs search with
+unfree and curated flags, the NixOS option forms, the key sheet and the bar
+widget, all driven from the keyboard on a real machine.
+
 ## What it does
 
 - **Apps and Services** — the curated catalogue by category, with each entry's
