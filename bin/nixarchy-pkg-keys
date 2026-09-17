@@ -32,12 +32,17 @@ ESCAPE                     -> Clear the search, then close the menu
 SPACE                      -> Turn the row under the cursor on or off
 RETURN                     -> Edit an option's value, or add a search result
 a                          -> Apply the queued changes and rebuild
+SHIFT + A                  -> Apply in a terminal instead. The route for a
+                              host with no polkit agent to answer pkexec,
+                              and for any apply that asks something the
+                              panel cannot show
 R                          -> Rebuild the search index (about a minute)
 ?                          -> This sheet
 -- Option form --------------------
 SPACE                      -> Flip a boolean
 j  /  k                    -> Choose between an enum's alternatives
-RETURN                     -> Write the value
+RETURN                     -> Write the value. On a multi-line value it is
+                              a newline, and CTRL + RETURN writes
 ESCAPE                     -> Cancel
                               An untouched field writes nothing: the value
                               shown is the option's own default or example,

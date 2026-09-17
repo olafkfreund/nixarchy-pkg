@@ -47,6 +47,12 @@ QtObject {
   // build log and whatever it contains is external.
   property var applyLog: []
   property bool applying: false
+  // Whether the card is showing the log, which is not the same question as
+  // whether a build is running. Detaching stops watching; it does not stop
+  // the build, and the two were conflated -- ESC cleared the lines and left
+  // an empty pane that still swallowed every key.
+  property bool logDetached: false
+  readonly property bool showingLog: !logDetached && (applying || applyLog.length > 0)
 
   // Not "stateChanged": `state` is a property, so Qt generates that signal
   // itself and declaring it again shadows the one bindings listen to.
@@ -141,7 +147,15 @@ QtObject {
       root.cursor = 0
       return
     }
-    // A state object, from `state` or from any writer.
+    // A state object, from `state` or from any writer -- recognised by
+    // carrying the catalogue rather than by which command was run. reindex
+    // answers {ok, indexStale, message} and nothing else, and absorbing
+    // that as state emptied every tab until the menu was reopened.
+    if (data.apps === undefined) {
+      if (data.message) root.message = String(data.message)
+      if (isWrite) root.refresh()
+      return
+    }
     root.state = data
     if (data.indexStale !== undefined) root.indexStale = data.indexStale
     if (data.message) root.message = String(data.message)
@@ -247,7 +261,15 @@ QtObject {
         var trimmed = String(line)
         var done = null
         if (trimmed.indexOf("{") === 0) {
-          try { done = JSON.parse(trimmed) } catch (e) { done = null }
+          try {
+            var parsed = JSON.parse(trimmed)
+            // Shape-checked, not merely parsed. The log is a build's own
+            // output and nixpkgs builds print JSON; a line of it that
+            // happened to parse would otherwise end the apply, drop the
+            // rest of the log and report a result nobody produced.
+            if (parsed && typeof parsed.ok === "boolean"
+                && typeof parsed.exit === "number") done = parsed
+          } catch (e) { done = null }
         }
         if (done !== null) {
           root.applying = false
@@ -265,18 +287,38 @@ QtObject {
   }
 
   function apply() {
-    if (applying) return
+    // Not while a writer is still running: nixarchy-apply would copy the
+    // files as they were before the write, and the writer would then land
+    // exactly that change back in the queue after the apply reported done.
+    if (applying || busy) {
+      message = busy ? "still writing \u2014 try again in a moment" : ""
+      return
+    }
     applyLog = []
+    logDetached = false
     applying = true
     message = ""
     _apply.command = [script, "apply"]
     _apply.running = true
   }
 
+  // The same apply, in a terminal. The route for a host with no polkit
+  // agent to answer pkexec, and for any apply that asks something this
+  // panel cannot show -- it is a full terminal, so nixarchy-apply's own
+  // questions and nh's password both have somewhere to go.
+  property Process _applyTerm: Process {
+    command: ["omarchy-launch-floating-terminal-with-presentation", "nixarchy-apply"]
+  }
+
+  function applyInTerminal() {
+    if (applying) return
+    _applyTerm.running = true
+  }
+
   // Detaching from the log leaves the build running: it is elevating,
   // downloading and switching a system, and killing it half way through is
   // never what someone reaching for ESC meant.
   function detachFromLog() {
-    applyLog = []
+    logDetached = true
   }
 }

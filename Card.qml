@@ -29,7 +29,10 @@ Item {
   // binding loop and drew the card at whatever height it got to first.
   readonly property real bodyHeight: header.height + footer.height + Style.space(28)
 
-  signal requestEdit(var row)
+  // What RETURN does, so a click cannot mean something else. It used to
+  // call model.activate() directly, which on the Options tab is `opt
+  // remove` -- clicking an option deleted it instead of opening its form.
+  signal requestActivate(int index)
 
   function px(base) { return Math.round(base * root.textScale) }
 
@@ -104,7 +107,11 @@ Item {
 
       MouseArea {
         anchors.fill: parent
-        onClicked: { if (root.model) { root.model.cursor = index; root.model.activate() } }
+        onClicked: {
+          if (!root.model) return
+          root.model.cursor = index
+          root.requestActivate(index)
+        }
       }
 
       Row {

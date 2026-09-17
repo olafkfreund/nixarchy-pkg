@@ -149,7 +149,7 @@ Item {
             event.accepted = true
             return
           }
-          if (pkg.applying || pkg.applyLog.length > 0) {
+          if (pkg.showingLog) {
             // ESC leaves the build running: it is elevating, downloading
             // and switching a system, and killing it half way through is
             // never what reaching for ESC meant.
@@ -184,6 +184,11 @@ Item {
           // `?` is shift+/ on every layout, so it is handled before the
           // no-modifier block below -- inside it, the key sheet could never
           // be opened at all.
+          if (!search.activeFocus && event.key === Qt.Key_A
+              && (event.modifiers & Qt.ShiftModifier)) {
+            pkg.applyInTerminal(); root.close(); event.accepted = true; return
+          }
+
           if (!search.activeFocus && event.key === Qt.Key_Question) {
             if (root.keyText.length === 0) keySheet.running = true
             root.keysOpen = true
@@ -200,6 +205,8 @@ Item {
               case Qt.Key_H: pkg.setTab(pkg.tab - 1); event.accepted = true; return
               case Qt.Key_L: pkg.setTab(pkg.tab + 1); event.accepted = true; return
               case Qt.Key_Slash: search.forceActiveFocus(); event.accepted = true; return
+              // Shift+A is handled above: this block only ever sees a key
+              // pressed with no modifiers at all.
               case Qt.Key_A: pkg.apply(); event.accepted = true; return
               case Qt.Key_R: pkg.reindex(); event.accepted = true; return
             }
@@ -236,11 +243,11 @@ Item {
             top: search.bottom; topMargin: Style.space(12)
             left: parent.left; right: parent.right; bottom: parent.bottom
           }
-          visible: !pkg.applying && pkg.applyLog.length === 0 && !root.keysOpen
+          visible: !pkg.showingLog && !root.keysOpen
           model: pkg
           textScale: root.textScale
           maxHeight: surface.height - surface.padding * 2 - search.height
-          onRequestEdit: function (row) { form.begin(row) }
+          onRequestActivate: root.activateRow()
         }
 
         // ---- the build log ----------------------------------------------
@@ -251,7 +258,7 @@ Item {
             top: search.bottom; topMargin: Style.space(12)
             left: parent.left; right: parent.right; bottom: parent.bottom
           }
-          visible: pkg.applying || pkg.applyLog.length > 0
+          visible: pkg.showingLog
           contentHeight: logText.implicitHeight
           clip: true
           // Follows the tail, which is the part of a build anyone watches.

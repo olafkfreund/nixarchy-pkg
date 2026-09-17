@@ -127,7 +127,15 @@ FocusScope {
     textField.text = ""
     scaffoldField.text = option.example && option.example.length > 0
       ? option.example : (option.default || "")
+    // At the option's own default, which is what the form claims to show.
+    // Opening at zero made the displayed value wrong for every enum whose
+    // default is not the first alternative, and j/k then moved relative to
+    // a position nobody chose.
     enumIndex = 0
+    var def = String(option.default || "")
+    for (var i = 0; i < (option.choices || []).length; i++) {
+      if (String(option.choices[i]) === def) { enumIndex = i; break }
+    }
     touched = false
     // Whatever they are about to type into, focused -- otherwise the
     // keystrokes fall through to the surface behind and land in its
@@ -167,13 +175,24 @@ FocusScope {
         // of homework this form exists to remove. Already-quoted input is
         // passed through untouched.
         if (textField.text.charAt(0) === "\"") return textField.text
-        return "\"" + textField.text.replace(/"/g, "\\\"") + "\""
+        // Backslash first, or escaping the quote would then escape the
+        // backslash this adds. A Nix string escapes both.
+        return "\"" + textField.text
+          .replace(/\\/g, "\\\\")
+          .replace(/"/g, "\\\"") + "\""
       default:
         return scaffoldField.text.trim()
     }
   }
 
   function commit() {
+    // Read-only options are declared by their module and cannot be set.
+    // Writing one produces a line that parses, queues, and is refused only
+    // by the rebuild -- minutes later, with no clue which line did it.
+    if (root.option.readOnly === true) {
+      root.error = "this option is read-only: its module sets it, and a value here would only fail the rebuild"
+      return
+    }
     var value = nixValue()
     if (value.length === 0) { root.finish(); return }
     writeProc.command = [root.model.script, "opt", "set", root.path, value]
@@ -326,21 +345,63 @@ FocusScope {
         color: Qt.darker(Color.menu.text, 1.4)
       }
 
-      TextField {
-        id: scaffoldField
+      BorderSurface {
+        id: scaffoldBox
         width: parent.width
-        foreground: Color.menu.text
-        // seed() fills this and then clears `touched`, so the seed itself
-        // never counts as an edit -- only what is typed afterwards does.
-        onTextChanged: root.touched = true
-        Keys.onPressed: function (event) {
-          if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-            root.commit(); event.accepted = true
-          } else if (event.key === Qt.Key_Escape) {
-            root.finish(); event.accepted = true
+        // Room for a real expression. The examples this fallback exists to
+        // show are multiline Nix -- services.postgresql.package's default
+        // is a nine-line conditional -- and a single-line field could not
+        // hold one, which made the fallback unusable for the very types it
+        // was there for.
+        height: Math.max(root.px(Style.font.body) * 6, scaffoldField.implicitHeight + Style.space(16))
+        color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.06)
+        radius: Style.cornerRadius
+        borderSpec: Border.controlSpec(scaffoldField.activeFocus ? "focus" : "normal",
+                                       Color.menu.text, Color.accent)
+
+        Flickable {
+          anchors.fill: parent
+          anchors.margins: Style.space(8)
+          contentWidth: width
+          contentHeight: scaffoldField.implicitHeight
+          clip: true
+
+          TextEdit {
+            id: scaffoldField
+            width: parent.width
+            wrapMode: TextEdit.Wrap
+            selectByMouse: true
+            font.family: root.fontFamily
+            font.pixelSize: root.px(Style.font.caption)
+            color: Color.menu.text
+            selectionColor: Color.accent
+            // seed() fills this and then clears `touched`, so the seed
+            // itself never counts as an edit.
+            onTextChanged: root.touched = true
+            Keys.onPressed: function (event) {
+              if (event.key === Qt.Key_Escape) { root.finish(); event.accepted = true }
+              // RETURN is a newline here, because the value may be several
+              // lines. Ctrl+RETURN writes, the way any multiline editor
+              // that also has a submit does it.
+              else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                       && (event.modifiers & Qt.ControlModifier)) {
+                root.commit(); event.accepted = true
+              }
+            }
           }
         }
       }
+    }
+
+    Text {
+      width: parent.width
+      visible: root.option.readOnly === true
+      text: "read-only \u2014 this option is set by its own module"
+      textFormat: Text.PlainText
+      wrapMode: Text.Wrap
+      font.family: root.fontFamily
+      font.pixelSize: root.px(Style.font.caption)
+      color: Color.urgent
     }
 
     Text {
@@ -358,7 +419,9 @@ FocusScope {
       width: parent.width
       text: root.widget === "boolean" ? "SPACE toggles   RETURN writes   ESC cancels"
           : root.widget === "enum"    ? "j / k choose    RETURN writes   ESC cancels"
-          : "RETURN writes   ESC cancels   \u2014 empty keeps the default"
+          : root.widget === "scaffold"
+            ? "CTRL+RETURN writes   ESC cancels   \u2014 RETURN is a newline, empty keeps the default"
+            : "RETURN writes   ESC cancels   \u2014 empty keeps the default"
       textFormat: Text.PlainText
       font.family: root.fontFamily
       font.pixelSize: root.px(Style.font.caption)
