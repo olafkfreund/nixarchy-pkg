@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  nixarchy.pkg bar mark: a parcel.
+
+  Monochrome by necessity rather than taste. The bar tints this with
+  MultiEffect at colorization 1.0, which flattens every colour to one, so
+  detail has to come from GAPS between filled shapes. Anything drawn as a
+  lighter stroke inside a filled body simply disappears.
+
+  Filled rather than stroked, for the reason a road sign is filled: at the
+  13px the bar renders this, a 1px stroke is a grey smudge while a solid
+  silhouette is still a parcel.
+
+  The two body blocks sit 0.4 units apart, not 2. Wider and they read as two
+  separate boxes rather than one with tape down it, which is what the first
+  three attempts looked like at 13px and fine at 120px.
+
+  White, not currentColor. MultiEffect tints toward colorizationColor but
+  keeps the source luminance, so a black shape stays black however it is
+  tinted. currentColor has no meaning in a standalone file and resolves to
+  black, which put a black parcel on a dark bar. herdr's mark is white for
+  the same reason.
+
+  No double hyphen anywhere in this comment: XML forbids it inside one, and
+  rsvg and Qt both refuse the entire file rather than just the comment.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#ffffff">
+  <rect x="2.6" y="5.4" width="18.8" height="3.2" rx="1"/>
+  <rect x="4.0" y="9.6" width="7.8" height="10.2" rx="0.9"/>
+  <rect x="12.2" y="9.6" width="7.8" height="10.2" rx="0.9"/>
+</svg>
