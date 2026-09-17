@@ -485,6 +485,135 @@ cmd_opt() {
   esac
 }
 
+# Where nixarchy-apply copies the selection to. A flake cannot read a file
+# outside its own tree, which is why the copy exists at all; comparing the
+# two is therefore the honest answer to "what would apply change?", rather
+# than anything this script remembers.
+flake_base() {
+  local flake base
+  flake=${NIXARCHY_FLAKE:-/etc/nixos}
+  base=$flake
+  [ -d "$flake/hosts/$(uname -n)" ] && base="$flake/hosts/$(uname -n)"
+  printf '%s' "$base"
+}
+
+# Queued changes: marked lines that differ between the selection and the
+# copy the flake last saw.
+#
+# A machine that has never applied has no copy at all. That is not an
+# error and not "nothing queued" -- it is everything currently selected,
+# and the panel is told which of the two it is looking at.
+# A file's marked lines, indentation and block scaffolding removed. The
+# systemPackages block's #@pkgs-begin / #@pkgs-end wrappers are created by
+# pkg-add on first use and are not choices anyone made, so counting them
+# would report three changes for one package.
+marked() {
+  grep -E '#@' "$1" 2>/dev/null | grep -vE '#@pkgs-(begin|end)' | sed 's/^[[:space:]]*//' || true
+}
+
+cmd_pending() {
+  local base; base=$(flake_base)
+  local never=true
+  [ -d "$base/nixarchy" ] && never=false
+
+  jq -n \
+    --rawfile changes <(
+      local part src dst
+      for part in apps services advanced; do
+        src="$CONFIG_DIR/$part.nix"
+        dst="$base/nixarchy/$part.nix"
+        [ -f "$src" ] || continue
+        if [ -f "$dst" ]; then
+          diff <(marked "$dst") <(marked "$src") 2>/dev/null |
+            awk -v part="$part" '
+              /^> / { print "+\t" part "\t" substr($0, 3) }
+              /^< / { print "-\t" part "\t" substr($0, 3) }'
+        else
+          # Never applied: every live marked line is a change.
+          grep -E '^[[:space:]]*[^#[:space:]].*#@' "$src" 2>/dev/null |
+            grep -vE '#@pkgs-(begin|end)' | sed 's/^[[:space:]]*//' |
+            awk -v part="$part" '{ print "+\t" part "\t" $0 }'
+        fi
+      done
+    ) \
+    --argjson never "$never" \
+    --arg base "$base" \
+    '
+    def lines: split("\n") | map(select(length > 0));
+    # A toggle reaches the diff as two lines -- the commented one leaving
+    # and the live one arriving -- but it is one choice, so changes are
+    # keyed on the #@ marker and a pair collapses into a single entry.
+    # The surviving line decides which way it went.
+    def marker: capture("#@(?<t>[a-z-]*)[ \t]+(?<n>[^ \t]+)") | (.t + ":" + .n);
+    ($changes | lines | map(split("\t")) | map({
+      change: .[0], file: .[1], line: (.[2] // "")
+    } | . + {marker: (try (.line | marker) catch .line)})) as $c
+    | ($c | group_by(.marker) | map(
+        (map(select(.change == "+")) | first) as $arrived
+        | (first) as $any
+        | {
+            marker: $any.marker,
+            file:   $any.file,
+            line:   (($arrived // $any).line),
+            change:
+              if $arrived == null then "removed"
+              elif ($arrived.line | test("^[[:space:]]*#")) then "off"
+              elif (($c | map(select(.marker == $any.marker and .change == "-")) | length) > 0) then "on"
+              else "added" end
+          })) as $collapsed
+    | { ok: true, neverApplied: $never, base: $base,
+        count: ($collapsed | length), changes: $collapsed }'
+}
+
+# Copy the selection into the flake and rebuild.
+#
+# This is the one command here that changes the machine, and it only ever
+# runs on an explicit key.
+#
+# Two things make it work from a panel that has no terminal:
+#
+#   stdin `n\ny\n`  nixarchy-apply asks "Preview in a VM first?" and then
+#                   "Build and switch now?". It reads with `|| reply=""`
+#                   throughout, so a closed stdin declines the switch --
+#                   the safe failure, but not the one we want here.
+#
+#   pkexec          nh elevates itself, and a QML Process has no tty for a
+#                   password. Omarchy runs a polkit agent as an always-
+#                   loaded service plugin, so pkexec puts the prompt on
+#                   screen in the same shell the panel lives in.
+#
+# Output is streamed as plain lines -- it is a build log, and the panel
+# draws it as text -- with a single JSON object on the last line, which is
+# the only thing the panel parses.
+cmd_apply() {
+  need nixarchy-apply
+  local rc=0
+  printf 'n\ny\n' |
+    NH_ELEVATION_STRATEGY="${NH_ELEVATION_STRATEGY:-pkexec}" \
+    nixarchy-apply 2>&1 || rc=$?
+  jq -nc --argjson rc "$rc" \
+    '{ok: ($rc == 0), exit: $rc,
+      message: (if $rc == 0 then "applied" else "nixarchy-apply exited " + ($rc|tostring) end)}'
+}
+
+# About a minute, and the panel says so before starting it. Worth doing:
+# an index written before nixarchy #493 carries no unfree or broken flags
+# at all, so every package on a stale index reads as free.
+cmd_reindex() {
+  need nixarchy-search
+  # nixarchy-search builds the index before it opens its picker, so asking
+  # it to reindex with no terminal does the work and then fails at the
+  # picker. That failure is expected and not worth reporting; whether the
+  # index came out fresh is, and index_stale answers it from the stamp.
+  NIXARCHY_IN_PICKER=1 nixarchy-search --reindex </dev/null >/dev/null 2>&1 || true
+  local stale=false
+  index_stale && stale=true
+  jq -nc --argjson stale "$stale" \
+    '{ok: ($stale | not), indexStale: $stale,
+      message: (if $stale then "the index is still stale -- run nixarchy search in a terminal to see why"
+                else "index rebuilt" end)}'
+}
+
 cmd_state() {
   local stale=false
   index_stale && stale=true
@@ -541,6 +670,9 @@ main() {
     pkg)    cmd_pkg "$@" ;;
     draft)  cmd_draft "$@" ;;
     opt)    cmd_opt "$@" ;;
+    pending) cmd_pending "$@" ;;
+    apply)   cmd_apply "$@" ;;
+    reindex) cmd_reindex "$@" ;;
     *) die "no such command: $cmd" ;;
   esac
 }

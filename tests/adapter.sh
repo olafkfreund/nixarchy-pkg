@@ -121,6 +121,49 @@ check "and the backup is restored"     nix-instantiate --parse "$CONFIG/nixarchy
 check "a duplicate path is refused"    jq -e '.ok == false' <<<"$("$ADAPTER" opt set networking.hostName '"z"')"
 rm -rf "$CONFIG"
 
+echo "pending"
+CONFIG=$(fresh_config); export XDG_CONFIG_HOME="$CONFIG"
+FLAKE=$(mktemp -d); export NIXARCHY_FLAKE="$FLAKE"
+check "a machine that never applied says so" jq -e '.neverApplied' <<<"$("$ADAPTER" pending)"
+mkdir -p "$FLAKE/nixarchy"
+for part in apps services advanced; do cp "$CONFIG/nixarchy/$part.nix" "$FLAKE/nixarchy/$part.nix"; done
+check "a matching flake has nothing queued" jq -e '.count == 0' <<<"$("$ADAPTER" pending)"
+"$ADAPTER" toggle app brave >/dev/null
+# A toggle is one choice, though the diff sees a line leave and a line arrive.
+check "a toggle counts once"   jq -e '.count == 1 and .changes[0].change == "on"' <<<"$("$ADAPTER" pending)"
+"$ADAPTER" pkg add ripgrep >/dev/null
+# #@pkgs-begin / #@pkgs-end are scaffolding pkg-add creates, not choices.
+check "a package counts once"  jq -e '.count == 2' <<<"$("$ADAPTER" pending)"
+"$ADAPTER" toggle app brave >/dev/null
+check "toggling back drops it" jq -e '.count == 1' <<<"$("$ADAPTER" pending)"
+rm -rf "$CONFIG" "$FLAKE"; unset NIXARCHY_FLAKE
+
+echo "apply"
+# A stand-in, so the wiring is proven without a real nixos-rebuild.
+STUB=$(mktemp -d)
+cat > "$STUB/nixarchy-apply" <<'STUBEOF'
+#!/usr/bin/env bash
+echo "elevation=${NH_ELEVATION_STRATEGY:-unset}"
+echo "stdin=$(tr '\n' ',' </dev/stdin)"
+exit 0
+STUBEOF
+chmod +x "$STUB/nixarchy-apply"
+out=$(PATH="$STUB:$PATH" "$ADAPTER" apply)
+# nh elevates itself and a QML Process has no tty; pkexec routes the
+# prompt to Omarchy's own polkit agent instead.
+check "apply asks for pkexec elevation" grep -q 'elevation=pkexec' <<<"$out"
+# nixarchy-apply asks "Preview in a VM first?" then "Build and switch now?".
+check "apply declines the VM and confirms the switch" grep -q 'stdin=n,y,' <<<"$out"
+check "the last line is JSON"  jq -e '.ok' <<<"$(tail -1 <<<"$out")"
+cat > "$STUB/nixarchy-apply" <<'STUBEOF'
+#!/usr/bin/env bash
+echo "error: build failed"; exit 1
+STUBEOF
+chmod +x "$STUB/nixarchy-apply"
+check "a failing apply is reported" \
+  jq -e '.ok == false and .exit == 1' <<<"$(PATH="$STUB:$PATH" "$ADAPTER" apply | tail -1)"
+rm -rf "$STUB"
+
 echo "failure is a value, not an exit code"
 out=$("$ADAPTER" nosuchcommand); rc=$?
 check "exits 0 on an unknown command" test "$rc" = 0
