@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# nixarchy-pkg-keys -- the plugin's keys, as a searchable sheet.
+#
+# These keys only exist while the menu holds the keyboard, so they are not
+# Hyprland bindings and Omarchy's Keybindings menu cannot list them. This
+# prints them the way Omarchy's own Learn sheets do (`KEY -> description`)
+# and shows them in the same picker. It binds nothing and changes nothing.
+#
+#   nixarchy-pkg-keys           show the sheet
+#   nixarchy-pkg-keys --print   print it
+
+set -euo pipefail
+
+keys() {
+  cat <<'KEYS'
+-- Open ---------------------------
+SUPER SHIFT + N            -> Open or close the nixarchy packages menu
+Click the bar icon         -> The same menu, from the queued-changes badge
+-- Move ---------------------------
+DOWN  /  j                 -> Next row
+UP  /  k                   -> Previous row
+LEFT  /  h                 -> Previous tab
+RIGHT  /  l                -> Next tab
+TAB  /  SHIFT + TAB        -> Cycle tabs
+PAGE UP  /  PAGE DOWN      -> Ten rows at a time
+-- Find ---------------------------
+/                          -> Search. On Apps and Services it filters what
+                              is already listed; on Packages and Options it
+                              searches the whole nixpkgs index
+ESCAPE                     -> Clear the search, then close the menu
+-- Act ----------------------------
+SPACE                      -> Turn the row under the cursor on or off
+RETURN                     -> Edit an option's value, or add a search result
+a                          -> Apply the queued changes and rebuild
+R                          -> Rebuild the search index (about a minute)
+?                          -> This sheet
+-- Option form --------------------
+SPACE                      -> Flip a boolean
+j  /  k                    -> Choose between an enum's alternatives
+RETURN                     -> Write the value
+ESCAPE                     -> Cancel
+                              An untouched field writes nothing: the value
+                              shown is the option's own default or example,
+                              and leaving it alone keeps the default
+-- While applying -----------------
+ESCAPE                     -> Stop watching the log. The build keeps going:
+                              it is elevating, downloading and switching a
+                              system, and stopping half way is never what
+                              reaching for ESCAPE meant
+KEYS
+}
+
+if [[ ${1-} == --print || ${1-} == -p ]]; then
+  keys
+  exit 0
+fi
+
+# The same size rule Omarchy's own sheets use: 40% of the focused screen.
+monitor_height=$(hyprctl monitors -j 2>/dev/null |
+  jq -r '.[] | select(.focused == true) | .height' 2>/dev/null || true)
+if [[ ! $monitor_height =~ ^[0-9]+$ ]] || ((monitor_height <= 0)); then
+  monitor_height=900
+fi
+
+keys | omarchy-menu-select 'nixarchy packages keys' -- \
+  --width 800 --height "$((monitor_height * 40 / 100))" >/dev/null || true

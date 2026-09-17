@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Io
 import Quickshell.Hyprland
 import Quickshell.Wayland
 import qs.Commons
@@ -19,6 +20,7 @@ Item {
 
   property bool opened: false
   property bool keysOpen: false
+  property string keyText: ""
 
   // The output Hyprland has focused, which is where a keyboard-summoned
   // surface belongs. Resolved on the way in rather than bound, so the menu
@@ -169,7 +171,9 @@ Item {
               case Qt.Key_H: pkg.setTab(pkg.tab - 1); event.accepted = true; return
               case Qt.Key_L: pkg.setTab(pkg.tab + 1); event.accepted = true; return
               case Qt.Key_Slash: search.forceActiveFocus(); event.accepted = true; return
-              case Qt.Key_Question: root.keysOpen = true; event.accepted = true; return
+              case Qt.Key_Question:
+                if (root.keyText.length === 0) keySheet.running = true
+                root.keysOpen = true; event.accepted = true; return
               case Qt.Key_A: pkg.apply(); event.accepted = true; return
               case Qt.Key_R: pkg.reindex(); event.accepted = true; return
             }
@@ -244,28 +248,36 @@ Item {
 
         // The menu's keys exist only while it holds the keyboard, so
         // Hyprland's keybinding list cannot show them. `?` does.
-        Text {
+        //
+        // Read from bin/nixarchy-pkg-keys rather than written out again
+        // here: that script is also what the Learn menu shows, and a
+        // second copy of the same list is a copy that goes out of date.
+        Process {
+          id: keySheet
+          command: [pkg.script.replace(/nixarchy-pkg$/, "nixarchy-pkg-keys"), "--print"]
+          stdout: StdioCollector {
+            onStreamFinished: root.keyText = text
+          }
+        }
+
+        Flickable {
           anchors.fill: parent
           anchors.topMargin: search.height + Style.space(12)
           visible: root.keysOpen
-          textFormat: Text.PlainText
-          wrapMode: Text.Wrap
-          font.family: Style.font.family
-          font.pixelSize: root.px(Style.font.body)
-          color: Color.menu.text
-          lineHeight: 1.5
-          text: [
-            "j / k   or   \u2193 \u2191        move",
-            "h / l   or   \u2190 \u2192        change tab",
-            "TAB                     next tab",
-            "/                       search",
-            "SPACE                   turn the row on or off",
-            "RETURN                  edit an option, or add a search result",
-            "a                       apply the queued changes",
-            "R                       rebuild the search index",
-            "?                       this sheet",
-            "ESC                     clear the search, then close"
-          ].join("\n")
+          contentHeight: keyLabel.implicitHeight
+          clip: true
+
+          Text {
+            id: keyLabel
+            width: parent.width
+            text: root.keyText
+            textFormat: Text.PlainText
+            wrapMode: Text.Wrap
+            font.family: Style.font.family
+            font.pixelSize: root.px(Style.font.caption)
+            lineHeight: 1.35
+            color: Color.menu.text
+          }
         }
 
         // ---- the option form --------------------------------------------

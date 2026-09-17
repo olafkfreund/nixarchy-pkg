@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: "experimental-features = nix-command flakes"
+
+      # shellcheck, the manifest schema, and the no-hex-colour rule. The
+      # adapter's own suite is not here: it reads /etc/nixarchy, which only
+      # exists on a nixarchy machine, and it skips itself elsewhere rather
+      # than passing vacuously.
+      - run: nix flake check --print-build-logs
+
+      - run: nix build .#default --print-build-logs
+
+      # The plugin has to survive the shell's own validator, and the rule
+      # that bites is that no symlink may appear inside the folder -- which
+      # is exactly what a careless derivation produces.
+      - name: no symlinks in the built plugin
+        run: |
+          if find ./result/ -type l | grep -q .; then
+            echo "symlinks in the output; omarchy-plugin-validate refuses them" >&2
+            find ./result/ -type l >&2
+            exit 1
+          fi
+
+      - name: every entry point the manifest names exists
+        run: |
+          for f in $(nix run nixpkgs#jq -- -r '.entryPoints[]' manifest.json); do
+            test -f "./result/$f" || { echo "missing entry point: $f" >&2; exit 1; }
+          done
