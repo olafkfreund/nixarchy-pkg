@@ -1,5 +1,10 @@
 import QtQuick
 import QtQuick.Effects
+// Screen, for devicePixelRatio. Quickshell's QML environment happens to
+// provide it without this import -- herdr relies on that and works -- but
+// relying on a host's import environment is relying on something nobody
+// promised, and the import costs nothing.
+import QtQuick.Window
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
