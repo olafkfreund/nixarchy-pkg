@@ -14,7 +14,9 @@ set -euo pipefail
 keys() {
   cat <<'KEYS'
 -- Open ---------------------------
-SUPER SHIFT + N            -> Open or close the nixarchy packages menu
+SUPER ALT + N              -> Open or close the nixarchy packages menu.
+                              Whatever you bound it to, in fact -- this is
+                              only the binding the README suggests
 Click the bar icon         -> The same menu, from the queued-changes badge
 -- Move ---------------------------
 DOWN  /  j                 -> Next row

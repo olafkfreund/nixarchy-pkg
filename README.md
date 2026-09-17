@@ -74,9 +74,12 @@ Then enable it and bind a key:
 omarchy plugin enable nixarchy.pkg
 ```
 
+Pick a chord that is free on your machine — `omarchy menu keybindings --print`
+lists what is taken. `SUPER+SHIFT+N` is a common clash (nvim).
+
 ```lua
 -- ~/.config/hypr/bindings.lua
-o.bind("SUPER + SHIFT + N", "nixarchy packages",
+o.bind("SUPER + ALT + N", "nixarchy packages",
        "omarchy-shell shell toggle nixarchy.pkg '{}'")
 ```
 
