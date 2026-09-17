@@ -93,9 +93,10 @@ The Hyprland binding appears in `omarchy menu keybindings` on its own, because
 while the menu holds the keyboard, so Hyprland never sees them.
 
 `share/omarchy-menu.jsonc` has two rows to paste into
-`~/.config/omarchy/extensions/omarchy-menu.jsonc` — one that opens the plugin
-from the launcher, one that shows its key sheet under **Learn**, beside
-Herdr's. Nothing writes that file for you: nixarchy leaves it alone on
+`~/.config/omarchy/extensions/omarchy-menu.jsonc` — one under **System**,
+beside Lock and Backup and recovery, and one that shows its key sheet under
+**Learn**, beside Herdr's. The parent is inferred from the dotted id, so
+moving a row elsewhere is a rename and nothing else. Nothing writes that file for you: nixarchy leaves it alone on
 purpose, and `nixarchy doctor` fails a run that finds it symlinked or
 unwritable.
 
