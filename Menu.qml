@@ -163,7 +163,13 @@ Item {
               // then the menu. Clearing all three at once loses a flakeref
               // somebody typed out by hand.
               if (pkg.clearInspection()) { event.accepted = true; return }
-              if (search.text.length > 0) { search.text = "" ; pkg.setQuery("") }
+              if (search.text.length > 0) {
+                search.text = "" ; pkg.setQuery("")
+                // and hand the keyboard back, or `?` and the single letters
+                // stay unreachable: they are all gated on the field NOT
+                // having it, and clearing the text never moved it before.
+                if (!pkg.flakeTab) keys.forceActiveFocus()
+              }
               else root.close()
               event.accepted = true; return
             case Qt.Key_Down:  pkg.moveCursor(1);  event.accepted = true; return
@@ -232,6 +238,20 @@ Item {
               case Qt.Key_A: pkg.apply(); event.accepted = true; return
               case Qt.Key_R: pkg.reindex(); event.accepted = true; return
             }
+          }
+        }
+
+        // Which surface owns the keyboard is a property of the tab. Every
+        // other tab is a list you move through, so the list holds it and
+        // `/` asks for it. Flakes is a thing you type a reference into, and
+        // a flakeref contains `/` -- so arriving without the field focused
+        // means the first characters are read as tab-switching keys and the
+        // slash inside the reference is what finally focuses the field.
+        Connections {
+          target: pkg
+          function onTabChanged() {
+            if (pkg.flakeTab) search.forceActiveFocus()
+            else keys.forceActiveFocus()
           }
         }
 

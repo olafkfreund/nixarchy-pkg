@@ -187,7 +187,45 @@ The ten checks from the spec, as adapter-level cases:
 10. **No anchor.** A flake whose outer brace is not the first `^\{$`
     is declined with a reason, not guessed at.
 
-Manual, phase B -- **not yet run.** The panel was built and installed,
+Manual, phase B -- **run, and it found three defects.** What follows is
+the record; the list of outstanding checks below it is what remained.
+
+Passed: the tab and its empty state; the placeholder; RETURN inspecting a
+flakeref and drawing `nixosModules`, the package count and each opaque
+namespace named as unreadable; RETURN on a module row showing the import
+line with its "does not know which file" note; ESCAPE stepping back one
+level and keeping the typed reference; the key sheet listing the Flakes
+keys (verified in the shipped artifact).
+
+**Not run, deliberately:** "declare this as an input" and removing a
+declared input both write to `$NIXARCHY_FLAKE`, which on this machine is
+the real system flake. They are not exercised against it to test a UI
+path whose underlying command has 23 passing cases against throwaway
+flakes. Verified at the adapter, which is the right place for a write.
+
+Three defects, all fixed and re-verified:
+
+1. **The field did not hold the keyboard on the Flakes tab, and a
+   flakeref contains `/`.** Every other tab is a list you move through,
+   so the list holds the keyboard and `/` asks for it. Typing
+   `github:nix-community/nixvim` there meant `h` and `l` switched tabs
+   until the slash inside the reference focused the field, and only
+   `nixvim` arrived. Which surface owns the keyboard is now a property of
+   the tab.
+2. **The empty state's flake branch was unreachable.** It sat after the
+   `searching` branch, so anything typed produced `nothing matches
+   "github:..."` -- a search answer to a question nobody asked. The same
+   shadowing trap as the `indexTab` branch, made twice.
+3. **Flake rows were elided at 42% width**, the share sized for a name
+   beside a description. A flake row is one sentence, and half of
+   "homeManagerModules -- exists, contents cannot be read" is a different
+   and misleading statement.
+
+Also fixed while there: ESCAPE clearing the field never handed the
+keyboard back, so `?` and the single letters stayed unreachable
+afterwards. Pre-existing on every tab.
+
+The original list, for the record: The panel was built and installed,
 and the sixth tab renders (`Apps Services Packages Options Drafts
 Flakes`, confirmed on screen), but the remaining checks could not be
 completed: another agent session was driving the same desktop, opening

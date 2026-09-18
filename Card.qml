@@ -163,7 +163,14 @@ Item {
         Text {
           id: name
           anchors.verticalCenter: parent.verticalCenter
-          width: Math.min(implicitWidth, parent.width * 0.42)
+          // 42% is the name column, sized so a description can sit beside
+          // it. A flake row has no second column -- it is one sentence,
+          // and half of "homeManagerModules -- exists, contents cannot be
+          // read" is a different and misleading statement -- so it takes
+          // the width it needs.
+          width: modelData.kind !== undefined
+                 ? Math.min(implicitWidth, parent.width)
+                 : Math.min(implicitWidth, parent.width * 0.42)
           elide: Text.ElideRight
           text: modelData.label || modelData.name || modelData.attr
                 || modelData.path || modelData.id || ""
@@ -213,13 +220,20 @@ Item {
       horizontalAlignment: Text.AlignHCenter
       wrapMode: Text.Wrap
       text: !root.model ? ""
+          // Ahead of the searching branch: on Flakes the field holds a
+          // flakeref rather than a query, so "nothing matches" is answering
+          // a question nobody asked. Same shadowing trap as the indexTab
+          // branch below.
+          : root.model.flakeTab ? (root.model.query.length > 0
+              ? "RETURN to see what \u201c" + root.model.query + "\u201d offers"
+              : "no flake inputs declared here yet")
           : root.model.searching ? "nothing matches \u201c" + root.model.query + "\u201d"
-          // Both ahead of the indexTab branch deliberately: the Selection
-          // tab is also an index tab, so the general answer would shadow the
-          // specific one and the tab that needs saying most would be the one
-          // not saying it.
+          // Ahead of the indexTab branch deliberately: the Selection tab is
+          // also an index tab, so the general answer would shadow this one
+          // and the tab that needs saying most would be the one not saying
+          // it. Flakes is handled above, ahead of `searching`, for the same
+          // reason with a different shadow.
           : root.model.tab === 2 ? "no packages in your nixarchy selection yet \u2014 / to search nixpkgs"
-          : root.model.flakeTab ? "no flake inputs declared here yet \u2014 type a flakeref and press RETURN to see what one offers"
           : root.model.indexTab ? "type to search nixpkgs"
           : "nothing here yet"
       textFormat: Text.PlainText
