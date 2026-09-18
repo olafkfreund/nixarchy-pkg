@@ -81,8 +81,23 @@ Concretely, when this is done:
 - A flake URL or a `github:owner/repo` can be added as an input without
   opening an editor.
 - Before anything is written, the panel says what the flake actually
-  contains -- which `nixosModules`, `homeManagerModules` and `packages`
-  it exposes -- read with `nix flake show`, which needs no build.
+  contains, read with `nix flake show`, which needs no build and works
+  on a remote flake -- measured at 10s for a first remote fetch and
+  1.4s on a local flake.
+
+  What it can say is narrower than an earlier draft promised, and the
+  narrowing is measured rather than assumed. Across `nixvim`,
+  `home-manager` and `sops-nix`, `nixosModules` comes back enumerated
+  and typed -- `{"default": {"type": "nixos-module"}, ...}` -- and
+  **every other module namespace comes back as `{"type": "unknown"}`**:
+  `homeManagerModules`, `homeModules`, `darwinModules`,
+  `nixDarwinModules`, `flakeModules`, `modules`. They are conventions
+  rather than schema, and `nix flake show` does not look inside them.
+
+  So the panel can enumerate `nixosModules` and `packages` honestly. For
+  the rest it can say a namespace exists and nothing about its contents,
+  and it must say that rather than show an empty list that reads as
+  "this flake offers none".
 - The input is written into `inputs { }`, staged, and locked, and the
   flake still evaluates afterwards or the change is undone.
 - An input whose name would be silently shadowed is refused with the
@@ -138,10 +153,19 @@ would promise a completeness this cannot deliver.
   `inputs` argument the modules actually read, which is the one place
   it was added for.
 - **Must read the taken names rather than hard-code them.** An earlier
-  draft listed twelve. That list is a property of whichever nixarchy
-  revision the target flake pins, not of this repository, and it will
-  drift the first time nixarchy gains an input. Read it from the
-  pinned dependency and from the flake's own existing inputs.
+  draft listed twelve. On one real adopter's flake the true list is
+  **seventeen**, read from `flake.lock` in milliseconds with no
+  evaluation and no network: `disko`, `home-manager`,
+  `home-manager-stable`, `hypr-rdp`, `hyprland`, `mcp-servers-nix`,
+  `microvm`, `nix-flatpak`, `nix-index-database`, `nixi`,
+  `nixos-hardware`, `nixpkgs`, `nixpkgs-stable`, `omarchy`, `sops-nix`,
+  `systems`, `zen-browser`.
+
+  The five the hard-coded list missed include **`nixpkgs`** -- the name
+  a person is most likely to reach for, and the one whose silent
+  shadowing would be hardest to diagnose. That is the argument for
+  reading, made concrete: a list maintained by hand was already wrong
+  about the most important entry before anyone had used it.
 - **Must not guess the module wiring.** Which `nixosModules` attribute
   to import, and whether it belongs in the host or beside it, is a
   judgement. Writing a plausible guess into someone's configuration is
@@ -187,14 +211,28 @@ would promise a completeness this cannot deliver.
 1. **How far does the wiring go?** Showing the line to paste leaves the
    judgement with the person; writing it into `hosts/<name>/default.nix`
    is what they actually want, and is also how a plugin puts an
-   unevaluatable expression into a file it does not own. The tempting
-   middle case -- a flake exposing exactly one `nixosModules` attribute
-   -- is weaker than it looks: knowing *which* attribute removes one
-   choice out of four. Which host, whether the module needs arguments,
-   whether an option must be set to enable it, and whether it is
-   compatible at all are all still open. Cardinality is not consent.
-   Preselecting the attribute in the instructions is free; treating it
-   as permission to write is not. This is still the main decision.
+   unevaluatable expression into a file it does not own.
+
+   The tempting middle case -- "a flake exposing exactly one
+   `nixosModules` attribute is unambiguous, so writing it is safe" --
+   is not merely weak, it is measurably backwards. Across `nixvim`,
+   `home-manager` and `sops-nix` the answer is always **two**:
+   `{default, nixvim}`, `{default, home-manager}`, `{default, sops}`.
+   The convention is `default` plus a named alias for the same module,
+   so a rule keyed on "exactly one" would fire on almost nothing, and
+   on the flakes it did fire for it would be firing because they are
+   unusual.
+
+   What the convention does give is something worth *showing*:
+   `nixosModules.default` is the flake's own answer to "which one",
+   and the panel can preselect it in the text it displays. That
+   remains free. It is still not permission to write, because knowing
+   which attribute removes one choice out of four -- which host,
+   whether the module needs arguments, whether an option must be set
+   to enable it, and whether it is compatible at all are all untouched
+   by cardinality. Preselect, do not write, is the standing
+   recommendation; this question is now about whether the approver
+   agrees rather than about what the flakes look like.
 
 2. **Where do inputs for packages rather than modules go?** A flake
    offering only `packages` needs no module; it needs its package
@@ -240,8 +278,11 @@ would promise a completeness this cannot deliver.
    broken, which would then look like this feature's fault. The spec
    needs a named check and a baseline taken before the write.
 
-7. **Does `nix flake show` enumerate what is promised?** Listing
-   `nixosModules` and `packages` is safe to assume; `homeManagerModules`
-   is a community convention rather than a schema, and the supported
-   Nix version's output format is worth confirming before the outcome
-   promises to display it.
+7. **Answered, and it constrains the outcome.** `nix flake show` does
+   *not* enumerate what an earlier draft promised. Measured on three
+   flakes: `nixosModules` is typed and enumerable; `homeManagerModules`,
+   `homeModules`, `darwinModules`, `nixDarwinModules`, `flakeModules`
+   and `modules` all return `{"type": "unknown"}`. Only `nixosModules`
+   and `packages` can be listed. The remaining question is the small
+   one of presentation: how the panel names a namespace it can see
+   exists but cannot look inside, without that reading as "empty".
