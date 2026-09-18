@@ -216,21 +216,36 @@ Item {
       opacity: 0.25
     }
 
-    // Whatever a writer last said. These are the refusals -- an unfree
-    // package under a policy that forbids it, an id that drifted out of
-    // the catalogue -- so they are shown rather than swallowed.
-    Text {
+    // Whatever a writer last said. These are the refusals -- an id that
+    // drifted out of the catalogue, a name nixpkgs does not carry -- so
+    // they are shown rather than swallowed.
+    //
+    // Shown to the END. This was capped at three lines and elided, which
+    // swallowed the part that mattered most: the writers report one
+    // wrapped row per package and then their consequence -- the line
+    // saying a commented allowUnfreePredicate was scaffolded, which is a
+    // licence-policy edit -- so on a multi-package add the consequence was
+    // the first thing off the bottom. It scrolls now instead: bounded, so
+    // a long report cannot push the list, but never truncated.
+    Flickable {
       width: parent.width
       visible: root.model && root.model.message.length > 0
-      text: root.model ? root.model.message : ""
-      textFormat: Text.PlainText
-      wrapMode: Text.Wrap
-      maximumLineCount: 3
-      elide: Text.ElideRight
-      font.family: root.fontFamily
-      font.pixelSize: root.px(Style.font.caption)
-      color: root.dim
-      topPadding: Style.space(6)
+      height: Math.min(messageText.implicitHeight, root.rowHeight * 4)
+      contentHeight: messageText.implicitHeight
+      clip: true
+      boundsBehavior: Flickable.StopAtBounds
+      topMargin: Style.space(6)
+
+      Text {
+        id: messageText
+        width: parent.width
+        text: root.model ? root.model.message : ""
+        textFormat: Text.PlainText
+        wrapMode: Text.Wrap
+        font.family: root.fontFamily
+        font.pixelSize: root.px(Style.font.caption)
+        color: root.dim
+      }
     }
 
     Item {

@@ -43,6 +43,14 @@ QtObject {
   property bool busy: false
   property string message: ""
 
+  // The package a SHIFT+RETURN has been pressed once for. Arming is
+  // deliberately a property of a NAME, not of the cursor: the danger is
+  // arming on one row and committing on another, so the confirm compares
+  // the name back rather than trusting the cursor to have stayed put.
+  // disarm() is called from everything that moves the list, and the
+  // comparison is the belt to its braces.
+  property string armedChannel: ""
+
   // The log of a running apply, as lines. Plain text throughout: this is a
   // build log and whatever it contains is external.
   property var applyLog: []
@@ -96,13 +104,19 @@ QtObject {
 
   readonly property int count: rows().length
 
+  function disarm() {
+    if (armedChannel !== "") { armedChannel = ""; message = "" }
+  }
+
   function moveCursor(delta) {
+    disarm()
     var n = count
     if (n === 0) { cursor = 0; return }
     cursor = Math.max(0, Math.min(n - 1, cursor + delta))
   }
 
   function setTab(i) {
+    disarm()
     tab = Math.max(0, Math.min(tabs.length - 1, i))
     cursor = 0
     if (indexTab && searching) runSearch()
@@ -197,6 +211,7 @@ QtObject {
   }
 
   function setQuery(q) {
+    disarm()
     query = q
     cursor = 0
     if (indexTab) _debounce.restart()
@@ -221,6 +236,7 @@ QtObject {
   // ---- the actions a key can reach ------------------------------------
 
   function activate() {
+    disarm()
     var row = rowAt(cursor)
     if (!row) return
     if (indexTab && searching) {
@@ -246,6 +262,47 @@ QtObject {
       case 3: write(["opt", "remove", row.path]); break
       case 4: write(["draft", "undraft", row.name]); break
     }
+  }
+
+  // SHIFT+RETURN on a search row: the same add, from the other channel.
+  //
+  // Two presses, because the cost is invisible and large -- the two
+  // channels share no store paths, so this brings a whole second closure
+  // (nixarchy-doctor measures vlc at 1.5 GB). The first press says what
+  // will happen; the second does it. Anything that moves the list disarms.
+  //
+  // It says the licence and broken status are NOT KNOWN rather than
+  // showing the row's flags, because those flags are about a different
+  // package: nixarchy-pkg-add probes the system's own nixpkgs (its :246)
+  // and its other-channel branch returns before the flag block (:301-318)
+  // -- so for this request there is no evidence, and borrowing the
+  // default channel's would be a confident lie.
+  function addFromOtherChannel() {
+    if (!indexTab || !searching || tab !== 2) return
+    var row = rowAt(cursor)
+    if (!row) return
+
+    var mine = state.channel || "custom"
+    var other = mine === "unstable" ? "stable"
+              : mine === "stable"   ? "unstable" : ""
+
+    if (armedChannel === row.name) {
+      armedChannel = ""
+      // No flag when the channel is unknown: the writer says the same
+      // thing better, and refuses if it turns out to be the one we are on.
+      write(other === "" ? ["pkg", "add", row.name]
+                         : ["pkg", "add", "--" + other, row.name])
+      return
+    }
+
+    armedChannel = row.name
+    message = row.name + (other === ""
+        ? " \u2014 cannot tell which channel this machine follows, so I cannot"
+          + " tell you which one this would come from."
+        : " from the " + other + " channel.")
+      + " It brings its own closure: the two channels share no store paths,"
+      + " even at the same version. unfree and broken are not known for that"
+      + " channel. SHIFT+RETURN again to add it."
   }
 
   function reindex() {

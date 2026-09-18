@@ -173,6 +173,17 @@ Item {
             case Qt.Key_Backtab: pkg.setTab(pkg.tab - 1); event.accepted = true; return
             case Qt.Key_Return:
             case Qt.Key_Enter:
+              // SHIFT is the variant, the way SHIFT+A is the variant of `a`
+              // below. Straight to the model rather than through
+              // activateRow(), which detours tab 3 into the option form --
+              // a channel key hung there would inherit that detour, and
+              // addFromOtherChannel refuses every tab but the search list
+              // anyway. A letter could not do this job at all: the single
+              // letters further down are gated on the search field NOT
+              // having the keyboard, and this key is needed while it does.
+              if (event.modifiers & Qt.ShiftModifier) {
+                pkg.addFromOtherChannel(); event.accepted = true; return
+              }
               root.activateRow(); event.accepted = true; return
             case Qt.Key_Space:
               // Space toggles only where a row has two states; in a search

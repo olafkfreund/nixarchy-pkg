@@ -109,9 +109,19 @@ prediction of the licence policy.
 
    -> verify by `?` in the panel showing it under Act.
 
-8. **`README.md`** -- one line in the key list, if the README lists
-   keys; otherwise no change. Check before editing.
-   -> verify by `grep -n 'SHIFT' README.md`.
+8. **`README.md`** -- **this step's original condition was wrong.** It
+   said "one line in the key list, if the README lists keys; otherwise
+   no change". The README does not list keys -- `:33` says "`?` shows
+   every key" -- so that branch would have made no change at all, while
+   the approved intent (`:112`) requires that "`bin/nixarchy-pkg-keys`
+   **and `README.md`** document the channel key". The intent outranks
+   the plan, so the README gets a short "The other channel" section.
+
+   Placed immediately after `:33` rather than in the feature bullet,
+   because PR #12 (issue #11) rewrites that bullet; putting it there
+   would manufacture a merge conflict for no gain.
+   -> verify by `grep -n 'SHIFT+RETURN' README.md` returning the new
+   section.
 
 9. **`tests/adapter.sh`** -- in the `state` block after the
    `indexStale` check (`:47`), add:

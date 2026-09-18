@@ -33,6 +33,11 @@ ESCAPE                     -> Clear the search, then close the menu
 -- Act ----------------------------
 SPACE                      -> Turn the row under the cursor on or off
 RETURN                     -> Edit an option's value, or add a search result
+SHIFT + RETURN             -> Add a search result from the OTHER channel.
+                              It brings its own closure -- the two channels
+                              share no store paths, even at the same version.
+                              Press it twice: once to see what it will do,
+                              once to do it
 a                          -> Apply the queued changes and rebuild
 SHIFT + A                  -> Apply in a terminal instead. The route for a
                               host with no polkit agent to answer pkexec,
