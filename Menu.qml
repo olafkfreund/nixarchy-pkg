@@ -159,7 +159,17 @@ Item {
 
           switch (event.key) {
             case Qt.Key_Escape:
-              if (search.text.length > 0) { search.text = "" ; pkg.setQuery("") }
+              // One step back per press: the inspection, then the field,
+              // then the menu. Clearing all three at once loses a flakeref
+              // somebody typed out by hand.
+              if (pkg.clearInspection()) { event.accepted = true; return }
+              if (search.text.length > 0) {
+                search.text = "" ; pkg.setQuery("")
+                // and hand the keyboard back, or `?` and the single letters
+                // stay unreachable: they are all gated on the field NOT
+                // having it, and clearing the text never moved it before.
+                if (!pkg.flakeTab) keys.forceActiveFocus()
+              }
               else root.close()
               event.accepted = true; return
             case Qt.Key_Down:  pkg.moveCursor(1);  event.accepted = true; return
@@ -183,6 +193,13 @@ Item {
               // having the keyboard, and this key is needed while it does.
               if (event.modifiers & Qt.ShiftModifier) {
                 pkg.addFromOtherChannel(); event.accepted = true; return
+              }
+              // Tested first among the plain-RETURN cases, because on Flakes
+              // the field holds a flakeref rather than a query: RETURN asks
+              // what it contains before there is any row to act on. Once
+              // there is one, RETURN acts on it as everywhere else.
+              if (pkg.flakeTab && pkg.inspected === null && search.text.length > 0) {
+                pkg.inspect(); event.accepted = true; return
               }
               root.activateRow(); event.accepted = true; return
             case Qt.Key_Space:
@@ -224,12 +241,27 @@ Item {
           }
         }
 
+        // Which surface owns the keyboard is a property of the tab. Every
+        // other tab is a list you move through, so the list holds it and
+        // `/` asks for it. Flakes is a thing you type a reference into, and
+        // a flakeref contains `/` -- so arriving without the field focused
+        // means the first characters are read as tab-switching keys and the
+        // slash inside the reference is what finally focuses the field.
+        Connections {
+          target: pkg
+          function onTabChanged() {
+            if (pkg.flakeTab) search.forceActiveFocus()
+            else keys.forceActiveFocus()
+          }
+        }
+
         // ---- search -----------------------------------------------------
 
         TextField {
           id: search
           anchors { top: parent.top; left: parent.left; right: parent.right }
-          placeholderText: pkg.indexTab ? "search nixpkgs\u2026" : "filter\u2026"
+          placeholderText: pkg.flakeTab ? "github:owner/repo\u2026"
+                         : pkg.indexTab ? "search nixpkgs\u2026" : "filter\u2026"
           foreground: Color.menu.text
           onTextChanged: pkg.setQuery(text)
           Keys.onPressed: function (event) {

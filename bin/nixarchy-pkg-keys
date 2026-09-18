@@ -30,6 +30,15 @@ PAGE UP  /  PAGE DOWN      -> Ten rows at a time
                               is already listed; on Selection and Options it
                               searches the whole nixpkgs index
 ESCAPE                     -> Clear the search, then close the menu
+-- Flakes -------------------------
+RETURN                     -> On the Flakes tab with a flakeref typed, ask
+                              what that flake offers. Nothing is written,
+                              and nothing is built
+RETURN                     -> On "declare this as an input", add it to your
+                              system flake and lock it. On a declared input,
+                              remove it again
+ESCAPE                     -> Step back out of what you are looking at,
+                              before it clears the field
 -- Act ----------------------------
 SPACE                      -> Turn the row under the cursor on or off
 RETURN                     -> Edit an option's value, or add a search result
