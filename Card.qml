@@ -76,12 +76,33 @@ Item {
     }
   }
 
+  // What this tab lists, said where it cannot be missed. The empty state
+  // below cannot carry it: it draws only at zero rows, and the misreading
+  // this answers happens at a SHORT list -- a selection of one, on a
+  // machine whose own configuration declares hundreds, reads as a failed
+  // scan rather than as a selection. So it is drawn at any row count.
+  //
+  // "selection" is the writers' own word, not a new one: nixarchy-pkg-remove
+  // says "removed from your selection" and counts what is "still selected".
+  Text {
+    id: scope
+    anchors { top: header.bottom; left: parent.left; right: parent.right }
+    visible: root.model && root.model.tab === 2 && !root.model.searching
+    height: visible ? implicitHeight + Style.space(6) : 0
+    text: "packages nixarchy manages \u2014 not everything installed"
+    textFormat: Text.PlainText
+    wrapMode: Text.Wrap
+    font.family: root.fontFamily
+    font.pixelSize: root.px(Style.font.caption)
+    color: root.dim
+  }
+
   // ---- the list -------------------------------------------------------
 
   ListView {
     id: list
     anchors {
-      top: header.bottom; topMargin: Style.space(10)
+      top: scope.bottom; topMargin: Style.space(10)
       left: parent.left; right: parent.right; bottom: footer.top
       bottomMargin: Style.space(8)
     }
@@ -193,6 +214,10 @@ Item {
       wrapMode: Text.Wrap
       text: !root.model ? ""
           : root.model.searching ? "nothing matches \u201c" + root.model.query + "\u201d"
+          // Ahead of the indexTab branch deliberately: the Selection tab is
+          // also an index tab, so the general answer would shadow this one
+          // and the tab that needs saying most would be the one not saying it.
+          : root.model.tab === 2 ? "no packages in your nixarchy selection yet \u2014 / to search nixpkgs"
           : root.model.indexTab ? "type to search nixpkgs"
           : "nothing here yet"
       textFormat: Text.PlainText

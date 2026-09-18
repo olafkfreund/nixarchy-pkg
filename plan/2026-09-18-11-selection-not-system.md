@@ -89,18 +89,30 @@ misreading to correct), the three-line message cap at `Card.qml:228`
    -> verify by reading the section end to end: write boundary, then
    read boundary, then the heading.
 
-6. **Check the key sheet contradicts nothing.** `bin/nixarchy-pkg-keys`
-   names no tab; `:36` says "RETURN -> Edit an option's value, or add a
-   search result", which stays true.
+6. **The key sheet did contradict it, so this became an edit.**
+   `bin/nixarchy-pkg-keys:30` read "on Packages and Options it searches
+   the whole nixpkgs index" -- it names the tab. Changed to "on
+   Selection and Options". `:36` ("RETURN -> Edit an option's value, or
+   add a search result") names no tab and stays.
    -> verify by `grep -n 'Packages' bin/nixarchy-pkg-keys` returning
-   nothing. If it returns a line, this step becomes an edit and the
-   plan is updated in the same commit as the code.
+   nothing.
 
 7. **Sweep for other occurrences of the old label** in anything
-   user-facing.
-   -> verify by `grep -rn '"Packages"\|Packages tab' *.qml README.md
-   bin/ manifest.json` returning nothing outside `intent/`, `spec/` and
-   `plan/`.
+   user-facing. **The pattern originally written here was too narrow**
+   -- `'"Packages"\|Packages tab'` assumes the label is quoted or
+   followed by "tab", and both real occurrences were prose naming the
+   tab directly, so it matched neither. Use the bare word.
+   -> verify by `grep -rn 'Packages' *.qml README.md bin/
+   manifest.json` returning only the sentence in the new README
+   paragraph that uses the word as a noun ("Packages you declare
+   elsewhere..."), which is prose and not a tab name.
+
+   This found a second site: `README.md:23`, the feature list bullet
+   `- **Packages** -- the whole nixpkgs index, ...`. Its body described
+   the *search* rather than what the tab lists at rest, which is the
+   same conflation this issue is about, so it is now
+   `- **Selection** -- the packages nixarchy manages, and `/` to search
+   the whole nixpkgs index for more, ...`.
 
 ## Tests
 
@@ -114,8 +126,9 @@ explained.
 
     git diff --stat main -- bin/
 
-Expected: empty. No change under `bin/` unless step 6 found a
-contradiction, in which case this shows `bin/nixarchy-pkg-keys` alone.
+Expected: `bin/nixarchy-pkg-keys` alone, one line changed. Step 6 did
+find a contradiction. `bin/nixarchy-pkg` itself is untouched, which is
+what the adapter guarantee actually rests on.
 
     bin/nixarchy-pkg state | jq -S . > /tmp/state-after.json
 

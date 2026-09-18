@@ -20,7 +20,8 @@ widget, all driven from the keyboard on a real machine.
 
 - **Apps and Services** — the curated catalogue by category, with each entry's
   note, showing what is on, off and queued. `SPACE` toggles.
-- **Packages** — the whole nixpkgs index, with `unfree` and `broken` flagged
+- **Selection** — the packages nixarchy manages, and `/` to search the whole
+  nixpkgs index for more, with `unfree` and `broken` flagged
   before anything is queued, and a warning when the curated app list already
   covers a name (the app row gets you the module; the bare package gets you a
   binary).
@@ -43,6 +44,14 @@ escape, backups and the parse check. This plugin is a front-end, and
 
 It writes to `~/.config/nixarchy/apps.nix` and `services.nix` and nowhere
 else — never `/etc/nixos`, never the copy under the flake.
+
+It lists the same way. The Selection tab shows the packages nixarchy
+manages — the marked lines in that file — and not what is installed on
+the machine. Packages you declare elsewhere in your own configuration are
+neither listed here nor managed here, and removing one here cannot remove
+one declared there. That boundary is what makes nixarchy removable: the
+selection hangs off a single import, and taking it out leaves nothing
+behind.
 
 ## The option forms, honestly
 
