@@ -228,9 +228,16 @@ Item {
     // the first thing off the bottom. It scrolls now instead: bounded, so
     // a long report cannot push the list, but never truncated.
     Flickable {
-      width: parent.width
+      // Inset to the same column the rows use (their delegate's
+      // leftMargin above), so the card has one left edge rather than a
+      // list that starts here and a footer that starts there.
+      x: Style.space(10)
+      width: parent.width - Style.space(20)
       visible: root.model && root.model.message.length > 0
-      height: Math.min(messageText.implicitHeight, root.rowHeight * 4)
+      // topMargin is space BEFORE the content, so it has to be counted in
+      // the height as well as the content -- sized without it, the last
+      // line is clipped by exactly the margin.
+      height: Math.min(topMargin + messageText.implicitHeight, root.rowHeight * 4)
       contentHeight: messageText.implicitHeight
       clip: true
       boundsBehavior: Flickable.StopAtBounds
@@ -253,7 +260,10 @@ Item {
       height: root.px(Style.font.caption) + Style.space(10)
 
       Text {
-        anchors { left: parent.left; verticalCenter: parent.verticalCenter }
+        anchors {
+          left: parent.left; leftMargin: Style.space(10)
+          verticalCenter: parent.verticalCenter
+        }
         text: {
           if (!root.model) return ""
           if (root.model.queued === 0) return "nothing queued"
@@ -281,7 +291,10 @@ Item {
       }
 
       Text {
-        anchors { right: parent.right; verticalCenter: parent.verticalCenter }
+        anchors {
+          right: parent.right; rightMargin: Style.space(10)
+          verticalCenter: parent.verticalCenter
+        }
         text: root.model && root.model.busy ? "working\u2026" : "? keys   a apply   esc close"
         textFormat: Text.PlainText
         font.family: root.fontFamily
