@@ -44,9 +44,31 @@ The generated flake is built to be extended:
 The mechanism exists and is documented in the file. What is missing is
 a way to use it that does not involve knowing Nix.
 
-This is scoped to the ISO-installed case on purpose. A machine that
-already ran NixOS and adopted nixarchy as one input among many has a
-flake whose shape nixarchy did not write and cannot predict.
+An earlier draft scoped this to the ISO-installed case on purpose,
+because the generated flake is the only one nixarchy wrote and can
+predict. That reasoning is sound about *files* and wrong about *people*:
+most users today adopt nixarchy as one input among many in a flake they
+already had. Confining the feature to the ISO case would refuse it to
+the majority of the people who would use it, and its detection question
+would become "how do we recognise whom to turn away".
+
+The adopter's flake is genuinely less predictable -- verified on one:
+128 files declaring `environment.systemPackages`, hosts under
+`hosts/<name>/`, its own overlays, and nixarchy imported through two
+intermediate modules. What that rules out is *guessing where an edit
+goes*. It does not rule out the feature, because the two halves have
+very different requirements:
+
+- **Declaring the input** is an edit to `inputs { }` in the flake's own
+  `flake.nix`. Every flake has exactly one, at a known path, with a
+  known attribute. This part does not depend on who wrote the file.
+- **Wiring the module** means knowing which host, which file and which
+  import list. That is the part the installer's layout made answerable
+  and an arbitrary flake does not.
+
+So the scope question is not "which users", it is "which half". The
+feature is for everyone; the writing is confined to the half that is
+the same everywhere.
 
 ## Proposed outcome
 
@@ -78,16 +100,19 @@ would promise a completeness this cannot deliver.
 
 ## Affected users and systems
 
+- People who adopted nixarchy as a flake input into a configuration
+  they already had. Most users today, and the ones for whom software
+  outside nixpkgs is most likely to be the reason they came.
 - People running an ISO-installed nixarchy, where the flake came from
-  `installer/template/flake.nix`.
+  `installer/template/flake.nix` and the layout is known.
 - `$NIXARCHY_FLAKE` (default `/etc/nixos`): `flake.nix`, `flake.lock`,
   and the git index, since a flake in a worktree sees only tracked or
   staged files.
 - Not `~/.config/nixarchy/*.nix`. This is a different file with
   different rules, and conflating the two is how one of them gets
   corrupted.
-- Anyone whose flake was not written by the installer is out of scope
-  and must be told so rather than have it attempted.
+- Both are in scope for declaring an input. Neither is in scope for
+  having a module import written for them; see the constraint below.
 - `cmd_pending` (`bin/nixarchy-pkg:548`) compares only
   `apps.nix`, `services.nix` and `advanced.nix` against their applied
   copies. A `flake.nix` edit is invisible to it, so the panel would
@@ -121,8 +146,16 @@ would promise a completeness this cannot deliver.
   to import, and whether it belongs in the host or beside it, is a
   judgement. Writing a plausible guess into someone's configuration is
   worse than writing nothing.
-- **Must not edit `flake.nix` on a machine the installer did not set
-  up.** Detect it and decline.
+- **Must not depend on recognising who wrote the flake.** No
+  content-based detection is sound in either direction -- a
+  hand-written flake can match the template, and a generated one can
+  have been rewritten since. Rather than gate the feature on an
+  unanswerable question, the write is confined to what is true of every
+  flake: one `inputs { }`, at a known path. What cannot be known
+  everywhere is not written anywhere.
+- **Must validate the file it is about to edit**, since it cannot rely
+  on provenance: the `inputs` attribute is found and unambiguous, or
+  the edit does not happen and says why.
 - **Must get the git interaction right, which is narrower than "stage
   everything".** An *untracked* file is invisible to a git flake; a
   *tracked* file's working-tree edits are seen without staging. Since
@@ -168,17 +201,17 @@ would promise a completeness this cannot deliver.
    referenced where packages are listed. Same feature or a different
    one.
 
-3. **How is the ISO-installed case detected?** The template leaves no
-   marker, and no detection from file content is sound in both
-   directions: a hand-written flake can match the template, and an
-   ISO-installed one can have been rewritten since. Layout, comments
-   and ownership prove neither provenance nor edit safety, and
-   `git safe.directory` grants no write permission -- it only stops git
-   refusing the directory. So the realistic choices are to refuse
-   anything ambiguous, or to ask nixarchy for a versioned marker, which
-   is a change in the other repository. Note also that a marker would
-   only establish origin, not that the file is still shaped the way the
-   writer expects.
+3. **How does the person get from a declared input to working
+   software?** Declaring is the half this can do; wiring is the half it
+   will not. On an adopter's flake the panel cannot even name the file
+   the import belongs in -- `flake_base` (`bin/nixarchy-pkg:517-522`)
+   guesses a *directory* from `uname -n`, which is not the
+   `nixosConfigurations` attribute and not an import site. So the
+   handover is the feature's real surface: what is shown, how
+   copyable it is, and whether the panel can say anything useful about
+   where it goes without pretending to know. A handover that reads as
+   "here is a line, good luck" leaves the person exactly where they
+   were, having also acquired an input.
 
 4. **Does removing an input mean unlocking it?** Taking the line out
    leaves a stale `flake.lock` entry, harmless but untidy, and
