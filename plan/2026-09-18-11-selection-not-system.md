@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 11
 spec: spec/2026-09-18-11-selection-not-system.md
 ---
