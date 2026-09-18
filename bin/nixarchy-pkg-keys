@@ -27,7 +27,7 @@ TAB  /  SHIFT + TAB        -> Cycle tabs
 PAGE UP  /  PAGE DOWN      -> Ten rows at a time
 -- Find ---------------------------
 /                          -> Search. On Apps and Services it filters what
-                              is already listed; on Packages and Options it
+                              is already listed; on Selection and Options it
                               searches the whole nixpkgs index
 ESCAPE                     -> Clear the search, then close the menu
 -- Act ----------------------------

@@ -25,7 +25,7 @@ QtObject {
   readonly property string script:
     Qt.resolvedUrl("bin/nixarchy-pkg").toString().replace(/^file:\/\//, "")
 
-  readonly property var tabs: ["Apps", "Services", "Packages", "Options", "Drafts"]
+  readonly property var tabs: ["Apps", "Services", "Selection", "Options", "Drafts"]
   property int tab: 0
   readonly property string tabName: tabs[tab]
 
