@@ -60,6 +60,14 @@ jobs:
             echo "::error::docs/manual/$n.md is published but not linked from docs/manual/index.md"
             rc=1
           done
+          # And the other direction, which the first three do not cover: a
+          # sidebar entry whose page does not exist. Without this, a nav line
+          # added ahead of the page it names -- or left behind when a page is
+          # renamed -- is a link to a 404 that CI calls green.
+          for n in $(comm -13 <(echo "$pages") <(echo "$nav") || true); do
+            echo "::error::docs/_config.yml lists /manual/$n but docs/manual/$n.md does not exist"
+            rc=1
+          done
           [ $rc -eq 0 ] || exit 1
 
       # Every image a page references actually exists. A broken <img> is
