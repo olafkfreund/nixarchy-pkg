@@ -989,6 +989,7 @@ cmd_state() {
     --arg appsFile "$APPS" \
     --arg servicesFile "$SERVICES" \
     --arg channel "$(machine_channel)" \
+    --rawfile flakes <(cmd_flake_list) \
     '
     def lines: split("\n") | map(select(length > 0));
     def cols:  lines | map(split("\t"));
@@ -1000,6 +1001,9 @@ cmd_state() {
       indexStale: $stale,
       files: { apps: $appsFile, services: $servicesFile },
       channel: $channel,
+      # What this tool declared in the system flake. Read from the same
+      # command a terminal calls, so the two cannot disagree.
+      flakes: (($flakes | fromjson).inputs // []),
       apps: ($apps | cols | map({
         id: .[1], category: (.[2] // ""), enabled: (.[3] == "true"),
         line: (.[4] // ""), note: (.[5] // ""),

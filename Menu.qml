@@ -159,6 +159,10 @@ Item {
 
           switch (event.key) {
             case Qt.Key_Escape:
+              // One step back per press: the inspection, then the field,
+              // then the menu. Clearing all three at once loses a flakeref
+              // somebody typed out by hand.
+              if (pkg.clearInspection()) { event.accepted = true; return }
               if (search.text.length > 0) { search.text = "" ; pkg.setQuery("") }
               else root.close()
               event.accepted = true; return
@@ -183,6 +187,13 @@ Item {
               // having the keyboard, and this key is needed while it does.
               if (event.modifiers & Qt.ShiftModifier) {
                 pkg.addFromOtherChannel(); event.accepted = true; return
+              }
+              // Tested first among the plain-RETURN cases, because on Flakes
+              // the field holds a flakeref rather than a query: RETURN asks
+              // what it contains before there is any row to act on. Once
+              // there is one, RETURN acts on it as everywhere else.
+              if (pkg.flakeTab && pkg.inspected === null && search.text.length > 0) {
+                pkg.inspect(); event.accepted = true; return
               }
               root.activateRow(); event.accepted = true; return
             case Qt.Key_Space:
@@ -229,7 +240,8 @@ Item {
         TextField {
           id: search
           anchors { top: parent.top; left: parent.left; right: parent.right }
-          placeholderText: pkg.indexTab ? "search nixpkgs\u2026" : "filter\u2026"
+          placeholderText: pkg.flakeTab ? "github:owner/repo\u2026"
+                         : pkg.indexTab ? "search nixpkgs\u2026" : "filter\u2026"
           foreground: Color.menu.text
           onTextChanged: pkg.setQuery(text)
           Keys.onPressed: function (event) {

@@ -45,6 +45,29 @@ The key asks twice. The first press says which channel, and that the
 `unfree` and `broken` flags on the row are *not* known for it -- they
 describe the package on the channel you are on, which is a different build
 of it. The second press adds it.
+## Flakes
+
+Software that is not in nixpkgs and ships its own flake -- a Neovim
+distribution, a shell framework, a module published on GitHub -- is not a
+package to add. It is an input to declare, and declaring one means editing
+`flake.nix`.
+
+The **Flakes** tab does that. Type a flakeref, press `RETURN`, and it shows
+what the flake exposes before anything is written: `nix flake show` needs no
+build. Press `RETURN` again on *declare this as an input* and the line is
+added to your flake and locked; if locking fails, or the flake stops
+evaluating, both files are put back exactly as they were.
+
+It stops there, deliberately. It does **not** write the module import,
+because which host wants it, whether the module takes arguments and whether
+an option must be set to enable it are decisions this cannot make for you.
+It shows the line to paste and says plainly that it does not know which file
+it belongs in.
+
+Two things it will refuse: a name your flake already uses, because two
+definitions of one input is an error. And removing an input while anything
+still refers to it, because that breaks evaluation of the whole system
+rather than one line.
 
 ## What it is not
 

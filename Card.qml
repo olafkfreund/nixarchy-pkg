@@ -214,10 +214,12 @@ Item {
       wrapMode: Text.Wrap
       text: !root.model ? ""
           : root.model.searching ? "nothing matches \u201c" + root.model.query + "\u201d"
-          // Ahead of the indexTab branch deliberately: the Selection tab is
-          // also an index tab, so the general answer would shadow this one
-          // and the tab that needs saying most would be the one not saying it.
+          // Both ahead of the indexTab branch deliberately: the Selection
+          // tab is also an index tab, so the general answer would shadow the
+          // specific one and the tab that needs saying most would be the one
+          // not saying it.
           : root.model.tab === 2 ? "no packages in your nixarchy selection yet \u2014 / to search nixpkgs"
+          : root.model.flakeTab ? "no flake inputs declared here yet \u2014 type a flakeref and press RETURN to see what one offers"
           : root.model.indexTab ? "type to search nixpkgs"
           : "nothing here yet"
       textFormat: Text.PlainText

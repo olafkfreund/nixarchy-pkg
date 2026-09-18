@@ -187,9 +187,31 @@ The ten checks from the spec, as adapter-level cases:
 10. **No anchor.** A flake whose outer brace is not the first `^\{$`
     is declined with a reason, not guessed at.
 
-Manual, only if phase B is built: the panel drives the same commands and
-shows the same results; the import line is selectable; the tab is on
-`?`.
+Manual, phase B -- **not yet run.** The panel was built and installed,
+and the sixth tab renders (`Apps Services Packages Options Drafts
+Flakes`, confirmed on screen), but the remaining checks could not be
+completed: another agent session was driving the same desktop, opening
+and closing its own panel plugin to debug focus handling, and it took
+the keyboard between keystrokes three times running. Continuing would
+have corrupted its test run as much as this one.
+
+Outstanding, to be run when the desktop is free:
+
+- the Flakes tab lists declared inputs, and reads
+  "no flake inputs declared here yet" when there are none
+- the field's placeholder reads `github:owner/repo...` on that tab only
+- RETURN on a typed flakeref inspects it and draws its `nixosModules`,
+  its package count, and each opaque namespace named as unreadable
+- RETURN on "declare this as an input" writes and locks it; the row then
+  appears among the declared inputs
+- RETURN on a `nixosModules.` row shows the import line and says the tool
+  does not know which host file it belongs in
+- ESCAPE steps back one level at a time: inspection, then field, then menu
+- RETURN on a declared input removes it
+- `?` lists the new keys under Flakes
+
+Phase A is unaffected: its 23 cases are automated and hermetic, and they
+cover everything that writes.
 
 ## Deviations found while implementing phase A
 

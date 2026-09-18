@@ -25,7 +25,7 @@ QtObject {
   readonly property string script:
     Qt.resolvedUrl("bin/nixarchy-pkg").toString().replace(/^file:\/\//, "")
 
-  readonly property var tabs: ["Apps", "Services", "Selection", "Options", "Drafts"]
+  readonly property var tabs: ["Apps", "Services", "Selection", "Options", "Drafts", "Flakes"]
   property int tab: 0
   readonly property string tabName: tabs[tab]
 
@@ -35,6 +35,13 @@ QtObject {
   // that typing a query never disturbs what is known about the selection.
   property var results: []
   property string query: ""
+
+  // The Flakes tab. `inspected` is what `flake show` last answered about
+  // a flakeref, kept apart from `state` the way `results` is kept apart
+  // from it for search: one is what the machine has, the other is what
+  // was asked about something it does not have yet.
+  property var inspected: null
+  property bool inspecting: false
 
   property int cursor: 0
   property int queued: 0
@@ -74,6 +81,7 @@ QtObject {
   // keeps the enabled state that a search row would not carry.
   readonly property bool searching: query.length > 0
   readonly property bool indexTab: tab === 2 || tab === 3
+  readonly property bool flakeTab: tab === 5
 
   function rows() {
     if (indexTab && searching) return results
@@ -83,8 +91,48 @@ QtObject {
       case 2: return state.packages || []
       case 3: return state.options || []
       case 4: return state.drafts || []
+      case 5: return flakeRows()
     }
     return []
+  }
+
+  // The Flakes tab draws one of two things, and never a mix: what is
+  // declared, or what a flakeref turned out to contain. `kind` says which
+  // sort of row it is, because they answer to different keys -- a declared
+  // input can be removed, an inspected one can be declared, and the lines
+  // that are only there to be read answer to neither.
+  function flakeRows() {
+    if (inspected !== null) {
+      var rows = [{ kind: "head", label: inspected.ref }]
+      if (inspected.ok === false) {
+        rows.push({ kind: "note", label: inspected.message || "could not read that flake" })
+        return rows
+      }
+      var mods = inspected.nixosModules || []
+      if (mods.length > 0) {
+        for (var i = 0; i < mods.length; i++)
+          rows.push({ kind: "module", label: "nixosModules." + mods[i] })
+      } else {
+        rows.push({ kind: "note", label: "no nixosModules" })
+      }
+      var pkgs = inspected.packages || []
+      if (pkgs.length > 0)
+        rows.push({ kind: "note", label: pkgs.length + " package" + (pkgs.length === 1 ? "" : "s") })
+      // Named, never drawn as an empty list. `nix flake show` types
+      // nixosModules and leaves every other module namespace opaque, so
+      // "none" and "cannot tell" are different answers and must read that
+      // way.
+      var op = inspected.opaque || []
+      for (var j = 0; j < op.length; j++)
+        rows.push({ kind: "note", label: op[j] + " \u2014 exists, contents cannot be read" })
+      rows.push({ kind: "declare", label: "declare this as an input" })
+      return rows
+    }
+    var have = state.flakes || []
+    if (have.length === 0) return []
+    return have.map(function (f) {
+      return { kind: "declared", label: f.name, url: f.url, name: f.name }
+    })
   }
 
   function filtered(list) {
@@ -261,6 +309,16 @@ QtObject {
       case 2: write(["pkg", "remove", row.attr]); break
       case 3: write(["opt", "remove", row.path]); break
       case 4: write(["draft", "undraft", row.name]); break
+      case 5:
+        // A declared input is the only flake row that acts. The rest are
+        // there to be read, and a key that silently did nothing would be
+        // worse than one that says why.
+        if (row.kind === "declared") write(["flake", "remove", row.name])
+        else if (row.kind === "declare") declareInspected()
+        else if (row.kind === "module")
+          message = "paste this into the imports of the host that should have it: "
+                  + "inputs.<name>." + row.label + " \u2014 this tool does not know which file that is"
+        break
     }
   }
 
@@ -303,6 +361,60 @@ QtObject {
       + " It brings its own closure: the two channels share no store paths,"
       + " even at the same version. unfree and broken are not known for that"
       + " channel. SHIFT+RETURN again to add it."
+  }
+
+  // Ask what a flakeref contains. Nothing is written; `nix flake show`
+  // needs no build, and this is the step that exists so a person can look
+  // before they commit to running somebody else's build code.
+  function inspect() {
+    if (!flakeTab || query.length === 0 || inspecting) return
+    inspecting = true
+    message = "looking at " + query + "\u2026"
+    _inspector.command = [script, "flake", "show", query]
+    _inspector.running = true
+  }
+
+  property Process _inspector: Process {
+    stdout: StdioCollector {
+      onStreamFinished: {
+        root.inspecting = false
+        try {
+          root.inspected = JSON.parse(text)
+          root.message = ""
+        } catch (e) {
+          root.inspected = null
+          root.message = "could not read what that flake exposes"
+        }
+        root.cursor = 0
+        root.refreshed()
+      }
+    }
+  }
+
+  // The import line is shown, never written. Which host file it belongs
+  // in is the part this cannot know -- flake_base guesses a directory
+  // from the hostname, which is neither the nixosConfigurations attribute
+  // nor an import site -- so it says so rather than guessing.
+  function importLineFor(name) {
+    return "inputs." + name + ".nixosModules.default"
+  }
+
+  function declareInspected() {
+    if (inspected === null || inspected.ok === false) return
+    var name = String(inspected.ref)
+      .replace(/^[a-z+]+:/, "").replace(/^.*\//, "").replace(/[^A-Za-z0-9_-]/g, "")
+    if (name.length === 0) { message = "cannot make an input name out of " + inspected.ref; return }
+    write(["flake", "add", name, inspected.ref])
+    inspected = null
+  }
+
+  function clearInspection() {
+    if (inspected === null) return false
+    inspected = null
+    message = ""
+    cursor = 0
+    refreshed()
+    return true
   }
 
   function reindex() {
