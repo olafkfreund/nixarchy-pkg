@@ -66,6 +66,14 @@ one under **System**, one under **Learn** for the key sheet. Nothing writes
 that file for you; nixarchy leaves it alone on purpose, and
 `nixarchy doctor` fails a run that finds it symlinked or unwritable.
 
+## The whole loop, in a minute and a half
+
+![The five tabs, a search of nixpkgs, and one package queued](../img/tour.gif)
+
+Nothing in that recording was installed. A package was picked, the footer
+said *1 change queued*, and that is where it stopped — the rebuild is the
+next keystroke and a deliberate one.
+
 ## Install one package
 
 Open it. `SUPER+ALT+N`, or the menu row.

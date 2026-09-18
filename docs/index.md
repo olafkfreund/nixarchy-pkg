@@ -10,6 +10,8 @@ options with a form built from each option's declared type, and shows you
 what is waiting. Nothing is built until you press `a` — and what comes out is
 a NixOS generation, so it rolls back.
 
+![A tour of the menu: the five tabs, searching nixpkgs, and one package queued](img/tour.gif)
+
 **[Read the manual →](manual/)**
 
 ---
