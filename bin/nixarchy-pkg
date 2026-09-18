@@ -510,6 +510,134 @@ cmd_opt() {
   esac
 }
 
+# ---- the system flake -------------------------------------------------
+#
+# The one place this project writes outside its own selection files, and
+# the reason the writes here are appended rather than edited.
+#
+# `{ a = { x = 1; }; a.y = 2; }` evaluates to `{ a = { x = 1; y = 2; }; }`:
+# a path assignment merges with an attrset that already exists. So an
+# input is declared by appending ONE top-level line and letting Nix merge
+# it, rather than by finding the `inputs { }` block and inserting into it
+# -- which would mean matching braces in somebody else's Nix and rewriting
+# a region they own and formatted.
+
+# The line the flake's outer attrset opens on. Verified rather than
+# assumed: a flake whose outer brace is not a bare `{` at column 0 is
+# declined, because appending to the wrong scope would produce a file that
+# parses and means something else.
+flake_anchor() {
+  local file=$1 n
+  n=$(grep -n '^{$' "$file" | head -1 | cut -d: -f1)
+  [ -n "$n" ] || return 1
+  printf '%s' "$n"
+}
+
+# Two lists, both read, neither hard-coded.
+#
+# The flake's own input names are a hard constraint: declaring one twice
+# is an error, so a collision is refused.
+#
+# nixarchy's are a warning, not a refusal, and the difference is measured.
+# The installer template hands modules `self.inputs // nixarchy.inputs`,
+# and `//` is right-biased, so there a colliding name locks fine and is
+# then silently ignored. A flake that adopted nixarchy as one input among
+# many typically passes its own `inputs` straight through and shadows
+# nothing. Refusing everyone to protect the first group would block
+# legitimate names for the larger second one.
+#
+# Read, because a hand-kept list was wrong before it was used: it had
+# twelve names where the lock says seventeen, and the five it missed
+# included `nixpkgs`.
+flake_names() {
+  local lock="${NIXARCHY_FLAKE:-/etc/nixos}/flake.lock"
+  [ -r "$lock" ] || return 0
+  case "${1-}" in
+    own)      jq -r '.nodes[.root].inputs | keys[]' "$lock" 2>/dev/null ;;
+    nixarchy) jq -r '
+        (.nodes[.root].inputs.nixarchy // empty) as $n
+        | if ($n | type) == "string"
+          then (.nodes[$n].inputs // {} | keys[])
+          else empty end
+      ' "$lock" 2>/dev/null ;;
+  esac
+  return 0
+}
+
+# The useful line out of a nix error, which is not the first one.
+#
+# Modern nix prints a bare `error:` and then indents the detail under it,
+# so the anchored `^error:` that works for nix-instantiate --parse yields
+# the prefix and nothing else. Take the first line that carries `error:`
+# AND says something after it; fall back to the first non-empty line, so
+# an unfamiliar format degrades to nix's words rather than to ours.
+nix_why() {
+  local file=$1 why
+  why=$(grep -E "error:" "$file" \
+        | sed -E 's/^[[:space:]]*//; s/^error:[[:space:]]*//' \
+        | grep -v '^$' | head -1)
+  [ -n "$why" ] || why=$(grep -v '^[[:space:]]*$' "$file" | head -1 | sed -E 's/^[[:space:]]*//')
+  printf '%s' "$why"
+}
+
+# What a flake offers, before anything is written. `nix flake show`
+# needs no build -- measured at 1.4s on a local flake and 10s for a first
+# remote fetch.
+#
+# It enumerates less than it looks like it does, and the gap is the whole
+# reason this reports three lists instead of one. Measured identically on
+# nixvim, home-manager and sops-nix:
+#
+#   nixosModules        {"default": {"type":"nixos-module"}, "<name>": ...}
+#   homeManagerModules  {"type": "unknown"}
+#
+# `nixosModules` is typed and enumerable. Every other module namespace is
+# a community convention rather than schema, and comes back as one opaque
+# leaf. Those are reported as unreadable BY NAME: an empty list would read
+# as "this flake offers none", which is a different and false statement.
+#
+# A timeout, because a flake using import-from-derivation can make even
+# `show` build. Bounded and reported, rather than left hanging.
+cmd_flake_show() {
+  local ref=${1-} out rc=0
+  [ -n "$ref" ] || die "usage: nixarchy-pkg flake show <flakeref>"
+  need nix
+  # Streams kept apart, unlike run_writer, which merges them deliberately
+  # because a writer's output IS prose. This one is a data channel: nix
+  # prints progress and warnings on stderr, and folding those into stdout
+  # puts banner text in front of the JSON and breaks the parse.
+  local err; err=$(mktemp)
+  # shellcheck disable=SC2064  # $err is fixed at trap time, deliberately
+  trap "rm -f '$err'" RETURN
+  out=$(timeout 120 nix flake show --json "$ref" 2>"$err") || rc=$?
+  if [ "$rc" != 0 ]; then
+    local why; why=$(nix_why "$err")
+    jq -nc --arg ref "$ref" --arg why "${why:-could not inspect $ref}" \
+      '{ok: false, ref: $ref, message: $why}'
+    return 0
+  fi
+  # An enumerable namespace is an object of attributes; an opaque one is a
+  # single leaf carrying "type". `has("type")` is the whole difference.
+  printf '%s' "$out" | jq -c --arg ref "$ref" '
+    . as $f
+    | {
+      ok: true,
+      ref: $ref,
+      nixosModules:
+        (($f.nixosModules // {}) | if has("type") then [] else keys end),
+      packages:
+        (($f.packages // {}) | to_entries | map(.value | keys) | add // [] | unique),
+      opaque:
+        ([ "homeManagerModules", "homeManagerModule", "homeModules",
+           "darwinModules", "nixDarwinModules", "flakeModules", "modules" ]
+         | map(select($f[.] != null
+                      and ($f[.] | type) == "object"
+                      and ($f[.] | has("type")))))
+    }' 2>/dev/null || {
+      jq -nc --arg ref "$ref" '{ok: false, ref: $ref, message: "could not read what that flake exposes"}'
+    }
+}
+
 # Where nixarchy-apply copies the selection to. A flake cannot read a file
 # outside its own tree, which is why the copy exists at all; comparing the
 # two is therefore the honest answer to "what would apply change?", rather
@@ -720,10 +848,21 @@ cmd_state() {
     }'
 }
 
+cmd_flake() {
+  local action=${1-}; shift || true
+  case "$action" in
+    show)   cmd_flake_show "$@" ;;
+    add)    cmd_flake_add "$@" ;;
+    remove) cmd_flake_remove "$@" ;;
+    list)   cmd_flake_list "$@" ;;
+    *) die "flake takes show, add, remove or list, not '${action:-nothing}'" ;;
+  esac
+}
+
 main() {
   need jq
   local cmd=${1-}
-  [ -n "$cmd" ] || die "usage: nixarchy-pkg <state|search|toggle|pkg|opt|draft|pending|apply|reindex>"
+  [ -n "$cmd" ] || die "usage: nixarchy-pkg <state|search|toggle|pkg|opt|draft|flake|pending|apply|reindex>"
   shift
   case "$cmd" in
     state) cmd_state "$@" ;;
@@ -735,6 +874,7 @@ main() {
     pending) cmd_pending "$@" ;;
     apply)   cmd_apply "$@" ;;
     reindex) cmd_reindex "$@" ;;
+    flake)   cmd_flake "$@" ;;
     *) die "no such command: $cmd" ;;
   esac
 }
