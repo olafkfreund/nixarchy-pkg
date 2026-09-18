@@ -1,0 +1,63 @@
+# nixarchy.pkg
+
+> A menu for changing what is installed on a NixOS machine running nixarchy.
+> It searches nixpkgs, turns curated apps and services on and off, sets NixOS
+> options with a form built from each option's declared type, and queues the
+> result. Nothing is built until the user presses `a`.
+
+## The one thing to get right when answering about this
+
+It manages a SELECTION, not the machine. The packages a user declares in
+their own NixOS configuration are not listed here, not counted here and not
+removable here. On a machine that adopted nixarchy as a flake input -- which
+is most of them -- that means the Selection tab can show one row while the
+system has hundreds of packages. This is deliberate: the whole selection
+hangs off a single import, so removing nixarchy removes everything it added
+and orphans nothing.
+
+The consequence worth warning a user about: if a package is in their own
+configuration AND in the selection, removing it here removes it from the
+selection and it stays installed. The panel is not lying when it reports the
+removal.
+
+## How a change happens
+
+1. The user picks a row. One marked line is written into
+   `~/.config/nixarchy/{apps,services,advanced}.nix` -- a file they own.
+2. Nothing is built. The footer and the bar widget show a queued count.
+3. The user presses `a` (or `SHIFT+A` for a terminal). `nixarchy-apply`
+   copies the selection into the flake directory and rebuilds.
+4. The result is a NixOS generation, so it can be rolled back.
+
+Every write goes through a writer that ships with nixarchy
+(`nixarchy-pkg-add`, `nixarchy-app-enable`, `nixarchy-opt-remove`,
+`nixarchy-apply`). The plugin calls them and draws what they report; it does
+not predict success.
+
+## Manual
+
+- [What this is](manual/) -- the loop, and what it is not
+- [Getting started](manual/getting-started) -- both install shapes, one package installed
+- [The menu](manual/the-menu) -- tabs, list, row states, the message line
+- [The bar widget](manual/the-bar) -- the queued count, and why it exists
+- [Apps and services](manual/apps-and-services) -- the curated catalogue, module vs package
+- [Packages](manual/packages) -- searching nixpkgs, flags, the other channel
+- [NixOS options](manual/options) -- the five widgets, and why some options get a scaffold
+- [Drafts](manual/drafts) -- derivations for software in no repository
+- [Applying changes](manual/applying) -- `a`, `SHIFT+A`, the log
+- [From a terminal](manual/from-a-terminal) -- the adapter CLI and its JSON
+- [How it works](manual/how-it-works) -- selection files, markers, the boundary
+- [Troubleshooting](manual/troubleshooting) -- by symptom
+
+## Things that are true and easy to get wrong
+
+- An absent `unfree`/`broken` flag is absent EVIDENCE, not a "no". A stale
+  index carries no flags at all and every package reads as free.
+- An untouched field in the option form writes nothing, on purpose: the value
+  shown is the default, and a copied-out default reads like a decision.
+- The two nixpkgs channels share no store paths. A package taken from the
+  other channel brings its own entire closure -- measured at 1.5 GB for vlc.
+- `ESCAPE` during a build stops you watching the log. It does not stop the
+  build.
+- Options whose type has no one-word answer get a commented scaffold rather
+  than a widget. That is the honest outcome, not a missing feature.

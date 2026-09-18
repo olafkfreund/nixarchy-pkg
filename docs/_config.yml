@@ -1,0 +1,40 @@
+title: nixarchy.pkg
+description: Packages, services and NixOS options, from the Omarchy menu
+url: "https://olafkfreund.github.io"
+baseurl: "/nixarchy-pkg"
+
+# No theme gem. The layouts in _layouts/ and assets/style.css are the whole
+# site, so what builds on GitHub Pages is exactly what is in this directory.
+# Arranged the way nixarchy's docs/ is, so somebody who can edit one can edit
+# the other without learning a second thing.
+
+# Only the manual is a site. img/ is served but is not pages.
+include:
+  - manual
+
+defaults:
+  - scope:
+      path: "manual"
+    values:
+      layout: manual
+
+# The sidebar, in reading order. Stated rather than derived: alphabetical
+# would open the manual on "Applying changes" and bury "Getting started",
+# and the order a manual is READ in is a judgement no sort can make.
+#
+# A page added to manual/ and not listed here will not appear in the nav --
+# which is why .github/workflows/pages.yml fails the build when one is
+# missing, rather than trusting anybody to remember.
+nav:
+  - { path: /manual/,                   title: What this is }
+  - { path: /manual/getting-started,    title: Getting started }
+  - { path: /manual/the-menu,           title: The menu }
+  - { path: /manual/the-bar,            title: The bar widget }
+  - { path: /manual/apps-and-services,  title: Apps and services }
+  - { path: /manual/packages,           title: Packages }
+  - { path: /manual/options,            title: NixOS options }
+  - { path: /manual/drafts,             title: Drafts }
+  - { path: /manual/applying,           title: Applying changes }
+  - { path: /manual/from-a-terminal,    title: From a terminal }
+  - { path: /manual/how-it-works,       title: How it works }
+  - { path: /manual/troubleshooting,    title: Troubleshooting }
