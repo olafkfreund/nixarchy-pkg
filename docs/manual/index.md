@@ -36,6 +36,7 @@ Then the surface you are looking at:
 | [Packages](packages) | Searching nixpkgs, and what "Selection" means |
 | [NixOS options](options) | 25,000 options, and why some get a comment instead of a widget |
 | [Drafts](drafts) | Software nixpkgs does not carry |
+| [Flakes](flakes) | Software that is not in nixpkgs and ships its own flake |
 | [Applying changes](applying) | `a`, `SHIFT+A`, and the build log |
 | [From a terminal](from-a-terminal) | The same commands, without the panel |
 | [How it works](how-it-works) | Selection files, markers, and what is *not* managed |
