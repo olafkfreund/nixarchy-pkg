@@ -53,6 +53,101 @@ check "reports the machine channel" \
                                    jq -e '.channel | test("^(stable|unstable|custom)$")' <<<"$state"
 rm -rf "$CONFIG"
 
+# The system flake. Every case here builds a throwaway flake in a temp
+# directory and points NIXARCHY_FLAKE at it, so a failing test cannot edit
+# the machine's own -- the same rule fresh_config() follows for apps.nix.
+#
+# The input being declared is a LOCAL flake, so none of this needs network.
+echo "flake"
+FLAKE_TMP=$(mktemp -d)
+cleanup_flake() { chmod -R u+w "$FLAKE_TMP" 2>/dev/null || true; rm -rf "$FLAKE_TMP"; }
+trap cleanup_flake EXIT
+
+# Something to declare: two nixosModules, the `default` + alias shape every
+# real flake measured for this uses.
+mkdir -p "$FLAKE_TMP/lib"
+printf '{\n  outputs = { self }: { nixosModules.default = { }; nixosModules.thing = { }; };\n}\n' \
+  > "$FLAKE_TMP/lib/flake.nix"
+git -C "$FLAKE_TMP/lib" init -q .
+git -C "$FLAKE_TMP/lib" add -A
+git -C "$FLAKE_TMP/lib" -c user.email=t@t -c user.name=t commit -qm fixture
+
+fresh_flake() {
+  local d; d=$(mktemp -d -p "$FLAKE_TMP")
+  printf '{\n  description = "throwaway";\n\n  inputs = {\n    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";\n  };\n\n  outputs = { self, ... }@inputs: { names = builtins.attrNames inputs; };\n}\n' \
+    > "$d/flake.nix"
+  git -C "$d" init -q .
+  git -C "$d" add -A
+  printf '%s' "$d"
+}
+
+# FIRST, because the whole design rests on it: a path assignment merges
+# with an attrset that already exists, so an input can be declared by
+# appending one top-level line rather than editing the inputs block.
+merged=$(printf '{ a = { x = 1; }; a.y = 2; }' | nix-instantiate --eval --strict - 2>/dev/null || true)
+check "a path assignment merges with an existing attrset" \
+  test "$merged" = '{ a = { x = 1; y = 2; }; }'
+
+FK=$(fresh_flake)
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake add lib "path:$FLAKE_TMP/lib" 2>&1 || true)
+check "declares an input"            jq -e '.ok == true'          <<<"$out"
+check "shows the import rather than writing it" \
+                                     jq -e '.import == "inputs.lib.nixosModules.default"' <<<"$out"
+check "says it does not know the host file" \
+                                     jq -e '.importNote | length > 0' <<<"$out"
+check "writes exactly one marked line" \
+  test "$(grep -c '#@flake-input lib$' "$FK/flake.nix")" = 1
+check "leaves the existing inputs block alone" \
+  grep -q 'nixpkgs.url' "$FK/flake.nix"
+check "the flake still evaluates"    nix flake metadata "$FK" --no-update-lock-file
+check "lists what it declared" \
+  jq -e '.inputs | map(.name) | index("lib")' <<<"$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake list)"
+
+# A name the flake already has is an error either way, so it is refused.
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake add nixpkgs "path:$FLAKE_TMP/lib" 2>&1 || true)
+check "refuses a name the flake already declares" jq -e '.ok == false' <<<"$out"
+check "and refuses it again for the tool's own"  \
+  jq -e '.ok == false' <<<"$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake add lib "path:$FLAKE_TMP/lib" 2>&1 || true)"
+
+# Nothing survives a failure: both files come back byte for byte.
+before_nix=$(md5sum < "$FK/flake.nix"); before_lock=$(md5sum < "$FK/flake.lock")
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake add nope "path:$FLAKE_TMP/does-not-exist" 2>&1 || true)
+check "refuses an unresolvable input"      jq -e '.ok == false' <<<"$out"
+check "restores flake.nix byte for byte"   test "$(md5sum < "$FK/flake.nix")" = "$before_nix"
+check "restores flake.lock byte for byte"  test "$(md5sum < "$FK/flake.lock")" = "$before_lock"
+
+# Removal is refused while anything still names it, because succeeding
+# would break evaluation.
+printf '  # inputs.lib.nixosModules.default\n' >> "$FK/flake.nix"
+check "refuses to remove an input still referred to" \
+  jq -e '.ok == false' <<<"$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake remove lib 2>&1 || true)"
+sed -i '/# inputs.lib.nixosModules.default/d' "$FK/flake.nix"
+
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake remove lib 2>&1 || true)
+check "removes it"                   jq -e '.ok == true' <<<"$out"
+check "takes the line out"           test "$(grep -c '#@flake-input lib$' "$FK/flake.nix" || true)" = 0
+check "and still evaluates"          nix flake metadata "$FK" --no-update-lock-file
+check "lists nothing afterwards"     jq -e '.inputs | length == 0' <<<"$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake list)"
+
+# A flake whose outer brace is not a line of its own is declined rather
+# than guessed at: appending to the wrong scope parses and means something
+# else, which is worse than refusing.
+NA=$(mktemp -d -p "$FLAKE_TMP")
+printf 'rec {\n  outputs = { self }: { };\n}\n' > "$NA/flake.nix"
+check "declines a flake it cannot find the top of" \
+  jq -e '.ok == false' <<<"$(NIXARCHY_FLAKE="$NA" "$ADAPTER" flake add x "path:$FLAKE_TMP/lib" 2>&1 || true)"
+
+# What a flake exposes. nixosModules enumerates; the other module
+# namespaces are conventions rather than schema and come back opaque, and
+# must be NAMED as unreadable rather than drawn as an empty list.
+out=$("$ADAPTER" flake show "path:$FLAKE_TMP/lib" 2>&1 || true)
+check "enumerates nixosModules"      jq -e '.nixosModules | index("default")' <<<"$out"
+check "sees the alias too"           jq -e '.nixosModules | index("thing")'   <<<"$out"
+check "reports opaque namespaces as a list" jq -e '.opaque | type == "array"' <<<"$out"
+check "says so when a flake cannot be read" \
+  jq -e '.ok == false and (.message | length > 0)' \
+  <<<"$("$ADAPTER" flake show "path:$FLAKE_TMP/nowhere" 2>&1 || true)"
+
 echo "search"
 if [ -s "${XDG_CACHE_HOME:-$HOME/.cache}/nixarchy/index.tsv" ]; then
   hits=$("$ADAPTER" search ripgrep --kind pkg --limit 5)

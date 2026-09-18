@@ -173,15 +173,51 @@ The ten checks from the spec, as adapter-level cases:
    it, removal declines and names the follower.
 8. **Opaque namespaces.** A flake with `homeManagerModules` reports it
    as unreadable, not as empty.
-9. **Nothing staged.** After a successful add, `git status` shows both
-   files modified and unstaged, and a pre-existing staged change is
-   still staged and unaltered.
+9. **Nothing staged -- and this turned out to be wrong, in a way worth
+   recording rather than quietly dropping.** *This tool* never calls
+   git. But `nix flake lock` stages a newly created `flake.lock`
+   itself, and it must: a git flake cannot read untracked files, so an
+   unstaged new lock would be invisible to the evaluation that follows
+   it. Observed as ` A flake.lock` in `git status --porcelain` after a
+   first add.
+
+   So the claim holds of this tool and not of the operation. The test
+   asserts what is actually true -- the tool adds no git calls of its
+   own -- and the spec's sentence is narrowed accordingly.
 10. **No anchor.** A flake whose outer brace is not the first `^\{$`
     is declined with a reason, not guessed at.
 
 Manual, only if phase B is built: the panel drives the same commands and
 shows the same results; the import line is selectable; the tab is on
 `?`.
+
+## Deviations found while implementing phase A
+
+Recorded here in the same commit as the code, per the workflow.
+
+1. **`2>&1` on `nix flake show`** folded progress and warnings into the
+   JSON and broke the parse. The idiom was copied from `run_writer`,
+   where merging streams is right because a writer's output *is* prose.
+   This one is a data channel; the streams are kept apart.
+2. **`grep -E "^error:"` returns the bare prefix.** Modern nix prints
+   `error:` alone and indents the detail beneath, so the anchored form
+   that works for `nix-instantiate --parse` yields nothing useful. A
+   `nix_why` helper takes the first line that carries `error:` *and*
+   says something after it, so `cmd_opt_set`'s promise of "nix's own
+   words" is kept rather than merely restated.
+3. **`set -euo pipefail` versus pipelines that legitimately match
+   nothing.** Five of the new pipelines could exit 1 on an empty match,
+   which under errexit ended the command mid-write with no message at
+   all -- observed once as a silent no-op removal. All now end `|| true`,
+   the idiom the file already uses in `marked()`. The class was audited,
+   not just the instance that showed.
+4. **A `follows` is stored as a path, not a name.** The lock records a
+   direct dependency as the node's name (a string) and a `follows` as
+   `["<name>"]`. The removal check compared against the string alone, so
+   it never matched the case it exists for. Both shapes are handled now.
+5. **An apostrophe inside a single-quoted jq program** ended the shell
+   string. Caught by `bash -n`; the comment was reworded rather than
+   escaped.
 
 ## Rollback
 

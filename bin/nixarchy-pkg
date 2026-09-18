@@ -528,7 +528,7 @@ cmd_opt() {
 # parses and means something else.
 flake_anchor() {
   local file=$1 n
-  n=$(grep -n '^{$' "$file" | head -1 | cut -d: -f1)
+  n=$(grep -n '^{$' "$file" | head -1 | cut -d: -f1 || true)
   [ -n "$n" ] || return 1
   printf '%s' "$n"
 }
@@ -553,13 +553,13 @@ flake_names() {
   local lock="${NIXARCHY_FLAKE:-/etc/nixos}/flake.lock"
   [ -r "$lock" ] || return 0
   case "${1-}" in
-    own)      jq -r '.nodes[.root].inputs | keys[]' "$lock" 2>/dev/null ;;
+    own)      jq -r '.nodes[.root].inputs | keys[]' "$lock" 2>/dev/null || true ;;
     nixarchy) jq -r '
         (.nodes[.root].inputs.nixarchy // empty) as $n
         | if ($n | type) == "string"
           then (.nodes[$n].inputs // {} | keys[])
           else empty end
-      ' "$lock" 2>/dev/null ;;
+      ' "$lock" 2>/dev/null || true ;;
   esac
   return 0
 }
@@ -573,10 +573,13 @@ flake_names() {
 # an unfamiliar format degrades to nix's words rather than to ours.
 nix_why() {
   local file=$1 why
+  # `|| true` throughout: matching nothing is a legitimate answer here, and
+  # under `set -euo pipefail` an empty match would otherwise take the whole
+  # script down in the middle of a write, with no message at all.
   why=$(grep -E "error:" "$file" \
         | sed -E 's/^[[:space:]]*//; s/^error:[[:space:]]*//' \
-        | grep -v '^$' | head -1)
-  [ -n "$why" ] || why=$(grep -v '^[[:space:]]*$' "$file" | head -1 | sed -E 's/^[[:space:]]*//')
+        | grep -v '^$' | head -1 || true)
+  [ -n "$why" ] || why=$(grep -v '^[[:space:]]*$' "$file" | head -1 | sed -E 's/^[[:space:]]*//' || true)
   printf '%s' "$why"
 }
 
@@ -636,6 +639,177 @@ cmd_flake_show() {
     }' 2>/dev/null || {
       jq -nc --arg ref "$ref" '{ok: false, ref: $ref, message: "could not read what that flake exposes"}'
     }
+}
+
+# Declare an input. The riskiest write this project makes -- the system
+# flake, where a bad line fails the whole machine's evaluation rather than
+# one package -- so it follows cmd_opt_set's discipline below (backup,
+# write, validate, restore, report nix's own words) with one step added
+# for the lock and one taken BEFORE the write.
+#
+# The baseline matters more than it looks. Checking only afterwards means
+# a flake that was already broken gets blamed on whatever was added last,
+# which is this. So the question asked is a delta -- did THIS change it --
+# not an absolute.
+#
+# What is deliberately NOT checked is whether a host still builds.
+# Evaluating one costs minutes and proves far more than is at stake: an
+# input nothing imports cannot break a host. Parse, resolve, lock.
+cmd_flake_add() {
+  local name=${1-} ref=${2-}
+  [ -n "$name" ] && [ -n "$ref" ] || die "usage: nixarchy-pkg flake add <name> <flakeref>"
+  case "$name" in
+    [A-Za-z_]*) ;;
+    *) die "'$name' is not a usable input name -- it has to start with a letter or underscore" ;;
+  esac
+  need nix
+
+  local dir="${NIXARCHY_FLAKE:-/etc/nixos}" file lock
+  file="$dir/flake.nix"; lock="$dir/flake.lock"
+  [ -w "$file" ] || die "cannot write $file"
+
+  local at; at=$(flake_anchor "$file") ||
+    die "cannot find where $file opens -- its outer { is not on a line of its own, so I do not know where a top-level line would go. Add the input by hand."
+
+  if grep -qE "#@flake-input ${name}\$" "$file"; then
+    die "'$name' is already declared here by this tool"
+  fi
+  if flake_names own | grep -qxF "$name"; then
+    die "'$name' is already an input of this flake. Two definitions of one input is an error, so nothing was changed."
+  fi
+
+  # A warning, not a refusal. See flake_names.
+  local warn=""
+  if flake_names nixarchy | grep -qxF "$name"; then
+    warn="nixarchy also has an input called '$name'. If this flake hands its modules nixarchy's inputs merged over its own -- the installer's template does -- yours will be locked and then silently ignored. If it passes its own inputs straight through, this is fine."
+  fi
+
+  local err; err=$(mktemp)
+  local bnix; bnix=$(mktemp)
+  local block; block=$(mktemp)
+  # shellcheck disable=SC2064  # fixed at trap time, deliberately
+  trap "rm -f '$err' '$bnix' '$block'" RETURN
+
+  if ! nix flake metadata "$dir" >/dev/null 2>"$err"; then
+    die "this flake does not evaluate as it stands, so I have changed nothing rather than add to a broken file: $(nix_why "$err")"
+  fi
+
+  cp "$file" "$bnix"
+  # `|| :` because a bare `[ -f ] && cp` that tests false returns 1, which
+  # under errexit ends the command here rather than skipping a copy.
+  [ -f "$lock" ] && cp "$lock" "$block" || :
+  restore_flake() {
+    cp "$bnix" "$file"
+    [ -s "$block" ] && cp "$block" "$lock" || :
+  }
+
+  # After the outer brace, so it lands at the top level of the flake's own
+  # attrset. Nix merges it with whatever `inputs = { ... }` is already
+  # there, which is why the existing block is never touched.
+  local line="  inputs.${name}.url = \"${ref}\";  #@flake-input ${name}"
+  local tmp; tmp=$(mktemp)
+  awk -v at="$at" -v line="$line" 'NR == at { print; print line; next } { print }' \
+    "$file" > "$tmp" && mv "$tmp" "$file"
+
+  if ! nix-instantiate --parse "$file" >/dev/null 2>"$err"; then
+    restore_flake
+    die "that would have left $file unparseable, so nothing was changed: $(nix_why "$err")"
+  fi
+
+  if ! nix flake lock "$dir" >/dev/null 2>"$err"; then
+    restore_flake
+    die "could not lock '$ref', so nothing was changed: $(nix_why "$err")"
+  fi
+
+  if ! nix flake metadata "$dir" >/dev/null 2>"$err"; then
+    restore_flake
+    die "the flake stopped evaluating with '$name' in it, so nothing was changed: $(nix_why "$err")"
+  fi
+
+  # The import line is SHOWN, never written. `default` is the answer the
+  # flake itself gives to "which module" -- measured convention across
+  # nixvim, home-manager and sops-nix, all of which expose `default`
+  # beside a named alias. Every other choice is still open: which host,
+  # whether the module takes arguments, whether an option must be set to
+  # enable it. Knowing the attribute settles one of four, which is not
+  # permission to edit a file this tool does not own.
+  jq -nc --arg name "$name" --arg ref "$ref" --arg warn "$warn" \
+    '{ok: true, name: $name, url: $ref,
+      message: (("declared " + $name + " and locked it")
+                + (if $warn == "" then "" else " -- " + $warn end)),
+      import: ("inputs." + $name + ".nixosModules.default"),
+      importNote: "Add that to the imports of the host that should have it. This tool does not know which file that is."}'
+}
+
+# Removal refuses rather than succeeds-and-breaks. Taking out a
+# declaration something else depends on fails evaluation, which is the one
+# thing this must never do quietly.
+cmd_flake_remove() {
+  local name=${1-}
+  [ -n "$name" ] || die "usage: nixarchy-pkg flake remove <name>"
+  need nix
+
+  local dir="${NIXARCHY_FLAKE:-/etc/nixos}" file lock
+  file="$dir/flake.nix"; lock="$dir/flake.lock"
+  grep -qE "#@flake-input ${name}\$" "$file" ||
+    die "no input '$name' declared here by this tool. Nothing was changed."
+
+  # Anything else in the flake that names it -- an import somebody pasted,
+  # a specialArgs reference -- other than the declaration itself.
+  local used; used=$(grep -nE "\b${name}\b" "$file" | grep -v "#@flake-input ${name}\$" | head -1 || true)
+  if [ -n "$used" ]; then
+    die "'$name' is still referred to at $file:${used%%:*}, so removing its declaration would break evaluation. Take that reference out first."
+  fi
+
+  if [ -r "$lock" ]; then
+    local follower
+    # Two shapes, and missing the second is how this check quietly does
+    # nothing: a direct dependency is stored as the node name, a string,
+    # while a `follows` is stored as a PATH -- ["mine"] -- so comparing
+    # against the string alone never matches the case this exists for.
+    follower=$(jq -r --arg n "$name" '
+      .nodes | to_entries
+      | map(select(.value.inputs? // {} | to_entries
+                   | any(.value == $n
+                         or ((.value | type) == "array" and .value[0] == $n))))
+      | map(.key) | map(select(. != "root")) | first // empty' "$lock" 2>/dev/null || true)
+    if [ -n "$follower" ]; then
+      die "'$follower' follows '$name' in flake.lock, so removing it would break evaluation. Nothing was changed."
+    fi
+  fi
+
+  local err bnix block
+  err=$(mktemp); bnix=$(mktemp); block=$(mktemp)
+  # shellcheck disable=SC2064  # fixed at trap time, deliberately
+  trap "rm -f '$err' '$bnix' '$block'" RETURN
+  cp "$file" "$bnix"
+  [ -f "$lock" ] && cp "$lock" "$block" || :
+
+  sed -i -E "/#@flake-input ${name}\$/d" "$file"
+
+  if ! nix-instantiate --parse "$file" >/dev/null 2>"$err"; then
+    cp "$bnix" "$file"
+    die "that would have left $file unparseable, so nothing was changed: $(nix_why "$err")"
+  fi
+  if ! nix flake metadata "$dir" >/dev/null 2>"$err"; then
+    cp "$bnix" "$file"
+    [ -s "$block" ] && cp "$block" "$lock" || :
+    die "the flake stopped evaluating without '$name', so nothing was changed: $(nix_why "$err")"
+  fi
+
+  # The lock entry is left. `nix flake lock` does not prune, the entry is
+  # inert, and a second write for tidiness is a second chance to break
+  # something.
+  jq -nc --arg name "$name" '{ok: true, name: $name, message: ("removed " + $name)}'
+}
+
+# What this tool declared, so a terminal and the panel see one answer.
+cmd_flake_list() {
+  local file="${NIXARCHY_FLAKE:-/etc/nixos}/flake.nix"
+  [ -r "$file" ] || { jq -nc '{ok: true, inputs: []}'; return 0; }
+  { grep -oE '^[[:space:]]*inputs\.[A-Za-z_][A-Za-z0-9_-]*\.url[[:space:]]*=[[:space:]]*"[^"]+";[[:space:]]*#@flake-input [A-Za-z_][A-Za-z0-9_-]*$' "$file" || true; } |
+    sed -E 's/^[[:space:]]*inputs\.([^.]+)\.url[[:space:]]*=[[:space:]]*"([^"]+)".*/\1\t\2/' |
+    jq -Rsc '{ok: true, inputs: (split("\n") | map(select(length > 0)) | map(split("\t") | {name: .[0], url: .[1]}))}'
 }
 
 # Where nixarchy-apply copies the selection to. A flake cannot read a file
