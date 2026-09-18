@@ -46,6 +46,11 @@ check "nothing enabled in a fresh catalogue" \
                                    jq -e '.apps | map(select(.enabled)) | length == 0' <<<"$state"
 check "settings rows are marked"   jq -e '.apps | map(select(.settings)) | length > 0' <<<"$state"
 check "reports index staleness"    jq -e '.indexStale | type == "boolean"' <<<"$state"
+# The panel offers the other channel by name, so a wrong answer here offers
+# the channel the machine is already on -- which nixarchy-pkg-add:112
+# refuses. `custom` is a legitimate answer, not a failure.
+check "reports the machine channel" \
+                                   jq -e '.channel | test("^(stable|unstable|custom)$")' <<<"$state"
 rm -rf "$CONFIG"
 
 echo "search"

@@ -241,21 +241,43 @@ Item {
       opacity: 0.25
     }
 
-    // Whatever a writer last said. These are the refusals -- an unfree
-    // package under a policy that forbids it, an id that drifted out of
-    // the catalogue -- so they are shown rather than swallowed.
-    Text {
-      width: parent.width
+    // Whatever a writer last said. These are the refusals -- an id that
+    // drifted out of the catalogue, a name nixpkgs does not carry -- so
+    // they are shown rather than swallowed.
+    //
+    // Shown to the END. This was capped at three lines and elided, which
+    // swallowed the part that mattered most: the writers report one
+    // wrapped row per package and then their consequence -- the line
+    // saying a commented allowUnfreePredicate was scaffolded, which is a
+    // licence-policy edit -- so on a multi-package add the consequence was
+    // the first thing off the bottom. It scrolls now instead: bounded, so
+    // a long report cannot push the list, but never truncated.
+    Flickable {
+      // Inset to the same column the rows use (their delegate's
+      // leftMargin above), so the card has one left edge rather than a
+      // list that starts here and a footer that starts there.
+      x: Style.space(10)
+      width: parent.width - Style.space(20)
       visible: root.model && root.model.message.length > 0
-      text: root.model ? root.model.message : ""
-      textFormat: Text.PlainText
-      wrapMode: Text.Wrap
-      maximumLineCount: 3
-      elide: Text.ElideRight
-      font.family: root.fontFamily
-      font.pixelSize: root.px(Style.font.caption)
-      color: root.dim
-      topPadding: Style.space(6)
+      // topMargin is space BEFORE the content, so it has to be counted in
+      // the height as well as the content -- sized without it, the last
+      // line is clipped by exactly the margin.
+      height: Math.min(topMargin + messageText.implicitHeight, root.rowHeight * 4)
+      contentHeight: messageText.implicitHeight
+      clip: true
+      boundsBehavior: Flickable.StopAtBounds
+      topMargin: Style.space(6)
+
+      Text {
+        id: messageText
+        width: parent.width
+        text: root.model ? root.model.message : ""
+        textFormat: Text.PlainText
+        wrapMode: Text.Wrap
+        font.family: root.fontFamily
+        font.pixelSize: root.px(Style.font.caption)
+        color: root.dim
+      }
     }
 
     Item {
@@ -263,7 +285,10 @@ Item {
       height: root.px(Style.font.caption) + Style.space(10)
 
       Text {
-        anchors { left: parent.left; verticalCenter: parent.verticalCenter }
+        anchors {
+          left: parent.left; leftMargin: Style.space(10)
+          verticalCenter: parent.verticalCenter
+        }
         text: {
           if (!root.model) return ""
           if (root.model.queued === 0) return "nothing queued"
@@ -291,7 +316,10 @@ Item {
       }
 
       Text {
-        anchors { right: parent.right; verticalCenter: parent.verticalCenter }
+        anchors {
+          right: parent.right; rightMargin: Style.space(10)
+          verticalCenter: parent.verticalCenter
+        }
         text: root.model && root.model.busy ? "working\u2026" : "? keys   a apply   esc close"
         textFormat: Text.PlainText
         font.family: root.fontFamily

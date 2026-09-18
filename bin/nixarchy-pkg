@@ -522,6 +522,34 @@ flake_base() {
   printf '%s' "$base"
 }
 
+# Which channel this machine follows, so the panel can name the OTHER one
+# and not offer a request the writer would refuse.
+#
+# Copied from nixarchy-pkg-add:80-88 rather than asked of
+# `nixarchy-channel`, deliberately. The question is not "what is true"
+# but "what will the writer that acts on this request decide", and only
+# the writer's own parse answers that -- nixarchy-channel is a different
+# program, and reports in prose (its :92) with no machine-readable mode.
+# A copy pinned to a cited line cannot disagree with it; asking a second
+# opinion can.
+#
+# Read from the URL, which is what an update resolves, not the lock,
+# which is only where it last landed. `custom` is a real answer: the
+# flat `inputs.nixpkgs.url` form and a reshaped flake both land there,
+# and the panel says so rather than guessing.
+machine_channel() {
+  local flakedir u
+  flakedir="${NIXARCHY_FLAKE:-/etc/nixos}"
+  [ -r "$flakedir/flake.nix" ] || { printf custom; return; }
+  u=$(sed -nE "s/^[[:space:]]*nixpkgs\.url[[:space:]]*=[[:space:]]*\"([^\"]+)\".*/\1/p" \
+    "$flakedir/flake.nix" | head -1)
+  case "$u" in
+    *nixos-unstable*) printf unstable ;;
+    *nixos-[0-9][0-9].[0-9][0-9]*) printf stable ;;
+    *) printf custom ;;
+  esac
+}
+
 # Queued changes: marked lines that differ between the selection and the
 # copy the flake last saw.
 #
@@ -658,6 +686,7 @@ cmd_state() {
     --argjson stale "$stale" \
     --arg appsFile "$APPS" \
     --arg servicesFile "$SERVICES" \
+    --arg channel "$(machine_channel)" \
     '
     def lines: split("\n") | map(select(length > 0));
     def cols:  lines | map(split("\t"));
@@ -668,6 +697,7 @@ cmd_state() {
       ok: true,
       indexStale: $stale,
       files: { apps: $appsFile, services: $servicesFile },
+      channel: $channel,
       apps: ($apps | cols | map({
         id: .[1], category: (.[2] // ""), enabled: (.[3] == "true"),
         line: (.[4] // ""), note: (.[5] // ""),
