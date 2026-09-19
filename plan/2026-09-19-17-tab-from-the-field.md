@@ -45,6 +45,11 @@ would make the sheet wrong.
    under a failing check.
    -> verify by the same observation.
 
+   **Not needed.** `Tab` reaches the field's `Keys.onPressed` and the
+   fall-through hands it on, exactly as the reasoning said. The fallback
+   stays written down because the next person to touch this will wonder,
+   and "we checked, it arrives" is worth more than silence.
+
 4. **Check what the fix did not break**, in the same session: the keyboard
    lands in the list on an ordinary tab and in the field on Flakes; `h`,
    `l` and `/` still type; `Left`/`Right` still move the caret in a typed
@@ -75,6 +80,14 @@ Live, on a build of this branch:
 Restore nothing: this change writes no files and queues nothing, so the
 selection files cannot be touched by testing it. Confirm that rather than
 assume it — `nixarchy-pkg pending` is 0 at the end.
+
+**All six ran and passed**, on a build of this branch driven from the
+keyboard. Worth recording what the third one showed, because it is the
+part that could only be seen by doing it: tabbing onto Flakes landed with
+the keyboard already in the field, so `github:nix-community/nixvim` typed
+straight in — *including its slash*, which on any other tab is the key that
+focuses the field. Two features written days apart, composing without
+either knowing about the other.
 
 ## Rollback
 
