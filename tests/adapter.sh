@@ -19,6 +19,11 @@ check() {
   if "$@" >/dev/null 2>&1; then pass "$what"; else fail "$what"; fi
 }
 
+# `check "..." ! grep ...` does not work: check runs "$@", so the `!` is
+# looked up as a command and is not one. A function can be, so negation gets
+# one rather than every negative assertion silently failing.
+not() { ! "$@"; }
+
 # A selection of this machine's own catalogue, in a directory that is thrown
 # away afterwards.
 fresh_config() {
@@ -58,6 +63,123 @@ rm -rf "$CONFIG"
 # the machine's own -- the same rule fresh_config() follows for apps.nix.
 #
 # The input being declared is a LOCAL flake, so none of this needs network.
+# Changing an option's value in one command.
+#
+# The point of `opt replace` is atomicity: `opt set` refuses a path that is
+# already present, so changing a value used to mean remove-then-set, and a
+# set that failed after a successful remove lost the option outright.
+echo "opt replace"
+CONFIG=$(fresh_config); export XDG_CONFIG_HOME="$CONFIG"
+APPSNIX="$CONFIG/nixarchy/apps.nix"
+
+# Not a non-zero exit: this adapter reports failure as a value and exits 0
+# throughout, which the "unknown command" cases below also assert. A caller
+# probing for the subcommand reads the object.
+check "opt replace with no arguments is a usage error" \
+  jq -e '.ok == false and (.error | startswith("usage:"))' \
+  <<<"$("$ADAPTER" opt replace 2>&1 || true)"
+
+out=$("$ADAPTER" opt replace services.openssh.enable true 2>&1 || true)
+check "refuses an option that is not set"  jq -e '.ok == false' <<<"$out"
+
+"$ADAPTER" opt set services.openssh.ports "[ 22 ]" >/dev/null 2>&1 || true
+check "opt set put it there" grep -q '#@opt services.openssh.ports$' "$APPSNIX"
+before_line=$(grep -n '#@opt services.openssh.ports$' "$APPSNIX" | cut -d: -f1)
+
+out=$("$ADAPTER" opt replace services.openssh.ports "[ 2222 ]" 2>&1 || true)
+check "replaces a present option"          jq -e '.ok == true' <<<"$out"
+check "the new value is in the file"       grep -q '2222' "$APPSNIX"
+check "the old value is gone"              not grep -q '\[ 22 \]' "$APPSNIX"
+check "the marker survived"                grep -q '#@opt services.openssh.ports$' "$APPSNIX"
+check "the line kept its position" \
+  test "$(grep -n '#@opt services.openssh.ports$' "$APPSNIX" | cut -d: -f1)" = "$before_line"
+
+# A refused value must leave the file untouched, not half-written.
+before=$(md5sum < "$APPSNIX")
+out=$("$ADAPTER" opt replace services.openssh.ports 'pkgs.nonexistent-thing' 2>&1 || true)
+check "an unparseable value is refused"    jq -e '.ok == false' <<<"$out"
+check "and the file is byte-identical"     test "$(md5sum < "$APPSNIX")" = "$before"
+rm -rf "$CONFIG"
+
+# The apply answers. Driven against a STUB of nixarchy-apply's shape, never
+# the real one: the real one elevates and rebuilds a machine, so a test that
+# invoked it would be a test that changed the machine.
+echo "apply answers"
+APPLY_TMP=$(mktemp -d)
+cleanup_apply() { rm -rf "$APPLY_TMP"; }
+trap cleanup_apply EXIT
+
+# The stub mirrors nixarchy-apply:193 onwards: the preview prompt exists only
+# when a preview binary is on PATH, and the switch prompt always follows.
+mkdir -p "$APPLY_TMP/bin"
+cat > "$APPLY_TMP/bin/nixarchy-apply" <<STUB
+#!$(command -v bash)
+if command -v nixarchy-preview >/dev/null 2>&1; then
+  read -r -p "Preview in a VM first? [y/N] " reply || reply=""
+  echo "PREVIEW_GOT=\$reply"
+fi
+read -r -p "Build and switch now? [y/N] " reply || reply=""
+echo "SWITCH_GOT=\$reply"
+case "\$reply" in
+  [yY]*) echo "SWITCHED" ;;
+  *) echo "Not switching. Run: something" ;;
+esac
+exit 0
+STUB
+chmod +x "$APPLY_TMP/bin/nixarchy-apply"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$APPLY_TMP/bin/nixarchy-preview"
+chmod +x "$APPLY_TMP/bin/nixarchy-preview"
+
+# With a preview binary present: two prompts, n then y.
+out=$(PATH="$APPLY_TMP/bin:$PATH" "$ADAPTER" apply 2>&1 || true)
+check "declines the preview when there is one"  grep -q 'PREVIEW_GOT=n' <<<"$out"
+check "and accepts the switch"                  grep -q 'SWITCH_GOT=y'  <<<"$out"
+check "and reports applied"                     grep -q '"ok":true'     <<<"$out"
+
+# With it absent: ONE prompt, and it must get y. This is the regression --
+# a fixed `n\ny\n` answered the switch prompt with n and reported success.
+#
+# Deleting the stub is not enough: the real nixarchy-preview is still on PATH
+# on any machine that has it, and both the stub and cmd_apply ask `command -v`.
+# So every PATH entry that provides one is stripped, and the result is checked
+# rather than assumed -- on a machine without preview at all this is a no-op.
+rm "$APPLY_TMP/bin/nixarchy-preview"
+
+# A MINIMAL path rather than a filtered one. Stripping every directory that
+# provides nixarchy-preview also strips whatever else lives beside it -- on
+# this machine that took jq, and the adapter died before it asked anything,
+# which made the assertion below pass for the wrong reason. So the stub
+# directory gets exactly the tools `apply` needs and nothing else.
+# bash and env among them: the adapter's own shebang is `#!/usr/bin/env bash`,
+# so a PATH without those two cannot start it at all -- which failed as
+# "env: 'bash': No such file or directory" and looked like a fault in the
+# code under test rather than in the harness.
+for t in jq grep bash env; do ln -sf "$(command -v $t)" "$APPLY_TMP/bin/$t"; done
+# Tested as files, not with `env PATH=... command -v`: `command` is a shell
+# builtin, so env looks for a binary of that name, never finds one, and the
+# check passes or fails for a reason that has nothing to do with PATH.
+check "the minimal path still has jq"        test -x "$APPLY_TMP/bin/jq"
+check "and really has no nixarchy-preview"   not test -e "$APPLY_TMP/bin/nixarchy-preview"
+
+out=$(PATH="$APPLY_TMP/bin" "$ADAPTER" apply 2>&1 || true)
+check "asks only the switch when there is no preview" not grep -q 'PREVIEW_GOT' <<<"$out"
+check "and still accepts it"                    grep -q 'SWITCH_GOT=y'  <<<"$out"
+check "and reports applied"                     grep -q '"ok":true'     <<<"$out"
+
+# And the belt: a decline must never read as success, whatever caused it.
+cat > "$APPLY_TMP/bin/nixarchy-apply" <<'STUB'
+#!/usr/bin/env bash
+cat >/dev/null
+echo "Not switching. Run: something"
+exit 0
+STUB
+chmod +x "$APPLY_TMP/bin/nixarchy-apply"
+out=$(PATH="$APPLY_TMP/bin:$PATH" "$ADAPTER" apply 2>&1 || true)
+check "a decline is reported as a failure"      grep -q '"ok":false'    <<<"$out"
+check "and is not called applied"               not grep -q '"message":"applied"' <<<"$out"
+cleanup_apply
+trap - EXIT
+
 echo "flake"
 FLAKE_TMP=$(mktemp -d)
 cleanup_flake() { chmod -R u+w "$FLAKE_TMP" 2>/dev/null || true; rm -rf "$FLAKE_TMP"; }
