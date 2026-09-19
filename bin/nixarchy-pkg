@@ -495,18 +495,93 @@ cmd_opt_set() {
   state_with true "set $path = $value"
 }
 
+# Change an option that is already set, in one command that either changes
+# it or leaves the file exactly as it was.
+#
+# `opt set` refuses a path that is already present ("remove it first"), so
+# changing a value has meant `opt remove` then `opt set` -- two invocations
+# with two backups and nothing covering the pair. A set that fails after a
+# successful remove loses the option outright, when what was asked for was a
+# change. The difference here is one backup, taken before anything is
+# touched.
+#
+# A sibling rather than a --force on `opt set`, deliberately: that refusal
+# is a useful guard against a caller clobbering a line somebody wrote by
+# hand, and keeping a separate verb keeps the guard.
+cmd_opt_replace() {
+  local path=${1-} value=${2-}
+  [ -n "$path" ] && [ $# -ge 2 ] ||
+    die "usage: nixarchy-pkg opt replace <path> <nix-value>"
+  [ -f "$APPS" ] || die "no $APPS -- log in again to have it created"
+
+  case "$path" in
+    *[!a-zA-Z0-9._-]* | "" ) die "'$path' is not an option path" ;;
+  esac
+
+  grep -q "#@opt ${path//./\\.}\$" "$APPS" ||
+    die "$path is not in $APPS -- use 'opt set' to add it"
+
+  # One physical line, for the reason cmd_opt_set gives at length:
+  # nixarchy-opt-remove deletes the single line carrying the marker, so a
+  # value spread over several lines leaves the earlier ones orphaned and the
+  # option can never be taken out again except by hand.
+  value=$(printf '%s' "$value" | tr '\n' ' ' | tr -s ' ')
+
+  # BEFORE anything is touched. This is the whole point of the command.
+  local backup; backup=$(mktemp)
+  cp "$APPS" "$backup"
+  # shellcheck disable=SC2064  # $backup is fixed at trap time, deliberately
+  trap "rm -f '$backup'" RETURN
+
+  # Keyed on the marker rather than on position: the line is wherever the
+  # person moved it to, and the marker is what finds it. Through the
+  # environment rather than `awk -v` for the reason cmd_opt_set gives -- -v
+  # processes escape sequences, so a Nix value containing a backslash would
+  # arrive mangled.
+  local tmp; tmp=$(mktemp)
+  NIXARCHY_PKG_PATH="$path" NIXARCHY_PKG_VALUE="$value" awk '
+    {
+      marker = "#@opt " ENVIRON["NIXARCHY_PKG_PATH"]
+      if (!done && index($0, marker) > 0 &&
+          substr($0, length($0) - length(marker) + 1) == marker) {
+        printf "  %s = %s;  %s\n",
+          ENVIRON["NIXARCHY_PKG_PATH"], ENVIRON["NIXARCHY_PKG_VALUE"], marker
+        done = 1
+        next
+      }
+      print
+    }
+  ' "$APPS" > "$tmp"
+  mv "$tmp" "$APPS"
+
+  if ! grep -q "#@opt ${path//./\\.}\$" "$APPS"; then
+    cp "$backup" "$APPS"
+    die "could not find $path to replace after all. Nothing was changed."
+  fi
+
+  local why
+  if ! why=$(nix-instantiate --parse "$APPS" 2>&1 >/dev/null); then
+    cp "$backup" "$APPS"
+    why=$(printf '%s' "$why" | grep -E "^error:" | head -1)
+    die "that value was refused, so nothing was changed. ${why:-nix could not parse the result}"
+  fi
+
+  state_with true "replaced $path = $value"
+}
+
 cmd_opt() {
   local action=${1-}; shift || true
   case "$action" in
     describe) cmd_opt_describe "$@" ;;
     set)      cmd_opt_set "$@" ;;
+    replace)  cmd_opt_replace "$@" ;;
     remove)
       [ $# -gt 0 ] || die "usage: nixarchy-pkg opt remove <path>"
       need nixarchy-opt-remove
       run_writer nixarchy-opt-remove "$@"
       emit_state
       ;;
-    *) die "opt takes describe, set or remove, not '${action:-nothing}'" ;;
+    *) die "opt takes describe, set, replace or remove, not '${action:-nothing}'" ;;
   esac
 }
 
@@ -949,10 +1024,48 @@ cmd_pending() {
 # the only thing the panel parses.
 cmd_apply() {
   need nixarchy-apply
-  local rc=0
-  printf 'n\ny\n' |
+  local rc=0 out
+
+  # How many questions nixarchy-apply asks depends on the machine, and
+  # answering the wrong number is silent. It asks "Preview in a VM first?"
+  # only `if command -v nixarchy-preview` (nixarchy-apply:193), and always
+  # asks "Build and switch now?" after it.
+  #
+  # A fixed `n\ny\n` was therefore right on a machine with preview installed
+  # and wrong on one without: the `n` answered the SWITCH prompt, the switch
+  # was declined, the `y` was never read -- and declining is not an error, so
+  # this reported {"ok": true, "message": "applied"} for a rebuild that never
+  # happened.
+  #
+  # No single script is correct both ways: `y\n` alone would answer "yes" to
+  # the preview question on a machine that has it, and boot a VM nobody asked
+  # for. So the condition is duplicated from nixarchy-apply:193, and THE TWO
+  # MUST AGREE. Asking upstream for a non-interactive mode instead:
+  # https://github.com/olafkfreund/nixarchy/issues/769
+  local answers
+  if command -v nixarchy-preview >/dev/null 2>&1; then
+    answers=$'n\ny\n'
+  else
+    answers=$'y\n'
+  fi
+
+  out=$(printf '%s' "$answers" |
     NH_ELEVATION_STRATEGY="${NH_ELEVATION_STRATEGY:-pkexec}" \
-    nixarchy-apply 2>&1 || rc=$?
+    nixarchy-apply 2>&1) || rc=$?
+  printf '%s\n' "$out"
+
+  # And the belt to that brace. nixarchy-apply:225 prints "Not switching."
+  # when the switch is declined and then exits 0, which is exactly why the
+  # exit code has never been able to tell a switch from a decline. After the
+  # fix above this should be unreachable; it is here so that if the prompts
+  # change again -- they have changed once -- the panel says something true
+  # rather than something reassuring.
+  if printf '%s' "$out" | grep -q "Not switching\."; then
+    jq -nc '{ok: false, exit: 0,
+      message: "nixarchy-apply declined to switch, so nothing was applied. This means the answers it was sent did not match the questions it asked."}'
+    return 0
+  fi
+
   jq -nc --argjson rc "$rc" \
     '{ok: ($rc == 0), exit: $rc,
       message: (if $rc == 0 then "applied" else "nixarchy-apply exited " + ($rc|tostring) end)}'
