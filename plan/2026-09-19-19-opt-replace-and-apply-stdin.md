@@ -105,6 +105,46 @@ shape and prints what it was asked:
 The real `nixarchy-apply` is never invoked. If a test ever needs it, that
 test is wrong.
 
+## Deviations found while implementing
+
+Recorded here in the same commit as the code. All four are faults in the
+tests rather than in the change, and every one of them produced a **false
+pass** before it was caught -- which is the only reason they are worth
+writing down.
+
+1. **`check "..." ! cmd` does not negate.** `check` runs `"$@"`, so the `!`
+   is looked up as a command, is not one, and the assertion fails whatever
+   the code did. A `not()` function is added, because a function *can* be
+   found on `$@` where a shell keyword cannot.
+
+2. **`opt replace` with no arguments exits 0, and should.** The first test
+   asserted a non-zero status. This adapter reports failure as a value and
+   exits 0 throughout -- the existing "unknown command" cases assert exactly
+   that -- so a caller probing for the subcommand reads the object, not the
+   status. The test was wrong about the design, not the design about itself.
+
+3. **Deleting the stub `nixarchy-preview` does not hide the real one.** The
+   first attempt stripped every `PATH` entry that provided one; on this
+   machine that also removed the entry providing `jq`, the adapter died
+   before asking anything, and the assertion "no preview prompt appeared"
+   passed on an error message. Replaced with a minimal `PATH` containing
+   exactly the tools `apply` needs.
+
+4. **`env PATH=... command -v x` can never work.** `command` is a shell
+   builtin, so `env` looks for a binary of that name and does not find one.
+   Both guard checks using it were passing or failing for reasons unrelated
+   to `PATH`. Replaced with file tests.
+
+   And a fifth that followed from the fourth: the minimal `PATH` needs
+   `bash` and `env` in it, because the adapter's own shebang is
+   `#!/usr/bin/env bash`. Without them it cannot start, which surfaced as
+   `env: 'bash': No such file or directory` and read as a fault in the code
+   under test.
+
+The pattern is worth naming: every one of these made a test agree with me.
+The regression case -- one prompt, answered `y` -- only became a real check
+after the fourth fix.
+
 ## Rollback
 
 `git revert`. `cmd_opt_replace` is additive — a new function and one new
