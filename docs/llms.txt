@@ -44,6 +44,7 @@ not predict success.
 - [Packages](manual/packages) -- searching nixpkgs, flags, the other channel
 - [NixOS options](manual/options) -- the five widgets, and why some options get a scaffold
 - [Drafts](manual/drafts) -- derivations for software in no repository
+- [Flakes](manual/flakes) -- declaring an input, and the module wiring it will not guess
 - [Applying changes](manual/applying) -- `a`, `SHIFT+A`, the log
 - [From a terminal](manual/from-a-terminal) -- the adapter CLI and its JSON
 - [How it works](manual/how-it-works) -- selection files, markers, the boundary

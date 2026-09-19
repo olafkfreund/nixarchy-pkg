@@ -34,6 +34,7 @@ nav:
   - { path: /manual/packages,           title: Packages }
   - { path: /manual/options,            title: NixOS options }
   - { path: /manual/drafts,             title: Drafts }
+  - { path: /manual/flakes,             title: Flakes }
   - { path: /manual/applying,           title: Applying changes }
   - { path: /manual/from-a-terminal,    title: From a terminal }
   - { path: /manual/how-it-works,       title: How it works }
