@@ -268,11 +268,26 @@ Item {
             switch (event.key) {
               case Qt.Key_Down:
               case Qt.Key_Up:
+              case Qt.Key_Tab:
+              case Qt.Key_Backtab:
               case Qt.Key_Return:
               case Qt.Key_Enter:
               case Qt.Key_Escape:
                 // Movement and commitment belong to the list, so the field
                 // hands the keyboard back rather than competing for it.
+                //
+                // Moving between TABS is movement too, and that was missed:
+                // without Tab and Backtab here there was no way to leave a
+                // tab once anything had been typed, because the arrows and
+                // the single letters are all unavailable while the field
+                // holds the keyboard -- correctly, since `h` and `l` are
+                // letters somebody is entitled to type.
+                //
+                // Tab and Backtab only. Left and Right move a caret, and the
+                // field that most needs caret movement is the one holding a
+                // flakeref; a rule that changed tabs only at the end of the
+                // text would work and would have to be reconstructed from
+                // first principles by whoever met it next.
                 keys.forceActiveFocus()
                 event.accepted = false
                 return
