@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 19
 spec: spec/2026-09-19-19-opt-replace-and-apply-stdin.md
 ---
