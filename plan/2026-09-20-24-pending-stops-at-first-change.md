@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 24
 spec: spec/2026-09-20-24-pending-stops-at-first-change.md
 ---
