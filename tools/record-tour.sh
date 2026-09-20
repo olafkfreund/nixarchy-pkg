@@ -9,14 +9,17 @@ set -euo pipefail
 
 readonly LIMIT=60                      # seconds; the whole point of the task
 readonly OUT_W=620                     # matches the asset being replaced
-readonly GIF_FPS=12
-readonly KEY_PAUSE=0.28                # between keystrokes, so a human could
+readonly GIF_FPS=8
+readonly KEY_PAUSE=0.45                # between keystrokes, so a human could
+readonly KEY_HOLD=0.05                 # a key is held, not blipped; see play()
+readonly SETTLE=2.5                    # after the panel opens, before the first key
 readonly MENU_NS=nixarchy-pkg-menu     # the layer, not listPlugins' `active`
 readonly PLUGIN=nixarchy.pkg
 
 readonly REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/nixarchy"
 readonly WORK="${TMPDIR:-/tmp}/nixarchy-tour.$$"
+HOME_WS=""            # the workspace to put back when this is over
 
 # budget<TAB>label<TAB>keys. The keys are tokens: k:<keysym>, K:<keysym> for
 # shift+key, t:<text>, and *N on a k: token to repeat it.
@@ -25,14 +28,102 @@ readonly WORK="${TMPDIR:-/tmp}/nixarchy-tour.$$"
 # The story: I want lazygit, I don't know if it's in nixpkgs, and I don't want
 # to open an editor. Scene 7 lands at 41s on purpose: queue-then-apply only
 # reads once you know what a queue is.
-readonly SCENES=$'4\tApps, already listed\t
-5\tServices, one turned on\tk:Tab k:Down*3 k:space
-5\tSelection, the toggle waiting\tk:Tab
-9\tOptions, a search and its form\tk:Tab t:/ t:openssh k:Down k:Return
-5\tDrafts, the option waiting\tk:Escape k:Tab
-8\tFlakes, a flakeref and its packages\tk:Tab t:github:nix-community/nixvim k:Return
-10\tApps, lazygit, queued\tK:Tab*5 t:/ t:lazygit k:space
-6\tSelection, three queued, none built\tk:Tab*2'
+# budget<TAB>label<TAB>keys. Tokens: k:<name> a key, *N to repeat it, t:<text>
+# typed as characters.
+#
+# Everything is sent with ydotool, through uinput, because wtype attaches a
+# virtual keyboard carrying its OWN keymap and this client then resolves only
+# raw navigation scancodes: arrows keep working while letters, space, Return
+# and Tab go silently dead, and the damage outlives the run. If a panel ever
+# stops answering anything but arrow keys, that is what happened, and
+# `omarchy-restart-shell` clears it.
+#
+# Tab order is PkgModel.qml:28 -- Apps Services Selection Options Drafts
+# Flakes -- and the tour walks it rightwards with Right. Apps, Services and
+# Drafts filter what is already listed; Selection and Options are the search
+# tabs (PkgModel.qml:83, `indexTab`), so lazygit is looked for on Selection
+# and not on Apps, where the curated list would find nothing.
+#
+# `/` focuses the field (Menu.qml:235) when the list holds the keyboard, but
+# lands as a character when the field holds it already -- which is how the
+# last tour ended up searching for "/openssh" and finding nothing. Sending
+# BackSpace straight after costs nothing on an empty field and removes the
+# stray slash on a focused one, so the same tokens work either way.
+#
+# The `s:` after a typed query is not padding: the search is debounced
+# (Menu.qml:265) and Return on a list that has not been rebuilt yet finds no
+# row and quietly does nothing, which reads on the recording as a package that
+# was searched for and never queued.
+#
+# A searched row is queued with Return, not Space: Space only toggles when the
+# field does NOT hold the keyboard (Menu.qml:205-208), and after typing a query
+# it does, so Space would just type a space. Nor is there a Down first -- the
+# exact match is already the cursor row, and moving off it queues the wrong
+# package.
+#
+# The Options scene searches but never presses Return, and that is deliberate:
+# the option form is a one-way door for anything driving this from outside.
+# Once it has been opened, Escape closes it and then every further Escape is
+# still eaten by clearInspection() (Menu.qml:165) -- three of them in a row
+# leave the query sitting in the field -- so the tab can never be left and the
+# tour ends there. Escape after a search ALONE does clear the query and hand
+# the keyboard back, which is what every other scene here relies on. The form
+# itself is in the manual already, as docs/img/08 and 09.
+#
+# Escape is only ever sent where something is open or typed: it closes an
+# inspection, then clears the text and hands the keyboard back
+# (Menu.qml:161-174), but on an empty field it closes the menu. Two of them in
+# a row need a pause between: sent back to back, the second arrives while the
+# form is still closing and is swallowed as another clearInspection(), leaving
+# the query in the field and every later Right moving a caret instead of a tab.
+# `s:` is that pause, in seconds. Left and Right are
+# caret moves once the field holds text, so a scene that searched presses
+# Escape first: that clears the text AND hands the keyboard back to the list
+# (Menu.qml:166-172). Escape on an EMPTY field closes the menu, so it is only
+# ever sent after typing. Flakes keeps the keyboard in its field whatever
+# happens, so it can only be the last scene.
+#
+# The story: I want lazygit, I do not know if it is in nixpkgs, and I do not
+# want to open an editor.
+readonly SCENES=$'3\tApps, the catalogue as it opens\t
+5\tServices, one turned on\tk:right k:down*2 k:return
+4\tSelection, the service waiting there\tk:right
+12\tlazygit, found in nixpkgs and queued\tt:/ k:backspace t:lazygit s:2.5 k:return s:2.0
+9\tOptions, 25k of them, searched\tk:escape s:1.0 k:right t:/ k:backspace t:openssh s:1.5
+6\tDrafts, what is already set\tk:escape s:1.2 k:right
+8\tFlakes, a flakeref and what it carries\tk:right t:github:nix-community/nixvim s:0.8 k:return
+5\tand what that flake settles on\ts:1.5 k:down k:return'
+
+# ydotool speaks Linux keycodes, not keysyms.
+keycode() {
+  case "$1" in
+    escape) printf 1 ;;   return) printf 28 ;;  slash) printf 53 ;;
+    backspace) printf 14 ;;
+    space)  printf 57 ;;  up)     printf 103 ;; left)  printf 105 ;;
+    right)  printf 106 ;; down)   printf 108 ;;
+    *) die "unknown key: $1" ;;
+  esac
+}
+
+# Hyprland 0.56 parses dispatch arguments as Lua, so `dispatch workspace 13`
+# is a syntax error, not a workspace switch -- and one that exits 7 rather
+# than saying so. The legacy form is kept for older Hyprlands.
+go_workspace() {
+  hyprctl dispatch "hl.dsp.focus({ workspace = \"$1\" })" >/dev/null 2>&1 \
+    || hyprctl dispatch workspace "$1" >/dev/null 2>&1 \
+    || die "could not switch to workspace $1"
+  sleep 0.8
+}
+
+# The panel stops accepting anything but arrows after a while of being driven
+# -- letters, `/`, Return and Space all go quiet, and a take made then is a
+# tour of one motionless tab. A restarted shell always accepts them, so every
+# take starts from one. It costs the bar and the panels blinking out and back.
+fresh_shell() {
+  say "restarting the shell, so the panel still takes letters"
+  omarchy-restart-shell >/dev/null || die "could not restart the shell"
+  sleep 4
+}
 
 say() { printf '%s\n' "$*" >&2; }
 die() { printf 'record-tour: %s\n' "$*" >&2; exit 1; }
@@ -47,9 +138,10 @@ panel_open() {
 toggle_panel() { omarchy-shell -q shell toggle "$PLUGIN" '{}'; }
 
 preconditions() {
-  for c in hyprctl jq wl-screenrec ffmpeg wtype omarchy-shell grim; do
+  for c in hyprctl jq wl-screenrec ffmpeg ydotool omarchy-shell grim; do
     command -v "$c" >/dev/null || die "$c is not installed"
   done
+  ydotool key 0:0 2>/dev/null || die "ydotoold is not reachable; check YDOTOOL_SOCKET"
 
   # A stale index carries no unfree or broken flags at all, so a tour cut
   # against one contradicts the pages it sits on.
@@ -80,6 +172,7 @@ backup() {
 }
 
 restore() {
+  [ -n "$HOME_WS" ] && go_workspace "$HOME_WS"
   [ -f "$WORK/apps.nix" ] || return 0
   cp "$WORK/apps.nix" "$CONFIG/apps.nix"
   cp "$WORK/services.nix" "$CONFIG/services.nix"
@@ -95,13 +188,18 @@ play() {
   local token key n
   for token in $1; do
     case "$token" in
-      t:*) wtype -- "${token#t:}" ;;
-      k:*|K:*)
-        key="${token#?:}"; n=1
+      t:*) ydotool type --key-delay 45 "${token#t:}" ;;
+      s:*) sleep "${token#s:}" ;;
+      k:*)
+        key="${token#k:}"; n=1
         case "$key" in *\*[0-9]*) n="${key##*\*}"; key="${key%%\**}" ;; esac
+        key="$(keycode "$key")"
         while [ "$n" -gt 0 ]; do
-          if [ "${token:0:1}" = K ]; then wtype -M shift -k "$key" -m shift
-          else wtype -k "$key"; fi
+          # Press and release as two events with a hold between them. Sent as
+          # one batch (`key N:1 N:0`) they share a timestamp and this client
+          # drops them at random: a Right that never changes tab, a Return
+          # that never queues.
+          ydotool key "${key}:1"; sleep "$KEY_HOLD"; ydotool key "${key}:0"
           sleep "$KEY_PAUSE"; n=$((n - 1))
         done ;;
     esac
@@ -110,22 +208,36 @@ play() {
 }
 
 record() {
-  local mon mw mh w h x y rec_pid start
-  read -r mon mw mh < <(hyprctl monitors -j | jq -r '.[]|select(.focused)|"\(.name) \(.width) \(.height)"')
+  local mon mw mh mx my w h x y rec_pid start empty
+  read -r mon mw mh mx my < <(hyprctl monitors -j \
+    | jq -r '.[]|select(.focused)|"\(.name) \(.width) \(.height) \(.x) \(.y)"')
 
   # The card, from Menu.qml:120-127: min(1100, 72% of the width) wide, 78% of
   # the height, centred. It is opaque, so cropping to it is also what keeps
   # the desktop behind it out of the recording.
   w=$(( 1100 < mw * 72 / 100 ? 1100 : mw * 72 / 100 )); h=$(( mh * 78 / 100 ))
-  x=$(( (mw - w) / 2 )); y=$(( (mh - h) / 2 ))
-  say "recording $mon, card ${w}x${h}+${x}+${y}"
+  # global compositor coordinates: wl-screenrec takes a geometry OR an
+  # output, never both, and a geometry already says which output it is on.
+  x=$(( mx + (mw - w) / 2 )); y=$(( my + (mh - h) / 2 ))
+  # An empty workspace, so the tour carries none of whoever's desktop this
+  # is. The card is opaque and the crop is to the card, so this is about what
+  # a stray notification or a wide window edge could put in frame, and about
+  # not filming somebody's screen to document a package manager.
+  HOME_WS="$(hyprctl activeworkspace -j | jq -r .id)"
+  empty="$(hyprctl workspaces -j \
+    | jq -r --arg m "$mon" '[.[]|select(.monitor==$m and .windows==0 and .id>0)]|first|.id // empty')"
+  [ -n "$empty" ] || die "no empty workspace on $mon to record on"
+  say "recording $mon on empty workspace $empty, card ${w}x${h}+${x}+${y}"
+  go_workspace "$empty"
 
-  wl-screenrec -o "$mon" -g "$x,$y ${w}x${h}" -f "$WORK/take.mp4" --codec auto &
+  wl-screenrec -g "$x,$y ${w}x${h}" -f "$WORK/take.mp4" &
   rec_pid=$!
-  sleep 1.2
+  sleep 1.5
+  # a dead recorder means the next 52 seconds record nothing at all
+  kill -0 "$rec_pid" 2>/dev/null || die "wl-screenrec died on startup; nothing was recorded"
 
   toggle_panel
-  sleep 1.2
+  sleep "$SETTLE"
   panel_open || { kill "$rec_pid" 2>/dev/null; die "the panel did not open; nothing was recorded"; }
 
   start=$SECONDS
@@ -138,6 +250,9 @@ record() {
   done < <(printf '%s\n' "$SCENES")
 
   sleep 0.8
+  # What the tour actually queued, read before the selection is put back. The
+  # closing shot claims a number; this is that number, from the tool itself.
+  say "queued by the tour: $("$REPO/bin/nixarchy-pkg" pending | jq -r .count)"
   kill -INT "$rec_pid" 2>/dev/null || true
   wait "$rec_pid" 2>/dev/null || true
   say "take: $((SECONDS - start))s of scenes"
@@ -149,7 +264,7 @@ encode() {
   ffmpeg -y -v error -i "$src" -vf "scale=${OUT_W}:-2:flags=lanczos" \
     -c:v libvpx-vp9 -b:v 0 -crf 34 -an "$REPO/docs/img/tour.webm"
   ffmpeg -y -v error -i "$src" \
-    -vf "fps=${GIF_FPS},scale=${OUT_W}:-2:flags=lanczos,split[a][b];[a]palettegen=max_colors=128[p];[b][p]paletteuse=dither=bayer:bayer_scale=3" \
+    -vf "fps=${GIF_FPS},scale=${OUT_W}:-2:flags=lanczos,split[a][b];[a]palettegen=max_colors=64[p];[b][p]paletteuse=dither=bayer:bayer_scale=3" \
     "$REPO/docs/img/tour.gif"
   ls -l "$REPO/docs/img/tour.webm" "$REPO/docs/img/tour.gif" >&2
 }
@@ -168,9 +283,35 @@ frames() {
   say "frames in $WORK"
 }
 
+# Drives the tour without recording and leaves one screenshot per scene, so a
+# broken key sequence costs seconds instead of a whole take.
+dry() {
+  local mon mw mh mx my w h x y empty i=1
+  read -r mon mw mh mx my < <(hyprctl monitors -j \
+    | jq -r '.[]|select(.focused)|"\(.name) \(.width) \(.height) \(.x) \(.y)"')
+  w=$(( 1100 < mw * 72 / 100 ? 1100 : mw * 72 / 100 )); h=$(( mh * 78 / 100 ))
+  x=$(( mx + (mw - w) / 2 )); y=$(( my + (mh - h) / 2 ))
+  HOME_WS="$(hyprctl activeworkspace -j | jq -r .id)"
+  empty="$(hyprctl workspaces -j \
+    | jq -r --arg m "$mon" '[.[]|select(.monitor==$m and .windows==0 and .id>0)]|first|.id // empty')"
+  [ -n "$empty" ] || die "no empty workspace on $mon"
+  go_workspace "$empty"
+  toggle_panel; sleep "$SETTLE"
+  panel_open || die "the panel did not open"
+  while IFS=$'\t' read -r _ label keys; do
+    [ -n "$keys" ] && play "$keys"
+    sleep 0.6
+    grim -g "$x,$y ${w}x${h}" "$WORK/$(printf 'dry-%d.png' "$i")"
+    panel_open || say "scene $i ($label): THE PANEL IS GONE"
+    i=$((i + 1))
+  done < <(printf '%s\n' "$SCENES")
+  say "dry frames in $WORK"
+}
+
 case "${1:-}" in
   --check)  preconditions ;;
+  --dry)    preconditions; backup; trap restore EXIT; mkdir -p "$WORK"; fresh_shell; dry ;;
   --frames) frames ;;
-  "")       preconditions; backup; trap restore EXIT; record; encode; frames ;;
+  "")       preconditions; backup; trap restore EXIT; fresh_shell; record; encode; frames ;;
   *)        die "usage: record-tour.sh [--check|--frames]" ;;
 esac

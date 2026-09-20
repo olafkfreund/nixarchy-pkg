@@ -10,7 +10,11 @@ options with a form built from each option's declared type, and shows you
 what is waiting. Nothing is built until you press `a` — and what comes out is
 a NixOS generation, so it rolls back.
 
-![A tour of the menu: the five tabs, searching nixpkgs, and one package queued](img/tour.gif)
+<video src="img/tour.webm" autoplay loop muted playsinline width="620"
+       aria-label="A tour of the menu: the six tabs, a search of nixpkgs, a package queued, and a flake's modules listed">
+  <img src="img/tour.gif" width="620"
+       alt="A tour of the menu: the six tabs, a search of nixpkgs, a package queued, and a flake's modules listed">
+</video>
 
 **[Read the manual →](manual/)**
 

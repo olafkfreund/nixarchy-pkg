@@ -4,7 +4,7 @@ title: The menu
 
 # The menu
 
-One card, five tabs, a list, and two lines at the bottom. Everything in this
+One card, six tabs, a list, and two lines at the bottom. Everything in this
 manual happens on this surface, so it is worth thirty seconds.
 
 ![The menu, on the Apps tab](../img/01-apps.png)
@@ -21,6 +21,7 @@ manual happens on this surface, so it is worth thirty seconds.
 | **Selection** | The packages nixarchy manages for you, and `/` searches all of nixpkgs |
 | **Options** | Every NixOS option there is |
 | **Drafts** | Software nixpkgs does not carry |
+| **Flakes** | What a flakeref of its own carries — type one, `RETURN` lists it |
 
 ## The list
 
