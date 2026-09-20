@@ -488,7 +488,14 @@ cmd_opt_set() {
   local why
   if ! why=$(nix-instantiate --parse "$APPS" 2>&1 >/dev/null); then
     cp "$backup" "$APPS"
-    why=$(printf '%s' "$why" | grep -E "^error:" | head -1)
+    # One awk rather than `grep … | head -1`: grep exits 1 when nothing
+    # matches, and under `pipefail` that killed this function before the
+    # die() below could report anything -- the fallback on the next line
+    # has never once been reached. `head` closing the pipe could also take
+    # grep out with SIGPIPE on a long error, failing a match that DID
+    # happen. awk exits 0 either way, and a here-string leaves no pipeline
+    # to have a status at all.
+    why=$(awk '/^error:/ { print; exit }' <<<"$why")
     die "that value was refused, so nothing was changed. ${why:-nix could not parse the result}"
   fi
 
@@ -562,7 +569,14 @@ cmd_opt_replace() {
   local why
   if ! why=$(nix-instantiate --parse "$APPS" 2>&1 >/dev/null); then
     cp "$backup" "$APPS"
-    why=$(printf '%s' "$why" | grep -E "^error:" | head -1)
+    # One awk rather than `grep … | head -1`: grep exits 1 when nothing
+    # matches, and under `pipefail` that killed this function before the
+    # die() below could report anything -- the fallback on the next line
+    # has never once been reached. `head` closing the pipe could also take
+    # grep out with SIGPIPE on a long error, failing a match that DID
+    # happen. awk exits 0 either way, and a here-string leaves no pipeline
+    # to have a status at all.
+    why=$(awk '/^error:/ { print; exit }' <<<"$why")
     die "that value was refused, so nothing was changed. ${why:-nix could not parse the result}"
   fi
 
@@ -603,7 +617,12 @@ cmd_opt() {
 # parses and means something else.
 flake_anchor() {
   local file=$1 n
-  n=$(grep -n '^{$' "$file" | head -1 | cut -d: -f1 || true)
+  # One awk rather than `grep -n | head -1 | cut`: `|| true` kept the
+  # no-match case alive but swallowed a grep that failed for a real reason,
+  # and a SIGPIPE from head closing the pipe would lose a match that did
+  # happen -- and an empty answer here means the flake is DECLINED, so a
+  # lost match declines a flake that was fine.
+  n=$(awk '/^\{$/ { print NR; exit }' "$file")
   [ -n "$n" ] || return 1
   printf '%s' "$n"
 }
@@ -648,13 +667,18 @@ flake_names() {
 # an unfamiliar format degrades to nix's words rather than to ours.
 nix_why() {
   local file=$1 why
-  # `|| true` throughout: matching nothing is a legitimate answer here, and
-  # under `set -euo pipefail` an empty match would otherwise take the whole
-  # script down in the middle of a write, with no message at all.
-  why=$(grep -E "error:" "$file" \
-        | sed -E 's/^[[:space:]]*//; s/^error:[[:space:]]*//' \
-        | grep -v '^$' | head -1 || true)
-  [ -n "$why" ] || why=$(grep -v '^[[:space:]]*$' "$file" | head -1 | sed -E 's/^[[:space:]]*//' || true)
+  # Matching nothing is a legitimate answer here, and under
+  # `set -euo pipefail` an empty match would otherwise take the whole script
+  # down in the middle of a write, with no message at all. This used to say
+  # `|| true` on each pipeline, which survived that but equally survived a
+  # grep that failed for a real reason, and could still lose a match to
+  # SIGPIPE when head closed the pipe on a long log. One awk per branch
+  # exits 0 whether or not it matched, and leaves no pipeline to guard.
+  why=$(awk '/error:/ {
+               sub(/^[[:space:]]*/, ""); sub(/^error:[[:space:]]*/, "")
+               if ($0 != "") { print; exit }
+             }' "$file")
+  [ -n "$why" ] || why=$(awk 'NF { sub(/^[[:space:]]*/, ""); print; exit }' "$file")
   printf '%s' "$why"
 }
 
@@ -831,7 +855,14 @@ cmd_flake_remove() {
 
   # Anything else in the flake that names it -- an import somebody pasted,
   # a specialArgs reference -- other than the declaration itself.
-  local used; used=$(grep -nE "\b${name}\b" "$file" | grep -v "#@flake-input ${name}\$" | head -1 || true)
+  # One awk rather than two greps into head: `|| true` survived no-match,
+  # which is the common case, but equally survived a grep that failed for a
+  # real reason -- and an empty answer here means "nothing else refers to
+  # it, go ahead and remove it", so a lost match removes a declaration that
+  # something still uses.
+  local used
+  used=$(awk -v n="$name" '
+    $0 ~ "\\<" n "\\>" && $0 !~ "#@flake-input " n "$" { print NR ":" $0; exit }' "$file")
   if [ -n "$used" ]; then
     die "'$name' is still referred to at $file:${used%%:*}, so removing its declaration would break evaluation. Take that reference out first."
   fi
@@ -950,26 +981,61 @@ marked() {
 }
 
 
+# The marked lines that differ, one per line, as `sign<TAB>part<TAB>line`.
+#
+# A function called in the main shell rather than a <(…) inside the jq call,
+# because nothing inside a process substitution can stop the command reading
+# it: the subshell exits, its end of the pipe closes, and jq carries on and
+# prints a confident answer built from however much arrived. Every failure
+# below has to be one this can RETURN, so cmd_pending can act on it.
+pending_changes() {
+  local base=$1 part src dst out rc
+  for part in apps services advanced; do
+    src="$CONFIG_DIR/$part.nix"
+    dst="$base/nixarchy/$part.nix"
+    [ -f "$src" ] || continue
+    # A file that exists and cannot be read is not an empty one. marked()
+    # sends its errors to /dev/null and returns nothing, so an unreadable
+    # selection file used to report every live line in the applied copy as
+    # REMOVED -- a confident list of changes nobody made.
+    [ -r "$src" ] || return 2
+    # A machine that has never applied has no copy, which is the same
+    # question asked against an empty one.
+    #
+    # `diff` is run on its own rather than piped, because its three exit
+    # codes mean three different things and only one is a failure: 0 no
+    # differences, 1 differences, 2 or more it could not do the job. Piped
+    # under `pipefail` the 1 took the whole loop down on the FIRST file that
+    # had a change, so apps was reported and services and advanced were
+    # dropped -- the count the panel's footer draws, wrong by every change
+    # after the first. `|| true` would have fixed that by making an
+    # unreadable file look like an identical one, which is the distinction
+    # worth keeping.
+    rc=0
+    out=$(diff <([ -f "$dst" ] && marked "$dst" || true) <(marked "$src")) || rc=$?
+    [ "$rc" -le 1 ] || return 3
+    printf '%s\n' "$out" |
+      awk -v part="$part" '
+        /^> / { print "+\t" part "\t" substr($0, 3) }
+        /^< / { print "-\t" part "\t" substr($0, 3) }'
+  done
+}
+
 cmd_pending() {
   local base; base=$(flake_base)
   local never=true
   [ -d "$base/nixarchy" ] && never=false
 
+  local changes rc=0
+  changes=$(pending_changes "$base") || rc=$?
+  case $rc in
+    0) ;;
+    2) die "a selection file exists but cannot be read, so what is queued cannot be told" ;;
+    *) die "the selection could not be compared with the applied copy" ;;
+  esac
+
   jq -n \
-    --rawfile changes <(
-      local part src dst
-      for part in apps services advanced; do
-        src="$CONFIG_DIR/$part.nix"
-        dst="$base/nixarchy/$part.nix"
-        [ -f "$src" ] || continue
-        # A machine that has never applied has no copy, which is the same
-        # question asked against an empty one.
-        diff <([ -f "$dst" ] && marked "$dst" || true) <(marked "$src") 2>/dev/null |
-          awk -v part="$part" '
-            /^> / { print "+\t" part "\t" substr($0, 3) }
-            /^< / { print "-\t" part "\t" substr($0, 3) }' 
-      done
-    ) \
+    --arg changes "$changes" \
     --argjson never "$never" \
     --arg base "$base" \
     '

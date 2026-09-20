@@ -392,6 +392,54 @@ check "a failing apply is reported" \
   jq -e '.ok == false and .exit == 1' <<<"$(PATH="$STUB:$PATH" "$ADAPTER" apply | tail -1)"
 rm -rf "$STUB"
 
+# What is queued, across more than one file at once.
+#
+# Every other case here queues one kind of thing, which is exactly how
+# `pending` came to report only the first file that differed: apps alone was
+# right, services alone was right, and the two together lost one of them.
+# Anything queued in `advanced` had never been counted at all.
+echo "pending across more than one file"
+PCFG=$(fresh_config)
+PBASE=$(mktemp -d); mkdir -p "$PBASE/nixarchy"
+# The applied copy starts as the selection does, so nothing is queued yet.
+cp "$PCFG/nixarchy"/*.nix "$PBASE/nixarchy/"
+pending() { XDG_CONFIG_HOME="$PCFG" NIXARCHY_FLAKE="$PBASE" "$ADAPTER" pending; }
+
+check "nothing queued is nothing"   jq -e '.count == 0' <<<"$(pending)"
+XDG_CONFIG_HOME="$PCFG" "$ADAPTER" toggle service openssh >/dev/null
+check "one file, one change"        jq -e '.count == 1' <<<"$(pending)"
+check "and it names that file"      jq -e '[.changes[].file] == ["services"]' <<<"$(pending)"
+XDG_CONFIG_HOME="$PCFG" "$ADAPTER" toggle app brave >/dev/null
+check "two files, two changes"      jq -e '.count == 2' <<<"$(pending)"
+check "and both files are named"    jq -e '[.changes[].file] | sort == ["apps", "services"]' <<<"$(pending)"
+# A file that exists and cannot be read is not an empty one: it used to be
+# reported as every line in the applied copy having been removed.
+chmod 000 "$PCFG/nixarchy/services.nix"
+check "an unreadable file is an error, not an empty file" \
+                                    jq -e '.ok == false' <<<"$(pending)"
+chmod 600 "$PCFG/nixarchy/services.nix"
+check "and it recovers once readable" jq -e '.ok == true and .count == 2' <<<"$(pending)"
+rm -rf "$PCFG" "$PBASE"
+
+# The shape that caused it, so the next one is caught before it ships.
+#
+# A pipeline whose FIRST command exits non-zero on a normal outcome --
+# `diff` finding differences, `grep` finding nothing, `head` closing the pipe
+# under it -- is a failure under `set -euo pipefail` (bin/nixarchy-pkg:39).
+# No linter catches this for us: the checker is clean on this file, and even
+# with its optional rules on it reaches only the `diff` and misses both
+# `grep | head`s. (Naming that tool at the start of a comment turns the line
+# into a directive it then fails to parse, which is its own small lesson.)
+echo "the shape that caused it"
+# Comments are stripped first, or this trips on the comments explaining
+# why these shapes are gone. Requiring whitespace after the name keeps
+# `comm` from matching inside `command -v`.
+code() { grep -vE '^[[:space:]]*#' "$ADAPTER"; }
+heads_a_pipeline() { code | grep -qE '^[[:space:]]*(diff|comm|cmp)[[:space:]][^|]*\|'; }
+pipes_into_head() { code | grep -qE '(grep|diff|comm|cmp)[[:space:]][^|]*\|[[:space:]]*head([[:space:]]|$)'; }
+check "no diff, comm or cmp at the head of a pipeline" not heads_a_pipeline
+check "nothing is piped into head"                     not pipes_into_head
+
 echo "failure is a value, not an exit code"
 out=$("$ADAPTER" nosuchcommand); rc=$?
 check "exits 0 on an unknown command" test "$rc" = 0
