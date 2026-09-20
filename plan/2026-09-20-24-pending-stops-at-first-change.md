@@ -191,3 +191,38 @@ applies nothing.
 7. **There was already a `pending` block in the suite**, covering one file
    at a time -- which is precisely how this survived. The new block is
    headed "pending across more than one file" rather than renaming theirs.
+
+8. **The recording shows the INSTALLED plugin, not the working tree.**
+   `PkgModel.qml:26` resolves the adapter relative to the plugin's own
+   directory, and `~/.config/omarchy/plugins/nixarchy.pkg` is a symlink into
+   the Nix store. The first re-cut therefore showed the old count while the
+   script's own `queued by the tour: 2` showed the new one. The take that
+   ships was made against `nix build .#default`, with that symlink pointed
+   at the build for the length of the recording and restored -- with the
+   shell restarted -- immediately afterwards. It is back on
+   `cd0rqn6y…-nixarchy-pkg`, where it started.
+
+9. **The script recorded whichever monitor happened to be focused.** The
+   shell restart it performs can move focus, and one take came out on the
+   1080p head: the card is a share of the screen, so it was 1100x842 where
+   every other docs image is from a 1100x1123 card. It now picks the
+   tallest monitor and focuses it, which is a choice rather than an
+   accident.
+
+10. **The frame offsets were measured from the first keystroke, not the
+    first frame of the video.** `ffmpeg -ss` counts from the start of the
+    file, so every verification frame was about four seconds -- one short
+    scene -- earlier than the scene it was labelled with. Three scenes that
+    were correct looked broken, and were nearly "fixed". Offsets are now
+    taken from the moment the recorder starts and written per scene as the
+    take runs. A verification that reads the wrong frame is worse than
+    none.
+
+11. **Scenes around the asynchronous steps were lengthened.** `pkg add`
+    shells out and the footer takes a moment to catch up; a flakeref takes
+    seconds to evaluate before anything can be listed. Budget 52s to 53s,
+    encoded 58.0s.
+
+12. **The GIF palette is 48 colours, not 64.** The new take is busier than
+    the one it replaces and came out at 2 422 023 bytes; at 48 colours it
+    is 2 194 335, under the 2 264 595 it replaces. Frame rate stayed at 8.

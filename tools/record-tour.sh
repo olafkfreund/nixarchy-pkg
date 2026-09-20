@@ -87,13 +87,13 @@ HOME_WS=""            # the workspace to put back when this is over
 # The story: I want lazygit, I do not know if it is in nixpkgs, and I do not
 # want to open an editor.
 readonly SCENES=$'3\tApps, the catalogue as it opens\t
-5\tServices, one turned on\tk:right k:down*2 k:return
-4\tSelection, the service waiting there\tk:right
-12\tlazygit, found in nixpkgs and queued\tt:/ k:backspace t:lazygit s:2.5 k:return s:2.0
-9\tOptions, 25k of them, searched\tk:escape s:1.0 k:right t:/ k:backspace t:openssh s:1.5
-6\tDrafts, what is already set\tk:escape s:1.2 k:right
-8\tFlakes, a flakeref and what it carries\tk:right t:github:nix-community/nixvim s:0.8 k:return
-5\tand what that flake settles on\ts:1.5 k:down k:return'
+4\tServices, one turned on\tk:right k:down*2 k:return
+3\tSelection, the service waiting there\tk:right
+13\tlazygit, found in nixpkgs and queued\tt:/ k:backspace t:lazygit s:2.5 k:return s:3.0
+11\tOptions, 25k of them, searched\tk:escape s:1.5 k:right t:/ k:backspace t:openssh s:2.0
+5\tDrafts, what is already set\tk:escape s:1.2 k:right
+8\tFlakes, a flakeref and what it carries\tk:right t:github:nix-community/nixvim s:1.0 k:return
+6\tand what that flake settles on\ts:2.5 k:down k:return'
 
 # ydotool speaks Linux keycodes, not keysyms.
 keycode() {
@@ -210,8 +210,17 @@ play() {
 
 record() {
   local mon mw mh mx my w h x y rec_pid start empty
+  # The TALLEST monitor with an empty workspace, not whichever happens to be
+  # focused. The card is a share of the screen (Menu.qml:120-127), so a take
+  # made on a 1080p head is 1100x842 where a 1440p one is 1100x1123: fewer
+  # rows, a different shape, and a tour that does not match the stills
+  # beside it. The shell restart above can move focus, so "focused" is not a
+  # choice anyone made.
   read -r mon mw mh mx my < <(hyprctl monitors -j \
-    | jq -r '.[]|select(.focused)|"\(.name) \(.width) \(.height) \(.x) \(.y)"')
+    | jq -r 'sort_by(-.height)|.[0]|"\(.name) \(.width) \(.height) \(.x) \(.y)"')
+  hyprctl dispatch "hl.dsp.focus({ monitor = \"$mon\" })" >/dev/null 2>&1 \
+    || hyprctl dispatch focusmonitor "$mon" >/dev/null 2>&1 || true
+  sleep 0.6
 
   # The card, from Menu.qml:120-127: min(1100, 72% of the width) wide, 78% of
   # the height, centred. It is opaque, so cropping to it is also what keeps
@@ -233,6 +242,12 @@ record() {
 
   wl-screenrec -g "$x,$y ${w}x${h}" -f "$WORK/take.mp4" &
   rec_pid=$!
+  # Frame offsets are measured from HERE, the first frame of the video, not
+  # from the first keystroke. ffmpeg's -ss counts from the start of the
+  # file, so offsets taken after the panel had opened pointed a whole short
+  # scene earlier than the scene they named -- and a verification that
+  # reads the wrong frame is worse than none.
+  local video_start=$SECONDS
   sleep 1.5
   # a dead recorder means the next 52 seconds record nothing at all
   kill -0 "$rec_pid" 2>/dev/null || die "wl-screenrec died on startup; nothing was recorded"
@@ -242,12 +257,17 @@ record() {
   panel_open || { kill "$rec_pid" 2>/dev/null; die "the panel did not open; nothing was recorded"; }
 
   start=$SECONDS
+  : > "$WORK/offsets"
   while IFS=$'\t' read -r budget label keys; do
     local t0=$SECONDS
     [ -n "$keys" ] && play "$keys"
     # the rest of the scene's budget is dwell, so the frame can be read
     local spent=$((SECONDS - t0))
     [ "$spent" -lt "$budget" ] && sleep $((budget - spent))
+    # where this scene actually ended. Scenes overrun their budget, so
+    # frames taken at the budget SUMS drift further out of step with every
+    # scene -- which had me reading scene 6 and calling it scene 5.
+    printf '%s\t%s\n' "$((SECONDS - video_start))" "$label" >> "$WORK/offsets"
   done < <(printf '%s\n' "$SCENES")
 
   sleep 0.8
@@ -265,7 +285,7 @@ encode() {
   ffmpeg -y -v error -i "$src" -vf "scale=${OUT_W}:-2:flags=lanczos" \
     -c:v libvpx-vp9 -b:v 0 -crf 34 -an "$REPO/docs/img/tour.webm"
   ffmpeg -y -v error -i "$src" \
-    -vf "fps=${GIF_FPS},scale=${OUT_W}:-2:flags=lanczos,split[a][b];[a]palettegen=max_colors=64[p];[b][p]paletteuse=dither=bayer:bayer_scale=3" \
+    -vf "fps=${GIF_FPS},scale=${OUT_W}:-2:flags=lanczos,split[a][b];[a]palettegen=max_colors=48[p];[b][p]paletteuse=dither=bayer:bayer_scale=3" \
     "$REPO/docs/img/tour.gif"
   ls -l "$REPO/docs/img/tour.webm" "$REPO/docs/img/tour.gif" >&2
 }
@@ -274,13 +294,16 @@ encode() {
 # that reads wrong is discarded, not published -- the last pass only caught a
 # bad capture by reading the saved file.
 frames() {
-  local at=0 i=1
+  local at label i=1
+  [ -f "$WORK/offsets" ] || die "no scene offsets; run a take first"
   rm -f "$WORK"/scene-*.png
-  while IFS=$'\t' read -r budget label _; do
-    ffmpeg -nostdin -y -v error -ss $((at + budget - 1)) -i "$WORK/take.mp4" \
+  while IFS=$'\t' read -r at label; do
+    # a second before the scene ended, while its dwell is still on screen
+    ffmpeg -nostdin -y -v error -ss "$((at - 1))" -i "$WORK/take.mp4" \
       -frames:v 1 "$WORK/$(printf 'scene-%d.png' "$i")"
-    at=$((at + budget)); i=$((i + 1))
-  done < <(printf '%s\n' "$SCENES")
+    printf '  %d  %ss  %s\n' "$i" "$at" "$label" >&2
+    i=$((i + 1))
+  done < "$WORK/offsets"
   say "frames in $WORK"
 }
 
@@ -288,8 +311,17 @@ frames() {
 # broken key sequence costs seconds instead of a whole take.
 dry() {
   local mon mw mh mx my w h x y empty i=1
+  # The TALLEST monitor with an empty workspace, not whichever happens to be
+  # focused. The card is a share of the screen (Menu.qml:120-127), so a take
+  # made on a 1080p head is 1100x842 where a 1440p one is 1100x1123: fewer
+  # rows, a different shape, and a tour that does not match the stills
+  # beside it. The shell restart above can move focus, so "focused" is not a
+  # choice anyone made.
   read -r mon mw mh mx my < <(hyprctl monitors -j \
-    | jq -r '.[]|select(.focused)|"\(.name) \(.width) \(.height) \(.x) \(.y)"')
+    | jq -r 'sort_by(-.height)|.[0]|"\(.name) \(.width) \(.height) \(.x) \(.y)"')
+  hyprctl dispatch "hl.dsp.focus({ monitor = \"$mon\" })" >/dev/null 2>&1 \
+    || hyprctl dispatch focusmonitor "$mon" >/dev/null 2>&1 || true
+  sleep 0.6
   w=$(( 1100 < mw * 72 / 100 ? 1100 : mw * 72 / 100 )); h=$(( mh * 78 / 100 ))
   x=$(( mx + (mw - w) / 2 )); y=$(( my + (mh - h) / 2 ))
   HOME_WS="$(hyprctl activeworkspace -j | jq -r .id)"
