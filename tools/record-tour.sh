@@ -16,7 +16,8 @@ readonly SETTLE=2.5                    # after the panel opens, before the first
 readonly MENU_NS=nixarchy-pkg-menu     # the layer, not listPlugins' `active`
 readonly PLUGIN=nixarchy.pkg
 
-readonly REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly REPO
 readonly CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/nixarchy"
 readonly WORK="${TMPDIR:-/tmp}/nixarchy-tour.$$"
 HOME_WS=""            # the workspace to put back when this is over
@@ -276,7 +277,7 @@ frames() {
   local at=0 i=1
   rm -f "$WORK"/scene-*.png
   while IFS=$'\t' read -r budget label _; do
-    ffmpeg -y -v error -ss $((at + budget - 1)) -i "$WORK/take.mp4" \
+    ffmpeg -nostdin -y -v error -ss $((at + budget - 1)) -i "$WORK/take.mp4" \
       -frames:v 1 "$WORK/$(printf 'scene-%d.png' "$i")"
     at=$((at + budget)); i=$((i + 1))
   done < <(printf '%s\n' "$SCENES")

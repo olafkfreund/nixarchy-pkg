@@ -143,3 +143,51 @@ The machine needs no rollback. Every test builds its own selection under a
 temporary `XDG_CONFIG_HOME` and its own flake under `NIXARCHY_FLAKE`, as the
 suite already does, and the re-cut restores the selection on exit and
 applies nothing.
+
+## Deviations found while implementing
+
+1. **Nothing inside a process substitution can stop the command reading it,
+   so step 1's shape did not work as written.** The plan put the `die` on
+   `rc >= 2` inside the `<(…)` that feeds `jq`. When it fires the subshell
+   exits, its end of the pipe closes, and `jq` carries on and prints
+   `{"ok": true, …}` built from however much arrived. The collection moved
+   out into `pending_changes()`, which **returns** a status that
+   `cmd_pending` reads in the main shell. That is the only place a failure
+   here can be acted on.
+
+2. **The plan's unreadable-file test asserted a behaviour that did not
+   exist, and finding that out found a second defect.** An unreadable
+   selection file was not an error: `marked()` sends its errors to
+   `/dev/null`, the file read as empty, and every live line in the applied
+   copy was reported as **removed** -- `count: 3` and `ok: true`, a
+   confident list of changes nobody made. Fixed with a `[ -r "$src" ]`
+   guard in the same loop, and covered by a test.
+
+3. **A fourth site, found by the check rather than by reading.**
+   `flake remove` had `used=$(grep -nE … | grep -v … | head -1 || true)`.
+   An empty answer there means "nothing else refers to this input, go ahead
+   and remove it", so a match lost to SIGPIPE removes a declaration
+   something still uses. One `awk` now.
+
+4. **The check needed two refinements to be usable.** It has to strip
+   comments first, or it trips on the comments explaining why these shapes
+   are gone; and it needs whitespace after the command name, or `comm`
+   matches inside `command -v`. Proven on four cases: clean on the fixed
+   file, catches a reintroduced `grep | head`, catches a `diff` at a
+   pipeline head, and does not fire on `command -v`.
+
+5. **A comment that began with the linter's name became a directive and
+   failed CI.** `# shellcheck does not see this…` parses as a malformed
+   directive (SC1073/SC1072) and `nix flake check` refused the build.
+   Reworded.
+
+6. **`tools/record-tour.sh` had a latent stdin bug (SC2095).** `frames()`
+   calls `ffmpeg` inside a `while read` loop, and `ffmpeg` reads stdin, so
+   it can swallow the loop's input and stop the extraction after one frame.
+   It happened to work; `-nostdin` makes it reliable. SC2155 on `REPO`
+   fixed in the same pass. Both are from #22 and are the same family of
+   failure as this issue: something that works until it quietly does not.
+
+7. **There was already a `pending` block in the suite**, covering one file
+   at a time -- which is precisely how this survived. The new block is
+   headed "pending across more than one file" rather than renaming theirs.
