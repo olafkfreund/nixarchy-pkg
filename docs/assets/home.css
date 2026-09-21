@@ -27,6 +27,18 @@
   background: var(--code-bg);
 }
 
+/* A card is mostly empty below its last row, so a scene shows the part
+   that carries the point: the top (search, tabs, rows, the form), or with
+   .foot the bottom, where the queue count and the apply prompt live. Each
+   links to the whole shot. */
+.scene img {
+  aspect-ratio: 11 / 5;
+  object-fit: cover;
+  object-position: top;
+}
+.scene img.foot { object-position: bottom; }
+.scene a:hover img { border-color: var(--accent); }
+
 .hero { margin: 2rem 0 1rem; }
 
 .links {
@@ -49,7 +61,7 @@
 
 .scene {
   display: grid;
-  grid-template-columns: 1.15fr 1fr;
+  grid-template-columns: 1.6fr 1fr;
   gap: 1.8rem;
   align-items: center;
   margin: 2.4rem 0;
@@ -73,6 +85,7 @@
   margin-top: 1.4rem;
 }
 .grid3 figure { margin: 0; }
+.grid3 img { aspect-ratio: 11 / 6; object-fit: cover; object-position: top; }
 .grid3 figcaption { color: var(--dim); font-size: 0.85rem; margin-top: 0.4rem; }
 
 .home-foot {

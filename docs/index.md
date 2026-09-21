@@ -14,8 +14,9 @@ it rolls back.
        poster="img/tour-poster.png" width="620" height="474"
        aria-label="A tour of the menu: every tab, a search of nixpkgs, a package queued, and a flake's modules listed">
   <source src="img/tour.webm" type="video/webm">
-  <img src="img/tour.gif" width="620" height="474"
-       alt="A tour of the menu: every tab, a search of nixpkgs, a package queued, and a flake's modules listed">
+  <!-- A link, not an <img>: an image here is fetched even when the video
+       plays, and the gif is five times the webm. -->
+  <a href="img/tour.gif">Watch the tour as a GIF</a>
 </video>
 <ul class="links">
   <li><a href="https://github.com/olafkfreund/nixarchy-pkg#install">Install</a></li>
@@ -30,8 +31,8 @@ open a <code>.nix</code> file to find out. Every screenshot below is the real
 menu on a real laptop, driven from the keyboard.</p>
 
 <section class="scene">
-  <img src="img/06-packages-search.png" width="1100" height="842" loading="lazy"
-       alt="The Selection tab with lazygit typed in the search field; lazygit is the first result, above yaziPlugins.lazygit and vimPlugins.lazygit-nvim">
+  <a href="img/06-packages-search.png"><img src="img/06-packages-search.png" width="1100" height="842" loading="lazy"
+       alt="The Selection tab with lazygit typed in the search field; lazygit is the first result, above yaziPlugins.lazygit and vimPlugins.lazygit-nvim"></a>
   <div>
     <div class="step">1 · Find it</div>
     <h3>Search the whole of nixpkgs</h3>
@@ -43,8 +44,8 @@ menu on a real laptop, driven from the keyboard.</p>
 </section>
 
 <section class="scene">
-  <img src="img/05-packages-unfree.png" width="1100" height="842" loading="lazy"
-       alt="A search for google-chrome: one row, flagged unfree and curated:chrome">
+  <a href="img/05-packages-unfree.png"><img src="img/05-packages-unfree.png" width="1100" height="842" loading="lazy"
+       alt="A search for google-chrome: one row, flagged unfree and curated:chrome"></a>
   <div>
     <div class="step">2 · Know what you're adding</div>
     <h3>Flags before you commit to anything</h3>
@@ -56,8 +57,8 @@ menu on a real laptop, driven from the keyboard.</p>
 </section>
 
 <section class="scene">
-  <img src="img/08-option-form-boolean.png" width="1100" height="842" loading="lazy"
-       alt="The option form for services.tailscale.enable: its type (boolean), its description, its default (false), and a toggle">
+  <a href="img/08-option-form-boolean.png"><img src="img/08-option-form-boolean.png" width="1100" height="842" loading="lazy"
+       alt="The option form for services.tailscale.enable: its type (boolean), its description, its default (false), and a toggle"></a>
   <div>
     <div class="step">3 · Set an option</div>
     <h3>A form built from the option's type</h3>
@@ -69,8 +70,8 @@ menu on a real laptop, driven from the keyboard.</p>
 </section>
 
 <section class="scene">
-  <img src="img/17-queued.png" width="1100" height="842" loading="lazy"
-       alt="A package just added: the footer reads 'hello, added' and '1 change queued'">
+  <a href="img/17-queued.png"><img class="foot" src="img/17-queued.png" width="1100" height="842" loading="lazy"
+       alt="A package just added: the footer reads 'hello, added' and '1 change queued'"></a>
   <div>
     <div class="step">4 · See what's waiting</div>
     <h3>Queued, not installed</h3>
@@ -82,8 +83,8 @@ menu on a real laptop, driven from the keyboard.</p>
 </section>
 
 <section class="scene">
-  <img src="img/15-apply-confirm.png" width="1100" height="842" loading="lazy"
-       alt="The apply prompt: 'a again to rebuild the system — any other key cancels', with 1 change queued">
+  <a href="img/15-apply-confirm.png"><img class="foot" src="img/15-apply-confirm.png" width="1100" height="842" loading="lazy"
+       alt="The apply prompt: 'a again to rebuild the system — any other key cancels', with 1 change queued"></a>
   <div>
     <div class="step">5 · Apply, asked twice</div>
     <h3>One key, then the same key again</h3>

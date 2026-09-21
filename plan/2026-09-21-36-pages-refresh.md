@@ -218,3 +218,10 @@ spec: spec/2026-09-21-36-pages-refresh.md
 - **The tour was taken twice.** The first take lost the panel to an
   ai-mirror control request that appeared on razer mid-take. The pointer is
   parked in the screen corner before recording.
+- **Found in the step 13 check:** the hero's fallback `<img src="tour.gif">`
+  was downloaded (1.9 MB) even while the webm played. It is now a link, as
+  on the Nixi page. The manual's Getting started page has the same pattern
+  and is left for a follow-up. Scene and grid shots are cropped with
+  `object-fit` to the part of the card that carries the point (the top, or
+  the footer for `15`/`17`) and link to the full shot. The scene image
+  column is 1.6fr, so the text in the shots stays legible.
