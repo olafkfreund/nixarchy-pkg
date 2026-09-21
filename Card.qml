@@ -48,11 +48,19 @@ Item {
       model: root.model ? root.model.tabs : []
 
       Item {
+        id: tabItem
         required property int index
         required property string modelData
         readonly property bool current: root.model && root.model.tab === index
         width: label.implicitWidth
         height: header.height
+
+        // Rows take a click; so do the tabs above them (#30). setTab moves
+        // the keyboard the way a key would.
+        MouseArea {
+          anchors.fill: parent
+          onClicked: if (root.model) root.model.setTab(tabItem.index)
+        }
 
         Text {
           id: label
@@ -236,6 +244,7 @@ Item {
           // it. Flakes is handled above, ahead of `searching`, for the same
           // reason with a different shadow.
           : root.model.tab === 2 ? "no packages in your nixarchy selection yet \u2014 / to search nixpkgs"
+          : root.model.tab === 3 ? "type to search NixOS options"
           : root.model.indexTab ? "type to search nixpkgs"
           : "nothing here yet"
       textFormat: Text.PlainText

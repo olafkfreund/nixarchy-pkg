@@ -345,6 +345,7 @@ Item {
           anchors { top: parent.top; left: parent.left; right: parent.right }
           placeholderText: pkg.naming ? "input name"
                          : pkg.flakeTab ? "github:owner/repo\u2026"
+                         : pkg.tab === 3 ? "search NixOS options\u2026"
                          : pkg.indexTab ? "search nixpkgs\u2026" : "filter\u2026"
           foreground: Color.menu.text
           onTextChanged: pkg.setQuery(text)
