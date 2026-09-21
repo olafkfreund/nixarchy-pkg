@@ -39,7 +39,16 @@ FocusScope {
 
   visible: open
 
-  readonly property string widget: option.widget || ""
+  // A value already set in apps.nix that the type's widget cannot hold
+  // exactly -- `lib.mkDefault true`, an expression -- opens in the scaffold
+  // editor instead, as the text it is (#28).
+  property bool forceScaffold: false
+  readonly property string widget: forceScaffold ? "scaffold" : (option.widget || "")
+  // What apps.nix says now: {state: absent | scaffold | set, value}.
+  readonly property var current: option.current || ({ state: "absent" })
+  // The path a write in flight is for. A result for any other form -- this
+  // one closed and another opened meanwhile -- is not this form's (#28).
+  property string writingPath: ""
   readonly property string fontFamily: Style.font.family
 
   // The same scale the card uses, passed in rather than assumed: a form is
@@ -67,6 +76,8 @@ FocusScope {
       onStreamFinished: {
         var data
         try { data = JSON.parse(text) } catch (e) { data = null }
+        // Late: the form closed, or moved on to another option.
+        if (!root.open || (data && data.path && data.path !== root.path)) return
         if (!data || data.ok === false) {
           root.error = data && data.error ? String(data.error) : "could not read that option"
           root.option = ({})
@@ -83,12 +94,21 @@ FocusScope {
     id: writeProc
     stdout: StdioCollector {
       onStreamFinished: {
+        // First, whatever happens next: a form closed mid-write must not
+        // leave the whole panel busy.
+        if (root.model) root.model.busy = false
         var data
         try { data = JSON.parse(text) } catch (e) { data = null }
-        if (data && data.ok === false) {
+        if (!root.open || root.writingPath !== root.path) return
+        if (data === null) {
+          // No answer is not a yes (#28).
+          root.error = "the adapter gave no answer; nothing is known to be written"
+          return
+        }
+        if (data.ok === false) {
           // The adapter parse-checks the file and restores its backup, so
           // a refusal here means nothing was written.
-          root.error = String(data.error || "that value was refused")
+          root.error = String(data.error || data.message || "that value was refused")
           return
         }
         if (root.model) {
@@ -104,6 +124,7 @@ FocusScope {
     var p = row ? (row.path || row.name || "") : ""
     if (!p) return
     root.path = p
+    root.forceScaffold = false
     root.error = ""
     root.option = ({})
     root.open = true
@@ -140,6 +161,29 @@ FocusScope {
     var def = String(option.default || "")
     for (var i = 0; i < (option.choices || []).length; i++) {
       if (String(option.choices[i]) === def) { enumIndex = i; break }
+    }
+    // A value already in apps.nix is where the form opens, when the widget
+    // can hold it exactly; anything else opens as its own text (#28).
+    if (current.state === "set") {
+      var v = String(current.value || "")
+      var held = false
+      switch (option.widget) {
+        case "boolean":
+          if (v === "true" || v === "false") { boolValue = v === "true"; held = true }
+          break
+        case "integer":
+          if (/^-?[0-9]+$/.test(v)) { numberField.value = parseInt(v, 10); held = true }
+          break
+        case "enum":
+          for (var j = 0; j < (option.choices || []).length; j++)
+            if (String(option.choices[j]) === v) { enumIndex = j; held = true; break }
+          break
+        case "string":
+          // Plain "..." only: no escapes, no interpolation to undo.
+          if (/^"[^"\\$]*"$/.test(v)) { textField.text = v.slice(1, -1); held = true }
+          break
+      }
+      if (!held) { forceScaffold = true; scaffoldField.text = v }
     }
     touched = false
     // Whatever they are about to type into, focused -- otherwise the
@@ -187,7 +231,9 @@ FocusScope {
         // backslash this adds. A Nix string escapes both.
         return "\"" + textField.text
           .replace(/\\/g, "\\\\")
-          .replace(/"/g, "\\\"") + "\""
+          .replace(/"/g, "\\\"")
+          // and `${`, or a typed ${HOME} becomes an interpolation (#28)
+          .replace(/\$\{/g, "\\${") + "\""
       default:
         return scaffoldField.text.trim()
     }
@@ -203,7 +249,15 @@ FocusScope {
     }
     var value = nixValue()
     if (value.length === 0) { root.finish(); return }
-    writeProc.command = [root.model.script, "opt", "set", root.path, value]
+    // One write at a time, and none while an apply could start: this used
+    // to run beside the model's guard, so `a` could apply mid-write (#28).
+    if (root.model.busy) { root.error = "still writing \u2014 try again in a moment"; return }
+    // A line that is already there is changed in place, atomically; `set`
+    // refuses it ("remove it first"), which is what `replace` exists for.
+    var verb = (current.state === "set" || current.state === "scaffold") ? "replace" : "set"
+    root.model.busy = true
+    root.writingPath = root.path
+    writeProc.command = [root.model.script, "opt", verb, root.path, value]
     writeProc.running = true
   }
 
@@ -288,6 +342,32 @@ FocusScope {
       font.family: root.fontFamily
       font.pixelSize: root.px(Style.font.caption)
       color: Qt.darker(Color.menu.text, 1.5)
+    }
+
+    // What is there now, labelled as what it is: the expression written in
+    // apps.nix, not the value NixOS ends up with.
+    Text {
+      width: parent.width
+      visible: root.current.state !== "absent"
+      text: root.current.state === "set"
+        ? "set in apps.nix:  " + String(root.current.value || "")
+        : "a scaffold for this is in apps.nix"
+      textFormat: Text.PlainText
+      elide: Text.ElideRight
+      font.family: root.fontFamily
+      font.pixelSize: root.px(Style.font.caption)
+      color: Color.menu.text
+    }
+
+    Text {
+      width: parent.width
+      visible: root.option.choicesUnavailable === true
+      text: "This type's alternatives are not listed in a form this can offer \u2014 write a Nix expression."
+      textFormat: Text.PlainText
+      wrapMode: Text.Wrap
+      font.family: root.fontFamily
+      font.pixelSize: root.px(Style.font.caption)
+      color: Qt.darker(Color.menu.text, 1.4)
     }
 
     // ---- the widget ---------------------------------------------------
