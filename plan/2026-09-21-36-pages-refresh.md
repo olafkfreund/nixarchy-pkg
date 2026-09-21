@@ -179,3 +179,27 @@ spec: spec/2026-09-21-36-pages-refresh.md
   apply` is already part of step 5. If the second apply fails, roll back to
   the generation before the first with `sudo nixos-rebuild switch
   --rollback`, run twice.
+
+## Deviations found while implementing
+
+- **Session environment for ssh.** `omarchy-shell` found no shell over ssh
+  ("omarchy-shell is not running", hidden by `-q`): since nixarchy #220 the
+  shell runs from a store tree named by `OMARCHY_PATH`. Every capture command
+  sources `~/tmp/pkg-36.env`, written from the running quickshell's
+  `/proc/<pid>/environ` (`OMARCHY_PATH`, `XDG_RUNTIME_DIR`,
+  `WAYLAND_DISPLAY`, `HYPRLAND_INSTANCE_SIGNATURE`).
+- **A pending change was already on razer** (`hello` removed at 18:10, never
+  applied). With the user's go-ahead it was applied first: built, checked
+  (same nixpkgs, same nvidia 610.57.04, closure diff only `hello` removed),
+  switched with `switch-to-configuration`, since `nixarchy-pkg apply` over
+  ssh has no polkit agent for nh's pkexec.
+- **Any switch restores the pinned plugin link** (Home Manager is restarted
+  by it). The branch build is re-linked after every apply, including the two
+  in step 5, before the next capture.
+- **13 caught the flake still loading** at 3s: the wait is 8s. **14** needs
+  the cursor on `declare`, which is always the last row
+  (`PkgModel.qml:132`): PageDown (keycode 109, added to `keycode()`) gets
+  there.
+- **Drafts is empty on razer**, so `12` reads "nothing here yet" and stays a
+  grid shot only. Scene 4 ("see what's waiting") uses a new
+  **`17-queued.png`**, taken in the apply pass the moment `hello` is queued.

@@ -112,10 +112,12 @@ readonly STILLS_TABS=$'01-apps.png\tApps, as it opens\t
 10-keys.png\tthe key sheet\tt:? s:1.0'
 readonly STILLS_FORM_BOOL=$'08-option-form-boolean.png\tthe form, a boolean\tk:right*3 t:/ k:backspace t:services.tailscale.enable s:2.0 k:return s:1.0'
 readonly STILLS_FORM_SCAFFOLD=$'09-option-form-scaffold.png\tthe form, a scaffold\tk:right*3 t:/ k:backspace t:services.tailscale.extraUpFlags s:2.0 k:return s:1.0'
+# The inspection is a network fetch the first time, hence the long wait.
+# `declare` is always the last row (PkgModel.qml:132), and PageDown clamps.
 # Return on the `declare` row starts naming (PkgModel.qml:358); in naming,
 # Return would DECLARE the input, so the only key sent there is Escape.
-readonly STILLS_FLAKES=$'13-flakes.png\tFlakes, a flake inspected\tk:right*5 t:github:nix-community/nixvim s:1.0 k:return s:3.0
-14-flake-name-confirm.png\tFlakes, naming the input\tk:return s:1.0
+readonly STILLS_FLAKES=$'13-flakes.png\tFlakes, a flake inspected\tk:right*5 t:github:nix-community/nixvim s:1.0 k:return s:8.0
+14-flake-name-confirm.png\tFlakes, naming the input\tk:pagedown s:0.5 k:return s:1.0
 -\tcancel the naming\tk:escape'
 
 # THIS PASS SWITCHES THE SYSTEM. It queues hello and applies it, because the
@@ -123,7 +125,8 @@ readonly STILLS_FLAKES=$'13-flakes.png\tFlakes, a flake inspected\tk:right*5 t:g
 # Undo it afterwards: nixarchy-pkg pkg remove hello && nixarchy-pkg apply.
 # `a` once arms the apply and shows the confirm; the second applies
 # (Menu.qml:206-210, 317-322).
-readonly STILLS_APPLY=$'-\tqueue hello\tk:right*2 t:/ k:backspace t:hello s:2.5 k:return s:1.0 k:escape s:1.2
+readonly STILLS_APPLY=$'17-queued.png\thello, queued\tk:right*2 t:/ k:backspace t:hello s:2.5 k:return s:1.0
+-\thand the list the keyboard\tk:escape s:1.2
 15-apply-confirm.png\tapply, armed\tt:a s:0.8
 16-apply-log.png\tapply, the log at its end\tt:a s:240'
 QUEUE_OK=""           # set by --apply-shots, whose job is to queue
@@ -132,7 +135,7 @@ QUEUE_OK=""           # set by --apply-shots, whose job is to queue
 keycode() {
   case "$1" in
     escape) printf 1 ;;   return) printf 28 ;;  slash) printf 53 ;;
-    backspace) printf 14 ;;
+    backspace) printf 14 ;; pagedown) printf 109 ;;
     space)  printf 57 ;;  up)     printf 103 ;; left)  printf 105 ;;
     right)  printf 106 ;; down)   printf 108 ;;
     *) die "unknown key: $1" ;;
