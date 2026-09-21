@@ -451,35 +451,56 @@ QtObject {
 
   // The one command here that changes the machine, and only ever on an
   // explicit key. Output is a build log: streamed as lines and drawn as
-  // plain text, with the adapter's single JSON object on the last line.
+  // plain text, then one line wrapping the result in `nixarchyPkgApply`.
+  property bool _applyDone: false
+
+  function _logLine(text) {
+    var log = root.applyLog.slice()
+    log.push(text)
+    // A rebuild prints a great deal and the card shows the end of it.
+    if (log.length > 400) log = log.slice(log.length - 400)
+    root.applyLog = log
+  }
+
   property Process _apply: Process {
     stdout: SplitParser {
       onRead: function (line) {
         var trimmed = String(line)
         var done = null
-        if (trimmed.indexOf("{") === 0) {
+        if (trimmed.indexOf("{\"nixarchyPkgApply\"") === 0) {
           try {
-            var parsed = JSON.parse(trimmed)
-            // Shape-checked, not merely parsed. The log is a build's own
-            // output and nixpkgs builds print JSON; a line of it that
-            // happened to parse would otherwise end the apply, drop the
-            // rest of the log and report a result nobody produced.
-            if (parsed && typeof parsed.ok === "boolean"
-                && typeof parsed.exit === "number") done = parsed
+            var parsed = JSON.parse(trimmed).nixarchyPkgApply
+            // Only the adapter's own record ends the apply. The log is a
+            // build's output and nixpkgs builds print JSON; a line of it
+            // shaped like a result used to end the apply, drop the rest of
+            // the log and report a result nobody produced (#26).
+            if (parsed && typeof parsed.ok === "boolean") done = parsed
           } catch (e) { done = null }
         }
         if (done !== null) {
+          root._applyDone = true
           root.applying = false
           root.message = String(done.message || "")
+          // Into the log as well as the footer: the footer is hidden while
+          // the log is up, so the result was never seen (#26).
+          root._logLine(done.ok ? "\u2014 applied \u2014"
+                                : "\u2014 failed: " + String(done.message || "") + " \u2014")
           root.refresh()
           return
         }
-        var log = root.applyLog.slice()
-        log.push(trimmed)
-        // A rebuild prints a great deal and the card shows the end of it.
-        if (log.length > 400) log = log.slice(log.length - 400)
-        root.applyLog = log
+        root._logLine(trimmed)
       }
+    }
+    // An adapter that ended without a record -- it could not start, or
+    // died before streaming -- would otherwise leave `applying` set for
+    // good. Exit and the last read are not ordered, so this waits a tick
+    // for a record that may still be on its way.
+    onExited: function (exitCode, exitStatus) {
+      Qt.callLater(function () {
+        if (root._applyDone) return
+        root.applying = false
+        root._logLine("\u2014 the apply ended without a result; see above \u2014")
+      })
     }
   }
 
@@ -491,7 +512,10 @@ QtObject {
       message = busy ? "still writing \u2014 try again in a moment" : ""
       return
     }
-    applyLog = []
+    _applyDone = false
+    // Something on screen at once: evaluation can be silent for tens of
+    // seconds before the first line of the build arrives.
+    applyLog = ["starting rebuild\u2026  ESC stops watching; the build carries on"]
     logDetached = false
     applying = true
     message = ""

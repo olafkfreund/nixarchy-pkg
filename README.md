@@ -152,10 +152,16 @@ searched, only `label` and `aliases` are.
 
 ## Applying
 
-`nixarchy-apply` asks two questions on stdin and then runs `nh os switch`,
-which elevates itself — and a QML process has no terminal for a password.
-The adapter runs it with `NH_ELEVATION_STRATEGY=pkexec`, so the prompt is
-drawn by Omarchy's own polkit agent, in the same shell the panel lives in.
+The adapter runs `nixarchy-apply --yes --no-preview`, so there are no
+questions to answer, and `nh os switch` elevates itself — and a QML process
+has no terminal for a password. It runs with `NH_ELEVATION_STRATEGY=pkexec`,
+so the prompt is drawn by Omarchy's own polkit agent, in the same shell the
+panel lives in.
+
+The build log streams into the card as it happens, as plain text: the
+colour nh prints is stripped, and a progress line shows only its last
+state. The last line of the log says how it ended — `applied`, or what
+failed.
 
 `ESC` while a build is running stops watching the log. It does not stop the
 build: it is elevating, downloading and switching a system, and stopping half
