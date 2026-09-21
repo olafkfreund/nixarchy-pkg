@@ -801,6 +801,17 @@ cmd_flake_show() {
     }
 }
 
+# One rule for an input name, for add and remove alike: the pattern
+# `flake list` parses, so anything declared here is also listed here. Nix
+# would also take `'`; nothing is lost by leaving it out. Checked whole,
+# because the name goes on into grep, awk and sed -- `add` once looked at
+# the first character only, and `remove` at none, so `sub$` removed `sub`
+# past the check meant to stop it (#29).
+valid_input_name() {
+  [[ ${1-} =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]] ||
+    die "'${1-}' is not a usable input name: letters, digits, _ and -, starting with a letter or _. Nothing was changed."
+}
+
 # Declare an input. The riskiest write this project makes -- the system
 # flake, where a bad line fails the whole machine's evaluation rather than
 # one package -- so it follows cmd_opt_set's discipline below (backup,
@@ -818,10 +829,15 @@ cmd_flake_show() {
 cmd_flake_add() {
   local name=${1-} ref=${2-}
   [ -n "$name" ] && [ -n "$ref" ] || die "usage: nixarchy-pkg flake add <name> <flakeref>"
-  case "$name" in
-    [A-Za-z_]*) ;;
-    *) die "'$name' is not a usable input name -- it has to start with a letter or underscore" ;;
-  esac
+  valid_input_name "$name"
+  # The ref goes between quotes in the system flake, so it is data or it
+  # is refused: a quote, a backslash or ${ in it would write Nix that
+  # parses and means something else, and parse and lock would not notice
+  # (#29). No real flakeref needs any of them. [[:graph:]] rather than a
+  # range like [!-~]: a range is collation order, and under a UTF-8 locale
+  # it refused an ordinary path.
+  [[ $ref =~ ^[[:graph:]]+$ ]] && [[ $ref != *[\"\\\$\`]* ]] ||
+    die "that flakeref has a character a flakeref never needs (quotes, backslash, \$, backtick or whitespace). Nothing was written."
   need nix
 
   local dir="${NIXARCHY_FLAKE:-/etc/nixos}" file lock
@@ -868,7 +884,9 @@ cmd_flake_add() {
   # there, which is why the existing block is never touched.
   local line="  inputs.${name}.url = \"${ref}\";  #@flake-input ${name}"
   local tmp; tmp=$(mktemp)
-  awk -v at="$at" -v line="$line" 'NR == at { print; print line; next } { print }' \
+  # Through the environment, not -v, which would process escapes in it.
+  NIXARCHY_PKG_LINE="$line" awk -v at="$at" \
+    'NR == at { print; print ENVIRON["NIXARCHY_PKG_LINE"]; next } { print }' \
     "$file" > "$tmp" && mv "$tmp" "$file"
 
   if ! nix-instantiate --parse "$file" >/dev/null 2>"$err"; then
@@ -907,6 +925,7 @@ cmd_flake_add() {
 cmd_flake_remove() {
   local name=${1-}
   [ -n "$name" ] || die "usage: nixarchy-pkg flake remove <name>"
+  valid_input_name "$name"
   need nix
 
   local dir="${NIXARCHY_FLAKE:-/etc/nixos}" file lock
@@ -914,18 +933,37 @@ cmd_flake_remove() {
   grep -qE "#@flake-input ${name}\$" "$file" ||
     die "no input '$name' declared here by this tool. Nothing was changed."
 
-  # Anything else in the flake that names it -- an import somebody pasted,
-  # a specialArgs reference -- other than the declaration itself.
-  # One awk rather than two greps into head: `|| true` survived no-match,
-  # which is the common case, but equally survived a grep that failed for a
-  # real reason -- and an empty answer here means "nothing else refers to
-  # it, go ahead and remove it", so a lost match removes a declaration that
-  # something still uses.
+  # The same baseline as add: a flake that was already broken is not this
+  # removal's fault, and must not look like it (#29).
+  local err0; err0=$(mktemp)
+  if ! nix flake metadata "$dir" >/dev/null 2>"$err0"; then
+    local why0; why0=$(nix_why "$err0"); rm -f "$err0"
+    die "this flake does not evaluate as it stands, so I have changed nothing rather than remove from a broken file: $why0"
+  fi
+  rm -f "$err0"
+
+  # Anything that names it other than the declaration itself -- an import
+  # somebody pasted, a specialArgs reference -- in ANY .nix file of the
+  # flake, not just flake.nix: a host module handed `inputs` and using
+  # inputs.<name> is the case that matters most (#29).
+  #
+  # A whole Nix identifier, bounded by what cannot be part of one, so that
+  # `sub-projects` is not `sub`; `-` and `'` are identifier characters.
+  # It stays conservative: the name inside a string or a comment still
+  # counts, and the refusal says where, so a false alarm can be removed by
+  # hand. -v is safe here: the name was validated above.
+  #
+  # One find + awk, stopping at the first hit, rather than grep into head:
+  # an empty answer here means "go ahead and remove it", so a match lost to
+  # a pipe is a declaration removed while something still uses it.
   local used
-  used=$(awk -v n="$name" '
-    $0 ~ "\\<" n "\\>" && $0 !~ "#@flake-input " n "$" { print NR ":" $0; exit }' "$file")
+  used=$(find "$dir" -name '*.nix' -not -path '*/.git/*' -not -path '*/result*' \
+    -exec awk -v n="$name" '
+      BEGIN { re = "(^|[^A-Za-z0-9_'"'"'-])" n "([^A-Za-z0-9_'"'"'-]|$)" }
+      $0 ~ re && $0 !~ ("#@flake-input " n "$") { print FILENAME ":" FNR; exit }' {} +)
+  used=${used%%$'\n'*}
   if [ -n "$used" ]; then
-    die "'$name' is still referred to at $file:${used%%:*}, so removing its declaration would break evaluation. Take that reference out first."
+    die "'$name' is still referred to at $used, so removing its declaration could break evaluation. Take that reference out first -- or, if that line only mentions the name in a string or a comment, remove the input by hand."
   fi
 
   if [ -r "$lock" ]; then
@@ -967,7 +1005,7 @@ cmd_flake_remove() {
   # The lock entry is left. `nix flake lock` does not prune, the entry is
   # inert, and a second write for tidiness is a second chance to break
   # something.
-  jq -nc --arg name "$name" '{ok: true, name: $name, message: ("removed " + $name)}'
+  jq -nc --arg name "$name" '{ok: true, name: $name, message: ("removed " + $name + " -- the flake still parses, locks and evaluates its metadata; hosts were not evaluated")}'
 }
 
 # What this tool declared, so a terminal and the panel see one answer.

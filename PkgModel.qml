@@ -102,6 +102,10 @@ QtObject {
   // input can be removed, an inspected one can be declared, and the lines
   // that are only there to be read answer to neither.
   function flakeRows() {
+    if (naming)
+      return [{ kind: "note",
+                label: "declare " + namingRef + " as inputs." + namingName
+                     + " \u2014 RETURN declares, ESC goes back" }]
     if (inspected !== null) {
       var rows = [{ kind: "head", label: inspected.ref }]
       if (inspected.ok === false) {
@@ -193,6 +197,7 @@ QtObject {
 
   function setTab(i) {
     disarm()
+    invalidateInspection()
     tab = Math.max(0, Math.min(tabs.length - 1, i))
     cursor = 0
     if (indexTab && searching) runSearch()
@@ -288,6 +293,11 @@ QtObject {
 
   function setQuery(q) {
     disarm()
+    // Naming an input: the field holds the name, not a query or a ref.
+    if (naming) { namingName = q; return }
+    // On Flakes, a different ref is a different question: RETURN must never
+    // act on what the field held before (#29).
+    if (flakeTab && inspected !== null && q !== String(inspected.ref)) invalidateInspection()
     query = q
     cursor = 0
     if (indexTab) _debounce.restart()
@@ -301,12 +311,14 @@ QtObject {
     _reader.running = true
   }
 
+  // True when the write started; false when one was already running.
   function write(args) {
-    if (busy) return
+    if (busy) return false
     busy = true
     message = ""
     _writer.command = [script].concat(args)
     _writer.running = true
+    return true
   }
 
   // ---- the actions a key can reach ------------------------------------
@@ -342,10 +354,11 @@ QtObject {
         // there to be read, and a key that silently did nothing would be
         // worse than one that says why.
         if (row.kind === "declared") write(["flake", "remove", row.name])
-        else if (row.kind === "declare") declareInspected()
+        else if (row.kind === "declare") { if (host && host.startNaming) host.startNaming() }
         else if (row.kind === "module")
           message = "paste this into the imports of the host that should have it: "
-                  + "inputs.<name>." + row.label + " \u2014 this tool does not know which file that is"
+                  + "inputs." + suggestInputName(inspected ? inspected.ref : "") + "." + row.label
+                  + " \u2014 this tool does not know which file that is"
         break
     }
   }
@@ -397,14 +410,37 @@ QtObject {
   function inspect() {
     if (!flakeTab || query.length === 0 || inspecting) return
     inspecting = true
+    _inspectRun = _inspectToken
     message = "looking at " + query + "\u2026"
     _inspector.command = [script, "flake", "show", query]
     _inspector.running = true
   }
 
+  // Bumped whenever what is on screen stops being the question an
+  // inspection in flight was asked: ESC, a tab change, an edited ref. A
+  // result for an older question is dropped rather than drawn (#29).
+  property int _inspectToken: 0
+  property int _inspectRun: -1
+
+  function invalidateInspection() {
+    _inspectToken++
+    inspected = null
+    inspecting = false
+  }
+
   property Process _inspector: Process {
+    // No answer at all -- the process could not start, or died -- must not
+    // leave "looking at…" up for good.
+    onExited: function (exitCode, exitStatus) {
+      Qt.callLater(function () {
+        if (!root.inspecting || root._inspectRun !== root._inspectToken) return
+        root.inspecting = false
+        root.message = "could not read what that flake exposes"
+      })
+    }
     stdout: StdioCollector {
       onStreamFinished: {
+        if (root._inspectRun !== root._inspectToken) return
         root.inspecting = false
         try {
           root.inspected = JSON.parse(text)
@@ -423,22 +459,58 @@ QtObject {
   // in is the part this cannot know -- flake_base guesses a directory
   // from the hostname, which is neither the nixosConfigurations attribute
   // nor an import site -- so it says so rather than guessing.
-  function importLineFor(name) {
-    return "inputs." + name + ".nixosModules.default"
+  //
+  // The input's name is suggested from the ref's STRUCTURE, never its last
+  // segment: the last segment of github:owner/repo/release-25.05 is the
+  // branch, and that is what used to be written into the system flake as
+  // the input's name (#29). The person confirms or edits it first.
+  function suggestInputName(ref) {
+    var r = String(ref || "").replace(/[?#].*$/, "").replace(/\/+$/, "")
+    var m = r.match(/^(?:github|gitlab|sourcehut):([^\/]+)\/([^\/]+)/)
+    var name = m ? m[2] : r.replace(/^.*[\/:]/, "")
+    name = name.replace(/\.git$/, "").replace(/\.(?:tar\.gz|tar\.xz|tar\.bz2|tgz|zip)$/, "")
+    name = name.replace(/[^A-Za-z0-9_-]/g, "-")
+    if (/^[0-9]/.test(name)) name = "_" + name
+    return name
   }
 
-  function declareInspected() {
-    if (inspected === null || inspected.ok === false) return
-    var name = String(inspected.ref)
-      .replace(/^[a-z+]+:/, "").replace(/^.*\//, "").replace(/[^A-Za-z0-9_-]/g, "")
-    if (name.length === 0) { message = "cannot make an input name out of " + inspected.ref; return }
-    write(["flake", "add", name, inspected.ref])
-    inspected = null
+  // Name mode: RETURN on "declare this as an input" puts the suggestion in
+  // the field for the person to confirm or change. The adapter validates
+  // whatever comes back; this only pre-fills it.
+  property bool naming: false
+  property string namingRef: ""
+  property string namingName: ""
+
+  // The suggestion to pre-fill, or null when there is nothing to name.
+  function beginNaming() {
+    if (inspected === null || inspected.ok === false) return null
+    namingRef = String(inspected.ref)
+    namingName = suggestInputName(namingRef)
+    naming = true
+    return namingName
+  }
+
+  // True when the declaration started. A refusal (busy) keeps the name and
+  // the inspection, where clearing them used to lose both.
+  function declareAs(name) {
+    if (!write(["flake", "add", String(name), namingRef])) {
+      message = "still writing \u2014 try again in a moment"
+      return false
+    }
+    naming = false
+    invalidateInspection()
+    return true
+  }
+
+  // Back to the inspection; the ref to put back in the field.
+  function cancelNaming() {
+    naming = false
+    return namingRef
   }
 
   function clearInspection() {
     if (inspected === null) return false
-    inspected = null
+    invalidateInspection()
     message = ""
     cursor = 0
     refreshed()
