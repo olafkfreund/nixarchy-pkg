@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 28
 intent: intent/2026-09-21-28-option-form-gaps.md
 ---
