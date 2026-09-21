@@ -317,7 +317,76 @@ if [ -n "$(command -v nixarchy-search)" ]; then
   d=$("$ADAPTER" opt describe boot.binfmt.registrations.\<name\>.recognitionType)
   check "an enum offers its choices"  jq -e '.widget == "enum" and (.choices | length == 2)' <<<"$d"
   check "an unknown option is a value" jq -e '.ok == false' <<<"$("$ADAPTER" opt describe not.a.real.option)"
+
+  # All the alternatives or none (#28). A numeric enum offers its numbers;
+  # a type whose list is prose or mixed goes to the scaffold, and says so.
+  d=$("$ADAPTER" opt describe security.pam.oath.digits)
+  if jq -e '.ok' <<<"$d" >/dev/null; then
+    check "a numeric enum offers its numbers" jq -e '.widget == "enum" and .choices == ["6","7","8"]' <<<"$d"
+  else
+    echo "  skip (no security.pam.oath.digits on this system)"
+  fi
+  oj=$(sed -n 's/^optionsjson=\(.*\)$/\1/p' "$(command -v nixarchy-search)" | head -1)
+  unlisted=$(jq -r 'to_entries | map(select(.value.type | startswith("one of ")))
+    | map(select(.value.type | test("^one of (?:\"(?:[^\"\\\\]|\\\\.)*\"|-?[0-9]+)(?:, (?:\"(?:[^\"\\\\]|\\\\.)*\"|-?[0-9]+))*$") | not))
+    | .[0].key // empty' "$oj")
+  if [ -n "$unlisted" ]; then
+    d=$("$ADAPTER" opt describe "$unlisted")
+    check "an unlisted enum is a scaffold, and says so" \
+      jq -e '.widget == "scaffold" and .choicesUnavailable == true and .choices == []' <<<"$d"
+  fi
 fi
+
+# A scaffold's marked line, where nixarchy-search puts one: inside the
+# module, before its closing brace. Appended to the end of the file it would
+# sit after the module, and anything that turned it into a value would be
+# refused, rightly, as a syntax error.
+add_scaffold() {
+  local tmp; tmp=$(mktemp)
+  awk -v p="$1" '!ins && /^}[[:space:]]*$/ { printf "\n  # %s = ;  #@opt %s\n", p, p; ins = 1 } { print }' "$2" > "$tmp"
+  mv "$tmp" "$2"
+}
+
+# What apps.nix already says, reported to the form (#28).
+CONFIG=$(fresh_config); export XDG_CONFIG_HOME="$CONFIG"
+if [ -n "$(command -v nixarchy-search)" ]; then
+  check "an option not in apps.nix is absent" \
+    jq -e '.current.state == "absent"' <<<"$("$ADAPTER" opt describe programs.mtr.enable)"
+  "$ADAPTER" opt set programs.mtr.enable true >/dev/null
+  check "a set option reports its value" \
+    jq -e '.current == {state: "set", value: "true"}' <<<"$("$ADAPTER" opt describe programs.mtr.enable)"
+  add_scaffold programs.htop.enable "$CONFIG/nixarchy/apps.nix"
+  check "a scaffold line is a scaffold" \
+    jq -e '.current.state == "scaffold"' <<<"$("$ADAPTER" opt describe programs.htop.enable)"
+fi
+rm -rf "$CONFIG"
+
+# Values are written as typed (#28). The writers used to squeeze every run
+# of spaces, strings included, and to flatten lines whose newlines mean
+# something.
+CONFIG=$(fresh_config); export XDG_CONFIG_HOME="$CONFIG"
+APPSNIX="$CONFIG/nixarchy/apps.nix"
+"$ADAPTER" opt set networking.hostName '"a  b"' >/dev/null
+check "spaces inside a string survive" grep -qF 'networking.hostName = "a  b";' "$APPSNIX"
+before=$(md5sum < "$APPSNIX")
+out=$("$ADAPTER" opt set environment.etc.x.text $'{\n  a = \x27\x27x\x27\x27;\n}')
+check "a multi-line '' string is refused"  jq -e '.ok == false' <<<"$out"
+out=$("$ADAPTER" opt set environment.etc.y.text $'{ # c\n  a = 1;\n}')
+check "a multi-line value with # is refused" jq -e '.ok == false' <<<"$out"
+check "and the file is untouched"          test "$(md5sum < "$APPSNIX")" = "$before"
+"$ADAPTER" opt set nix.settings $'{\n  cores = 2;\n}' >/dev/null
+check "a plain multi-line value is one line" grep -qF 'nix.settings = {   cores = 2; };' "$APPSNIX"
+check "and parses"                         nix-instantiate --parse "$APPSNIX"
+# replace on a scaffold: the marked line becomes a value, and stays removable.
+add_scaffold programs.htop.enable "$APPSNIX"
+check "replace turns a scaffold into a value" \
+  jq -e '.ok' <<<"$("$ADAPTER" opt replace programs.htop.enable true)"
+check "the value line is byte-exact" \
+  grep -qx '  programs.htop.enable = true;  #@opt programs.htop.enable' "$APPSNIX"
+"$ADAPTER" opt remove programs.htop.enable >/dev/null
+check "and it can still be removed" not grep -q '#@opt programs.htop.enable' "$APPSNIX"
+check "leaving a file that parses"  nix-instantiate --parse "$APPSNIX"
+rm -rf "$CONFIG"
 
 CONFIG=$(fresh_config); export XDG_CONFIG_HOME="$CONFIG"
 set_out=$("$ADAPTER" opt set services.openssh.settings.PermitRootLogin '"no"')

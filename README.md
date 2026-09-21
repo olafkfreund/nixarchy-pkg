@@ -101,6 +101,13 @@ as a starting shape to edit.
 default; leaving it alone keeps the default, because a copied-out default is
 a line that reads as a decision and is not one.
 
+**An option already set opens on its value** — the expression written in
+`apps.nix`, not whatever NixOS evaluates it to — and writing a different one
+changes that line in place. A value the widget cannot hold exactly, such as
+`lib.mkDefault true`, opens as its own text. An enum whose alternatives are
+not all plain strings or numbers gets the scaffold, with a note saying so,
+rather than a list that would be missing some.
+
 ## Install
 
 ```nix

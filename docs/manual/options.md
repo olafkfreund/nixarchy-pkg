@@ -35,7 +35,9 @@ The type, the documentation and the default are all shown. `RETURN` writes,
 
 This is the rule worth internalising, and it is deliberate.
 
-The value the form shows you is the **default**. If you leave it alone and
+The value the form shows you is the **default** — or, when the option is
+already set, the value in `apps.nix`, labelled *set in apps.nix*. If you
+leave it alone and
 press `RETURN`, nothing is written — because the default is already in force,
 and a copied-out default is a line that *reads* like a decision and is not
 one. Six months later you cannot tell which of your option lines you meant
@@ -65,7 +67,15 @@ The writer runs a parse check either way, so a value that would leave the
 file unparseable is refused and nothing is changed — and the message you get
 is nix's own words rather than a guess at them.
 
+## Changing one
+
+`RETURN` on an option that is already set opens the form on its value.
+Change it and press `RETURN`, and the line is replaced where it stands, in one
+step that either changes it or leaves the file exactly as it was. A value the
+widget cannot hold exactly — `lib.mkDefault true`, an expression — opens as its
+own text to edit.
+
 ## Removing one
 
-`RETURN` on an option row that is already set removes it. The option reverts
+`SPACE` on an option row that is already set removes it. The option reverts
 to its default, which is what it was before you touched it.

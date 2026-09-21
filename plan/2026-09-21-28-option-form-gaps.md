@@ -133,6 +133,23 @@ another path, are dropped.
       file parses.
    -> verify by `bash tests/adapter.sh` → `all passed`.
 
+## Found while implementing
+
+- **Step 1: `flat_value` returns 1, the caller dies.** It runs inside
+  `$(...)`, where `die`'s JSON would become the value and the subshell's
+  exit would be 0.
+- **Step 6: two guards, not one `pendingPath`.** A single property set by
+  both `begin()` and `commit()` would let a late write for option A close a
+  form just opened on option B. `describe` responses are matched on the
+  `path` they carry; writes on a separate `writingPath`.
+- **Step 7: the scaffold fixture goes inside the module.** Appended to the
+  end of the template, it sat after the module's closing brace, and
+  `replace` was right to refuse the result. `add_scaffold` inserts it where
+  nixarchy-search does.
+- **Docs.** The README's option-form section and `docs/manual/options.md`
+  said the form always shows the default. The manual also said RETURN
+  removes a set option; it is SPACE, and RETURN now changes it.
+
 ## Tests
 
     nix flake check

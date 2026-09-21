@@ -377,12 +377,52 @@ cmd_opt_describe() {
   [ -n "$path" ] || die "usage: nixarchy-pkg opt describe <path>"
   local oj; oj=$(searched optionsjson)
   [ -n "$oj" ] && [ -f "$oj" ] || die "no options.json on this system -- it builds no manual"
-  jq --arg p "$path" '
+
+  # What apps.nix already says about it, so the form can open on the value
+  # that is there rather than on the default (#28). Found by the writers'
+  # own rule -- the marker at the END of the line, compared as a string,
+  # never a pattern -- and reported as the local expression, verbatim:
+  # `lib.mkDefault true` is text here, not a boolean.
+  local found="" cstate=absent cvalue=""
+  if [ -f "$APPS" ]; then
+    found=$(NIXARCHY_PKG_PATH="$path" awk '
+      BEGIN { p = ENVIRON["NIXARCHY_PKG_PATH"]; m = "#@opt " p }
+      length($0) >= length(m) && substr($0, length($0) - length(m) + 1) == m {
+        line = $0; sub(/^[ \t]*/, "", line)
+        if (line == "# " p " = ;  " m) { print "scaffold"; exit }
+        pre = p " = "; post = ";  " m
+        if (substr(line, 1, length(pre)) == pre &&
+            substr(line, length(line) - length(post) + 1) == post) {
+          print "set"
+          print substr(line, length(pre) + 1, length(line) - length(pre) - length(post))
+          exit
+        }
+        # Marked, but not in either written form: somebody edited it by
+        # hand. It is set; its value is everything before the marker.
+        sub(/[ \t]*#@opt .*$/, "", line)
+        print "set"; print line; exit
+      }' "$APPS")
+  fi
+  if [ -n "$found" ]; then
+    cstate=${found%%$'\n'*}
+    [[ $found == *$'\n'* ]] && cvalue=${found#*$'\n'}
+  fi
+
+  jq --arg p "$path" --arg cstate "$cstate" --arg cvalue "$cvalue" '
     def literal: if type == "object" then (.text // tostring) else tojson end;
+    # One enum alternative this form can offer and write back verbatim: a
+    # quoted string (escapes allowed) or an integer. Non-capturing, because
+    # scan() returns the groups instead of the match when there are any.
+    def alt: "\"(?:[^\"\\\\]|\\\\.)*\"|-?[0-9]+";
     .[$p] as $o
     | if $o == null then {ok: false, error: ("no such option: " + $p)}
       else
         ($o.type // "") as $t
+        # All the alternatives or none: `one of 6, 7, 8` used to yield an
+        # empty dropdown and `one of "foo", 7` half of one (#28). A type
+        # whose list is prose, or mixes in anything else, is written as
+        # Nix in the scaffold instead.
+        | ($t | test("^one of (?:" + alt + ")(?:, (?:" + alt + "))*$")) as $listed
         | {
             ok: true,
             path: $p,
@@ -394,7 +434,7 @@ cmd_opt_describe() {
             example: (if $o.example == null then "" else ($o.example | literal) end),
             widget:
               if   $t == "boolean" then "boolean"
-              elif ($t | startswith("one of ")) then "enum"
+              elif $listed then "enum"
               elif ($t | test("^(signed integer|unsigned integer|positive integer)")
                     or ($t | test("^[0-9]+ bit unsigned integer"))) then "integer"
               elif ($t | test("^(string|path|absolute path)([,[:space:]]|$)")) then "string"
@@ -402,11 +442,42 @@ cmd_opt_describe() {
             # For an enum, the alternatives as the panel should offer them,
             # quotes included: they are written into the file verbatim.
             choices:
-              (if ($t | startswith("one of "))
-               then [ $t | ltrimstr("one of ") | scan("\"[^\"]*\"") ]
-               else [] end)
+              (if $listed then [ $t | ltrimstr("one of ") | scan(alt) ] else [] end),
+            choicesUnavailable: (($t | startswith("one of ")) and ($listed | not)),
+            current:
+              (if $cstate == "set" then {state: "set", value: $cvalue}
+               elif $cstate == "scaffold" then {state: "scaffold"}
+               else {state: "absent"} end)
           }
       end' "$oj"
+}
+
+# One physical line, whatever the editor allowed.
+#
+# nixarchy-opt-remove deletes the single line carrying the marker. A value
+# written across several lines leaves the earlier ones orphaned, so the
+# removal makes the file unparseable, its guard reverts, and the option can
+# never be taken out again except by hand. The multiline editor exists
+# because an example like services.postgresql.package's default is nine
+# lines, so newlines become spaces: Nix does not care about them, and the
+# remover does.
+#
+# Nothing else changes. This used to squeeze every run of spaces too, which
+# rewrote "a  b" as "a b" -- a value that parses and is not the one asked
+# for (#28). And where a newline DOES mean something -- inside a '' string,
+# or ending a # comment that would otherwise swallow the rest of the line --
+# the value is refused rather than quietly changed. A raw newline inside a
+# "..." string still becomes a space; telling that apart needs a Nix lexer.
+#
+# Returns 1 instead of dying: it runs inside $(...), where die's object
+# would become the value.
+readonly FLAT_REFUSAL="a multi-line value with '' or # cannot be written on one line without changing its meaning -- put it on one line yourself. Nothing was changed."
+flat_value() {
+  local v=$1
+  if [[ $v == *$'\n'* ]] && [[ $v == *"''"* || $v == *'#'* ]]; then
+    return 1
+  fi
+  printf '%s' "${v//$'\n'/ }"
 }
 
 # Write a value for an option.
@@ -438,16 +509,7 @@ cmd_opt_set() {
     die "$path is already in $APPS -- remove it first"
   fi
 
-  # One physical line, whatever the editor allowed.
-  #
-  # nixarchy-opt-remove deletes the single line carrying the marker. A value
-  # written across several lines leaves the earlier ones orphaned, so the
-  # removal makes the file unparseable, its guard reverts, and the option
-  # can never be taken out again except by hand. The multiline editor exists
-  # because an example like services.postgresql.package's default is nine
-  # lines; it is collapsed here rather than refused, because Nix does not
-  # care about the newlines and the remover does.
-  value=$(printf '%s' "$value" | tr '\n' ' ' | tr -s ' ')
+  value=$(flat_value "$value") || die "$FLAT_REFUSAL"
 
   if [ -z "${value//[[:space:]]/}" ]; then
     state_with true "kept the default for $path -- nothing written"
@@ -528,11 +590,7 @@ cmd_opt_replace() {
   grep -q "#@opt ${path//./\\.}\$" "$APPS" ||
     die "$path is not in $APPS -- use 'opt set' to add it"
 
-  # One physical line, for the reason cmd_opt_set gives at length:
-  # nixarchy-opt-remove deletes the single line carrying the marker, so a
-  # value spread over several lines leaves the earlier ones orphaned and the
-  # option can never be taken out again except by hand.
-  value=$(printf '%s' "$value" | tr '\n' ' ' | tr -s ' ')
+  value=$(flat_value "$value") || die "$FLAT_REFUSAL"
 
   # BEFORE anything is touched. This is the whole point of the command.
   local backup; backup=$(mktemp)
