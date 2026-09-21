@@ -95,6 +95,39 @@ readonly SCENES=$'3\tApps, the catalogue as it opens\t
 8\tFlakes, a flakeref and what it carries\tk:right t:github:nix-community/nixvim s:1.0 k:return
 6\tand what that flake settles on\ts:2.5 k:down k:return'
 
+# The manual's stills, cut by --stills (plan/2026-09-21-36-pages-refresh.md).
+# name<TAB>label<TAB>keys: the row is shot as <name> once its keys are sent,
+# and a name of `-` sends the keys without a shot. One pass per list, each
+# from a fresh shell, because two surfaces here can only come last: Flakes
+# keeps the keyboard in its field (above), and the option form may still eat
+# every Escape (above, again) -- so each form shot is a pass of its own.
+readonly STILLS_TABS=$'01-apps.png\tApps, as it opens\t
+02-apps-filter.png\tApps, filtered\tt:/ k:backspace t:term s:1.0
+03-services.png\tServices\tk:escape s:1.2 k:right
+04-packages-empty.png\tSelection, empty\tk:right
+06-packages-search.png\tSelection, nixpkgs searched\tt:/ k:backspace t:lazygit s:2.5
+05-packages-unfree.png\tSelection, an unfree row\tk:escape s:1.2 t:/ k:backspace t:google-chrome s:2.5
+07-options-search.png\tOptions, searched\tk:escape s:1.2 k:right t:/ k:backspace t:tailscale s:2.0
+12-drafts.png\tDrafts\tk:escape s:1.2 k:right
+10-keys.png\tthe key sheet\tt:? s:1.0'
+readonly STILLS_FORM_BOOL=$'08-option-form-boolean.png\tthe form, a boolean\tk:right*3 t:/ k:backspace t:services.tailscale.enable s:2.0 k:return s:1.0'
+readonly STILLS_FORM_SCAFFOLD=$'09-option-form-scaffold.png\tthe form, a scaffold\tk:right*3 t:/ k:backspace t:services.tailscale.extraUpFlags s:2.0 k:return s:1.0'
+# Return on the `declare` row starts naming (PkgModel.qml:358); in naming,
+# Return would DECLARE the input, so the only key sent there is Escape.
+readonly STILLS_FLAKES=$'13-flakes.png\tFlakes, a flake inspected\tk:right*5 t:github:nix-community/nixvim s:1.0 k:return s:3.0
+14-flake-name-confirm.png\tFlakes, naming the input\tk:return s:1.0
+-\tcancel the naming\tk:escape'
+
+# THIS PASS SWITCHES THE SYSTEM. It queues hello and applies it, because the
+# build log only exists during a real apply (there is no build-only mode).
+# Undo it afterwards: nixarchy-pkg pkg remove hello && nixarchy-pkg apply.
+# `a` once arms the apply and shows the confirm; the second applies
+# (Menu.qml:206-210, 317-322).
+readonly STILLS_APPLY=$'-\tqueue hello\tk:right*2 t:/ k:backspace t:hello s:2.5 k:return s:1.0 k:escape s:1.2
+15-apply-confirm.png\tapply, armed\tt:a s:0.8
+16-apply-log.png\tapply, the log at its end\tt:a s:240'
+QUEUE_OK=""           # set by --apply-shots, whose job is to queue
+
 # ydotool speaks Linux keycodes, not keysyms.
 keycode() {
   case "$1" in
@@ -153,7 +186,8 @@ preconditions() {
   # them, or the closing shot counts wrong.
   local pending
   pending="$("$REPO/bin/nixarchy-pkg" pending | jq -r .count)"
-  [ "$pending" = 0 ] || die "$pending change(s) already queued; apply or revert them first"
+  [ "$pending" = 0 ] || [ -n "$QUEUE_OK" ] \
+    || die "$pending change(s) already queued; apply or revert them first"
 
   # SUPER+ALT+N is a toggle, so a tour can open by closing. Never guess.
   ! panel_open || die "the panel is already open; close it and run again"
@@ -307,10 +341,13 @@ frames() {
   say "frames in $WORK"
 }
 
-# Drives the tour without recording and leaves one screenshot per scene, so a
-# broken key sequence costs seconds instead of a whole take.
+# Drives a scene list (the tour by default) without recording and leaves one
+# screenshot per scene, so a broken key sequence costs seconds instead of a
+# whole take. Given an output dir, it is --stills: each row is shot under the
+# name in its first field, and `-` rows are not shot.
 dry() {
-  local mon mw mh mx my w h x y empty i=1
+  local list="${1:-$SCENES}" out="${2:-}"
+  local mon mw mh mx my w h x y empty name shot i=1
   # The TALLEST monitor with an empty workspace, not whichever happens to be
   # focused. The card is a share of the screen (Menu.qml:120-127), so a take
   # made on a 1080p head is 1100x842 where a 1440p one is 1100x1123: fewer
@@ -331,20 +368,39 @@ dry() {
   go_workspace "$empty"
   toggle_panel; sleep "$SETTLE"
   panel_open || die "the panel did not open"
-  while IFS=$'\t' read -r _ label keys; do
+  while IFS=$'\t' read -r name label keys; do
     [ -n "$keys" ] && play "$keys"
     sleep 0.6
-    grim -g "$x,$y ${w}x${h}" "$WORK/$(printf 'dry-%d.png' "$i")"
+    shot="$WORK/$(printf 'dry-%d.png' "$i")"
+    [ -n "$out" ] && shot="$out/$name"
+    [ -n "$out" ] && [ "$name" = - ] || grim -g "$x,$y ${w}x${h}" "$shot"
     panel_open || say "scene $i ($label): THE PANEL IS GONE"
     i=$((i + 1))
-  done < <(printf '%s\n' "$SCENES")
-  say "dry frames in $WORK"
+  done < <(printf '%s\n' "$list")
+  say "dry frames in ${out:-$WORK}"
+}
+
+# Every pass from a fresh shell and a closed panel, back on the workspace it
+# started from, so one pass's leftovers are never the next one's first frame.
+stills() {
+  local pass
+  mkdir -p "$WORK/stills"
+  for pass in "$@"; do
+    fresh_shell
+    dry "$pass" "$WORK/stills"
+    if panel_open; then toggle_panel; fi
+    go_workspace "$HOME_WS"
+  done
 }
 
 case "${1:-}" in
   --check)  preconditions ;;
   --dry)    preconditions; backup; trap restore EXIT; mkdir -p "$WORK"; fresh_shell; dry ;;
   --frames) frames ;;
+  --stills) preconditions; backup; trap restore EXIT
+            stills "$STILLS_TABS" "$STILLS_FORM_BOOL" "$STILLS_FORM_SCAFFOLD" "$STILLS_FLAKES" ;;
+  --apply-shots)
+            QUEUE_OK=1; preconditions; backup; trap restore EXIT; stills "$STILLS_APPLY" ;;
   "")       preconditions; backup; trap restore EXIT; fresh_shell; record; encode; frames ;;
-  *)        die "usage: record-tour.sh [--check|--frames]" ;;
+  *)        die "usage: record-tour.sh [--check|--dry|--frames|--stills|--apply-shots]" ;;
 esac
