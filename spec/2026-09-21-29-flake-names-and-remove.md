@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 29
 intent: intent/2026-09-21-29-flake-names-and-remove.md
 ---
