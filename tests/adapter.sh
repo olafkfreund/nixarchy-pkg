@@ -172,6 +172,45 @@ check "takes the line out"           test "$(grep -c '#@flake-input lib$' "$FK/f
 check "and still evaluates"          nix flake metadata "$FK" --no-update-lock-file
 check "lists nothing afterwards"     jq -e '.inputs | length == 0' <<<"$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake list)"
 
+# Names are checked whole, refs are data, and the remove guard can be
+# neither steered nor fooled by a hyphen -- and it looks past flake.nix (#29).
+FK=$(fresh_flake)
+fsum() { md5sum < "$FK/flake.nix"; }
+fl() { NIXARCHY_FLAKE="$FK" "$ADAPTER" flake "$@" 2>&1 || true; }
+before=$(fsum)
+for bad in 'foo.bar' 'foo bar' '1x'; do
+  check "add refuses the input name '$bad'" jq -e '.ok == false' <<<"$(fl add "$bad" "path:$FLAKE_TMP/lib")"
+done
+# shellcheck disable=SC2016  # a literal ${x} is the input under test
+for bad in 'path:/tmp/a"; y = 1; z = "' 'path:/tmp/a\b' 'path:/tmp/${x}' 'path:/tmp/a b'; do
+  check "add refuses the flakeref $bad" jq -e '.ok == false' <<<"$(fl add x "$bad")"
+done
+check "and flake.nix is untouched" test "$(fsum)" = "$before"
+
+fl add sub "path:$FLAKE_TMP/lib" >/dev/null
+for bad in 'sub$' '.*'; do
+  check "remove refuses the name '$bad'" jq -e '.ok == false' <<<"$(fl remove "$bad")"
+done
+check "and sub is still declared" grep -q '#@flake-input sub$' "$FK/flake.nix"
+
+mkdir -p "$FK/hosts/x"
+printf '{ inputs, ... }: {\n  imports = [ inputs.sub.nixosModules.default ];\n}\n' > "$FK/hosts/x/default.nix"
+out=$(fl remove sub)
+check "a reference in a host file blocks removal" jq -e '.ok == false' <<<"$out"
+check "and the refusal says where" jq -e '.error | contains("hosts/x/default.nix:2")' <<<"$out"
+rm -r "$FK/hosts"
+
+sed -i 's/description = "throwaway";/description = "see sub-projects";/' "$FK/flake.nix"
+out=$(fl remove sub)
+check "sub-projects is not a reference to sub" jq -e '.ok == true' <<<"$out"
+check "and success says what was not checked" jq -e '.message | contains("hosts were not evaluated")' <<<"$out"
+
+fl add sub "path:$FLAKE_TMP/lib" >/dev/null
+printf '{\n' >> "$FK/flake.nix"
+before=$(fsum)
+check "remove refuses a flake already broken" jq -e '.ok == false and (.error | contains("as it stands"))' <<<"$(fl remove sub)"
+check "and leaves it as it was" test "$(fsum)" = "$before"
+
 # A flake whose outer brace is not a line of its own is declined rather
 # than guessed at: appending to the wrong scope parses and means something
 # else, which is worse than refusing.

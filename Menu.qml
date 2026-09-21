@@ -95,6 +95,16 @@ Item {
     return true
   }
 
+  // Name an input before declaring it (#29): the suggestion goes into the
+  // field, selected, so RETURN takes it and typing replaces it.
+  function startNaming() {
+    var s = pkg.beginNaming()
+    if (s === null) return
+    search.text = s
+    search.selectAll()
+    search.forceActiveFocus()
+  }
+
   function close() {
     root.keysOpen = false
     // The form holds the keyboard while it is up, and the key handler above
@@ -198,6 +208,20 @@ Item {
               && event.key !== Qt.Key_Alt && event.key !== Qt.Key_Meta
               && event.key !== Qt.Key_Super_L && event.key !== Qt.Key_Super_R)
             pkg.disarm()
+
+          // Naming an input: RETURN declares with the name in the field,
+          // ESC goes back to the inspection with the flakeref restored.
+          if (pkg.naming) {
+            if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+              if (pkg.declareAs(search.text)) search.text = ""
+              event.accepted = true; return
+            }
+            if (event.key === Qt.Key_Escape) {
+              search.text = pkg.cancelNaming()
+              search.forceActiveFocus()
+              event.accepted = true; return
+            }
+          }
 
           switch (event.key) {
             case Qt.Key_Escape:
@@ -319,7 +343,8 @@ Item {
         TextField {
           id: search
           anchors { top: parent.top; left: parent.left; right: parent.right }
-          placeholderText: pkg.flakeTab ? "github:owner/repo\u2026"
+          placeholderText: pkg.naming ? "input name"
+                         : pkg.flakeTab ? "github:owner/repo\u2026"
                          : pkg.indexTab ? "search nixpkgs\u2026" : "filter\u2026"
           foreground: Color.menu.text
           onTextChanged: pkg.setQuery(text)

@@ -54,9 +54,12 @@ package to add. It is an input to declare, and declaring one means editing
 
 The **Flakes** tab does that. Type a flakeref, press `RETURN`, and it shows
 what the flake exposes before anything is written: `nix flake show` needs no
-build. Press `RETURN` again on *declare this as an input* and the line is
-added to your flake and locked; if locking fails, or the flake stops
-evaluating, both files are put back exactly as they were.
+build. Press `RETURN` again on *declare this as an input* and it asks for the
+input's name, suggesting the repository's (`home-manager` for
+`github:nix-community/home-manager/release-25.05`, never the branch). `RETURN`
+takes it, typing replaces it, `ESC` goes back. The line is then added to
+your flake and locked; if locking fails, or the flake stops evaluating, both
+files are put back exactly as they were.
 
 It stops there, deliberately. It does **not** write the module import,
 because which host wants it, whether the module takes arguments and whether
@@ -67,7 +70,12 @@ it belongs in.
 Two things it will refuse: a name your flake already uses, because two
 definitions of one input is an error. And removing an input while anything
 still refers to it, because that breaks evaluation of the whole system
-rather than one line.
+rather than one line. It looks for the name in every `.nix` file of the
+flake, as a whole identifier, and errs on the side of refusing: the name in
+a string or a comment counts too, and the refusal says which file and line,
+so you can take it out by hand if it is only a mention. A removal that goes
+through proves the flake still parses, locks and evaluates its metadata; it
+does not evaluate every host.
 
 ## What it is not
 

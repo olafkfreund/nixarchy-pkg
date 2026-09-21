@@ -52,8 +52,17 @@ of them is true.
 
 ## Declaring it
 
-`RETURN` on *declare this as an input*. One line is appended to your
-`flake.nix`:
+`RETURN` on *declare this as an input*, and it asks what to call it. The
+field is filled with a suggestion taken from the repository, not from the
+end of the ref: `github:nix-community/home-manager/release-25.05` suggests
+`home-manager`, never `release-2505`. `RETURN` takes it, typing replaces it,
+and `ESC` goes back to what the flake offers. A name is letters, digits, `_`
+and `-`, starting with a letter or `_`; anything else is refused before the
+file is touched. So is a flakeref with a quote, a backslash, a `$`, a
+backtick or a space in it — no real one has any, and in the file they would
+be Nix rather than data.
+
+One line is then appended to your `flake.nix`:
 
 ```nix
 inputs.nixvim.url = "github:nix-community/nixvim";  #@flake-input nixvim
@@ -111,9 +120,17 @@ so it is refused outright and nothing is written.
 
 **Removing an input something still depends on.** If another input `follows`
 it, or the name appears anywhere else in your flake — an import you pasted, a
-`specialArgs` reference — removal declines and names what depends on it.
-Succeeding would break evaluation, which is the one thing this must never do
-quietly.
+`specialArgs` reference, a host module in another `.nix` file that uses
+`inputs.<name>` — removal declines and names the file and line. Succeeding
+would break evaluation, which is the one thing this must never do quietly.
+
+It errs on the side of refusing. It matches the name as a whole identifier
+(`sub-projects` is not `sub`), but a mention in a string or a comment still
+counts. If the file and line it names are only a mention, remove the input
+by hand. And it checks the flake evaluated **before** removing anything, so
+a flake that was already broken is not blamed on the removal. What a removal
+that succeeds proves: the flake still parses, locks and evaluates its
+metadata. It does not evaluate every host.
 
 ## One warning, which is not a refusal
 

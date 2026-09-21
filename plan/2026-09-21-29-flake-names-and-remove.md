@@ -139,6 +139,26 @@ inspection only if the write started. The empty state shows `looking at
    -> verify by `bash tests/adapter.sh` → `all passed`, including the
    existing "shape" checks.
 
+## Found while implementing
+
+- **Step 2: `[[:graph:]]`, not `[!-~]`.** A bracket range is collation
+  order, and under razer's `en_GB.UTF-8` `[!-~]` refused an ordinary
+  `path:/tmp/…` ref (it passed under `LC_ALL=C`). `[[:graph:]]` excludes
+  whitespace and control characters in any locale, and the explicit
+  `"` `\` `$` `` ` `` exclusion is what stops injection, so "ASCII only"
+  is dropped. Non-ASCII inside a Nix string can inject nothing.
+- **Step 4: `importLineFor()` is deleted, not used.** It hard-coded
+  `nixosModules.default`, and nothing had ever called it. The module row's
+  hint is `inputs.<suggested name>.<that row's module>`.
+- **Step 4: `setQuery()` knows about naming.** The field is shared, so
+  typing a name calls it. While naming, it records the name and nothing
+  else. On Flakes, an edit clears the inspection only when the text differs
+  from the inspected ref, so ESC's restore doesn't wipe it.
+- **Step 5: `startNaming()` lives in `Menu.qml`**, reached from
+  `activate()` via `host`, because it has to fill and focus the field.
+- **Docs** include `docs/manual/flakes.md`, which described declaring and
+  the remove guard.
+
 ## Tests
 
     nix flake check

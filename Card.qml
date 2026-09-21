@@ -224,6 +224,8 @@ Item {
           // flakeref rather than a query, so "nothing matches" is answering
           // a question nobody asked. Same shadowing trap as the indexTab
           // branch below.
+          : root.model.flakeTab && root.model.inspecting
+              ? "looking at \u201c" + root.model.query + "\u201d\u2026"
           : root.model.flakeTab ? (root.model.query.length > 0
               ? "RETURN to see what \u201c" + root.model.query + "\u201d offers"
               : "no flake inputs declared here yet")
