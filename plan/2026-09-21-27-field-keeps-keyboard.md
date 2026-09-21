@@ -103,6 +103,18 @@ existing arming (`PkgModel.addFromOtherChannel`) and adds no dialog.
    HOME / END scroll this sheet and the build log".
    -> verify by `bin/nixarchy-pkg-keys --print` and `nix flake check`.
 
+## Found while implementing
+
+- **Step 6: a bare modifier does not disarm.** "Any other key cancels"
+  would count SHIFT's own key-down, which arrives before the `A` of a
+  second SHIFT+A, and cancel the terminal route every time. Shift, Ctrl,
+  Alt, Meta and Super key-downs are ignored by the disarm check.
+- **Step 7 reaches the manual.** `docs/manual/getting-started.md`,
+  `applying.md` (two-press `a`), `troubleshooting.md` and `packages.md`
+  (`R` → `r`) said the old keys.
+- **Step 4 resets `followTail`** where `a` starts the apply in `Menu.qml`,
+  since the log view lives there, not in `PkgModel.apply()`.
+
 ## Tests
 
     nix flake check

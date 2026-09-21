@@ -324,7 +324,7 @@ Item {
       Text {
         anchors { horizontalCenter: parent.horizontalCenter; verticalCenter: parent.verticalCenter }
         visible: root.model && root.model.indexStale
-        text: "index stale \u2014 R to rebuild"
+        text: "index stale \u2014 r to rebuild"
         textFormat: Text.PlainText
         font.family: root.fontFamily
         font.pixelSize: root.px(Style.font.caption)
