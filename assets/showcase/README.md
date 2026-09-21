@@ -1,8 +1,10 @@
 # nixarchy.pkg — a tour
 
 Every shot below is the real plugin on a real machine, driven from the
-keyboard. Nothing was installed and nothing was applied: the selection
-files were checksummed before and after and are byte-identical.
+keyboard. The selection files were checksummed before and after and are
+byte-identical. One pass queued `hello` for the queued and apply-prompt
+shots; the prompt was the last thing captured there, and `hello` was taken
+out again afterwards.
 
 ## Apps
 
@@ -66,6 +68,41 @@ default, because a copied-out default is a line that reads as a decision
 and is not one.
 
 ![A scaffolded option](09-option-form-scaffold.png)
+
+## Drafts
+
+Software that is in no repository at all: a URL to a release, and the
+machine's first attempt at a derivation for it. Empty here, which is what
+most machines look like.
+
+![Drafts](12-drafts.png)
+
+## Flakes
+
+Type a flakeref and `RETURN`: what the flake offers, read before anything
+is written or built. Module namespaces `nix flake show` cannot see into are
+named as such rather than drawn as empty.
+
+![A flake inspected](13-flakes.png)
+
+`RETURN` on "declare this as an input" asks for a name, suggested from the
+repository. `RETURN` again declares it; `ESC` goes back.
+
+![Naming the input](14-flake-name-confirm.png)
+
+## Queued
+
+A package added is a line in a file, not a package installed. The footer
+says what just changed and how much is waiting.
+
+![A change queued](17-queued.png)
+
+## Applying
+
+`a` asks first, because this rebuilds the system. `a` again starts it; any
+other key cancels.
+
+![The apply prompt](15-apply-confirm.png)
 
 ## Keys
 

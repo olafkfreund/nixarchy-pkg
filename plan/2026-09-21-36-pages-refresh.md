@@ -203,3 +203,18 @@ spec: spec/2026-09-21-36-pages-refresh.md
 - **Drafts is empty on razer**, so `12` reads "nothing here yet" and stays a
   grid shot only. Scene 4 ("see what's waiting") uses a new
   **`17-queued.png`**, taken in the apply pass the moment `hello` is queued.
+- **No apply-log shot (option B, decided by the user).** The first
+  `--apply-shots` run did switch razer, but the panel closed during the
+  build (nh then aborted on a closed stderr pipe, after activating), so `16`
+  shows the desktop. The switch it made was a nixpkgs and nvidia bump
+  (610 → 615) under the loaded 610 module. razer was rebooted into it at the
+  user's request. After that, `/etc/nixos` on razer builds an *older*
+  system than the running one, so any further apply would have been a
+  downgrade. Scene 5 shows `15` and describes the log in text.
+  `--apply-shots` stays in the script for a machine where an apply is safe.
+- **The home grid uses `07` (Options searched) instead of `11`** (the bar
+  widget, a 2.6 KB crop of the bar that reads as a blank tile at a third of
+  the page width). `11` stays on the manual's bar page.
+- **The tour was taken twice.** The first take lost the panel to an
+  ai-mirror control request that appeared on razer mid-take. The pointer is
+  parked in the screen corner before recording.
