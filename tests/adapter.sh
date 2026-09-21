@@ -231,6 +231,27 @@ check "says so when a flake cannot be read" \
   <<<"$("$ADAPTER" flake show "path:$FLAKE_TMP/nowhere" 2>&1 || true)"
 
 echo "search"
+# These need no real index, so they always run (#30).
+out=$("$ADAPTER" search git --limit); rc=$?
+check "a flag without its value is a value, not silence" \
+  jq -e '.ok == false and (.error | contains("--limit"))' <<<"$out"
+check "and exits 0" test "$rc" = 0
+check "the same for --kind" jq -e '.ok == false' <<<"$("$ADAPTER" search git --kind)"
+STUBCACHE=$(mktemp -d); mkdir -p "$STUBCACHE/nixarchy"
+printf 'pkg\tfoo\tFoo thing [unfree]\tunfree\t\npkg\tbar\tBar thing [unfree]\t\t\npkg\tbaz\tBaz [broken]\tbroken\t\npkg\t-dash\tA dash\t\t\n' \
+  > "$STUBCACHE/nixarchy/index.tsv"
+stub_search() { XDG_CACHE_HOME="$STUBCACHE" "$ADAPTER" search "$@"; }
+check "a query after -- may start with a dash" \
+  jq -e '.rows[0].name == "-dash"' <<<"$(stub_search -- -dash)"
+out=$(stub_search -- thing)
+check "unfree is said once, by the flag" \
+  jq -e '.rows | map(select(.name == "foo"))[0].summary == "Foo thing"' <<<"$out"
+check "an index without the flag keeps its only warning" \
+  jq -e '.rows | map(select(.name == "bar"))[0].summary == "Bar thing [unfree]"' <<<"$out"
+check "broken is said once too" \
+  jq -e '.rows[0].summary == "Baz"' <<<"$(stub_search -- baz)"
+rm -rf "$STUBCACHE"
+
 if [ -s "${XDG_CACHE_HOME:-$HOME/.cache}/nixarchy/index.tsv" ]; then
   hits=$("$ADAPTER" search ripgrep --kind pkg --limit 5)
   check "finds a package"            jq -e '.rows | length > 0'      <<<"$hits"

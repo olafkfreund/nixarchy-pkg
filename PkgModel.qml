@@ -305,9 +305,10 @@ QtObject {
 
   function runSearch() {
     if (!indexTab || !searching) { results = []; return }
-    _reader.command = [script, "search", query,
+    // `--` last, so a query starting with a dash is a query (#30).
+    _reader.command = [script, "search",
                        "--kind", tab === 2 ? "pkg" : "opt",
-                       "--limit", "60"]
+                       "--limit", "60", "--", query]
     _reader.running = true
   }
 

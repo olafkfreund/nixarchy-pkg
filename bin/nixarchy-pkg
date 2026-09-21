@@ -194,16 +194,20 @@ cmd_search() {
   local query="" kind="" limit=50
   while [ $# -gt 0 ]; do
     case "$1" in
-      --kind)  kind=${2-};  shift 2 ;;
-      --limit) limit=${2-}; shift 2 ;;
+      # A flag without its value used to end the script inside `shift 2`,
+      # printing nothing at all (#30).
+      --kind)  [ $# -ge 2 ] || die "--kind needs a value";  kind=$2;  shift 2 ;;
+      --limit) [ $# -ge 2 ] || die "--limit needs a value"; limit=$2; shift 2 ;;
       --kind=*)  kind=${1#*=};  shift ;;
       --limit=*) limit=${1#*=}; shift ;;
+      # Everything after -- is the query, so one can start with a dash.
+      --) shift; query=${1-}; break ;;
       -*) die "unknown flag: $1" ;;
       *) query=$1; shift ;;
     esac
   done
 
-  [ -n "$query" ] || die "usage: nixarchy-pkg search <query> [--kind pkg|opt|app] [--limit N]"
+  [ -n "$query" ] || die "usage: nixarchy-pkg search [--kind pkg|opt|app] [--limit N] [--] <query>"
   case "$limit" in ''|*[!0-9]*) die "--limit takes a number, not '$limit'" ;; esac
   case "$kind" in ''|pkg|opt|app) ;; *) die "--kind takes pkg, opt or app, not '$kind'" ;; esac
   [ -s "$INDEX" ] || die "no search index yet -- run: nixarchy-pkg reindex"
@@ -236,15 +240,23 @@ cmd_search() {
       ok: true,
       indexStale: $stale,
       query: $query,
-      rows: ($rows | lines | map(split("\t")) | map({
+      rows: ($rows | lines | map(split("\t")) | map(
+        (if .[0] == "opt" then []
+         else ((.[3] // "") | split(" ") | map(select(length > 0))) end) as $f
+        | {
         kind:    .[0],
         name:    .[1],
-        summary: (.[2] // ""),
+        # The index builder also writes " [unfree]" / " [broken]" into the
+        # summary, so the card said unfree twice (#30). Dropped only when the
+        # structured flag is there to say it: an index from before the flags
+        # existed has nothing else to warn with.
+        summary: ((.[2] // "")
+                  | if ($f | index("unfree")) then gsub(" \\[unfree\\]"; "") else . end
+                  | if ($f | index("broken")) then gsub(" \\[broken\\]"; "") else . end),
         # An option row carries its Nix type here; a package row carries
         # flags. Never both.
         type:    (if .[0] == "opt" then (.[3] // "") else "" end),
-        flags:   (if .[0] == "opt" then []
-                  else ((.[3] // "") | split(" ") | map(select(length > 0))) end),
+        flags:   $f,
         # Written into the row by the index builder with its newlines
         # escaped, because fzf re-runs a preview on every keystroke and
         # could not afford to look one up. Unescaped here; the panel draws

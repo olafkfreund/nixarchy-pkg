@@ -53,13 +53,14 @@ package to add. It is an input to declare, and declaring one means editing
 `flake.nix`.
 
 The **Flakes** tab does that. Type a flakeref, press `RETURN`, and it shows
-what the flake exposes before anything is written: `nix flake show` needs no
-build. Press `RETURN` again on *declare this as an input* and it asks for the
-input's name, suggesting the repository's (`home-manager` for
-`github:nix-community/home-manager/release-25.05`, never the branch). `RETURN`
-takes it, typing replaces it, `ESC` goes back. The line is then added to
-your flake and locked; if locking fails, or the flake stops evaluating, both
-files are put back exactly as they were.
+what the flake exposes before anything is written: `nix flake show` usually
+needs no build (a flake using import-from-derivation can make it build; the
+adapter gives up after 120 s). Press `RETURN` again on *declare this as an
+input* and it asks for the input's name, suggesting the repository's
+(`home-manager` for `github:nix-community/home-manager/release-25.05`, never
+the branch). `RETURN` takes it, typing replaces it, `ESC` goes back. The line
+is then added to your flake and locked; if locking fails, or the flake stops
+evaluating, both files are put back exactly as they were.
 
 It stops there, deliberately. It does **not** write the module import,
 because which host wants it, whether the module takes arguments and whether
@@ -86,8 +87,10 @@ placement, catalogue drift, unfree policy, the stable/unstable channel
 escape, backups and the parse check. This plugin is a front-end, and
 `bin/nixarchy-pkg` is the whole of its contact with the machine.
 
-It writes to `~/.config/nixarchy/apps.nix` and `services.nix` and nowhere
-else — never `/etc/nixos`, never the copy under the flake.
+It writes to `~/.config/nixarchy/apps.nix` and `services.nix`, and nowhere
+else — with one exception, the [Flakes](#flakes) tab, which appends one marked
+line to your system flake and locks it. Never the copy of the selection under
+the flake.
 
 It lists the same way. The Selection tab shows the packages nixarchy
 manages — the marked lines in that file — and not what is installed on
@@ -133,6 +136,17 @@ Then enable it and bind a key:
 ```bash
 omarchy plugin enable nixarchy.pkg
 ```
+
+To validate it, validate the build, not the installed folder:
+
+```bash
+omarchy plugin validate "$(nix build --print-out-paths github:olafkfreund/nixarchy-pkg)"
+```
+
+Home Manager installs the plugin as a symlink into the store, and
+`omarchy plugin validate` refuses any symlink by design, so validating the
+installed folder fails even though the plugin loads fine
+([nixarchy#853](https://github.com/olafkfreund/nixarchy/issues/853)).
 
 Pick a chord that is free on your machine — `omarchy menu keybindings --print`
 lists what is taken. `SUPER+SHIFT+N` is a common clash (nvim).
@@ -201,9 +215,9 @@ Two things that will cost you an afternoon otherwise:
   so the derivation is `runCommand` + `cp`, never `symlinkJoin` or a wrapped
   binary — and a plugin installed as a symlink for development will not
   validate either.
-- `omarchy-shell shell rescanPlugins` does **not** reload a plugin reached
-  through a symlink. Install it as a real directory and use
-  `omarchy-restart-shell`.
+- Whether `omarchy-shell shell rescanPlugins` reloads changed QML in a plugin
+  reached through a symlink has not been verified — discovery does follow
+  the link. `omarchy-restart-shell` reliably picks up a change.
 
 ## Licence
 
