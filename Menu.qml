@@ -59,12 +59,40 @@ Item {
     pkg.message = ""
     root.opened = true
     pkg.refresh()
-    // The field's focus is cleared explicitly first. forceActiveFocus() on a
-    // FocusScope hands the keyboard to whichever child held it last, so
-    // asking the scope alone gives it straight back to the search box --
-    // and the next `l` meant to change tab is typed into the query.
+    Qt.callLater(root.focusList)
+  }
+
+  // Give the list the keyboard. forceActiveFocus() on a FocusScope hands
+  // the keyboard to whichever child held it last, so asking the scope alone
+  // gives it straight back to the search box -- or to the option form,
+  // hidden but still focused -- and the next `l` meant to change tab is
+  // typed into the query. Every child that can hold focus lets go first.
+  // Every site that means "the list has it now" comes through here (#27).
+  function focusList() {
     search.focus = false
-    Qt.callLater(function () { keys.forceActiveFocus() })
+    form.focus = false
+    keys.forceActiveFocus()
+  }
+
+  // j/k, the arrows, the page keys and Home/End scroll a read-only view:
+  // the key sheet and the build log are both taller than the card, and a
+  // keyboard-first surface cannot leave half of either behind a mouse
+  // wheel (#27). Returns whether the key was one of them.
+  function scrollView(view, key) {
+    var line = root.px(Style.font.caption) * 1.35
+    var max = Math.max(0, view.contentHeight - view.height)
+    var y = view.contentY
+    switch (key) {
+      case Qt.Key_J: case Qt.Key_Down:     y += line; break
+      case Qt.Key_K: case Qt.Key_Up:       y -= line; break
+      case Qt.Key_PageDown:                y += view.height * 0.9; break
+      case Qt.Key_PageUp:                  y -= view.height * 0.9; break
+      case Qt.Key_Home:                    y = 0; break
+      case Qt.Key_End:                     y = max; break
+      default: return false
+    }
+    view.contentY = Math.max(0, Math.min(max, y))
+    return true
   }
 
   function close() {
@@ -100,7 +128,7 @@ Item {
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
 
-    onVisibleChanged: if (visible) Qt.callLater(function () { keys.forceActiveFocus() })
+    onVisibleChanged: if (visible) Qt.callLater(root.focusList)
 
     Rectangle {
       anchors.fill: parent
@@ -145,7 +173,8 @@ Item {
         Keys.onPressed: function (event) {
           if (form.open) return            // the form owns the keyboard
           if (root.keysOpen) {
-            root.keysOpen = false
+            // The scroll keys read the sheet; anything else puts it away.
+            if (!root.scrollView(keySheetView, event.key)) root.keysOpen = false
             event.accepted = true
             return
           }
@@ -154,8 +183,21 @@ Item {
             // and switching a system, and killing it half way through is
             // never what reaching for ESC meant.
             if (event.key === Qt.Key_Escape) { pkg.detachFromLog(); event.accepted = true }
+            // Scrolling back stops the view chasing the tail; End resumes.
+            else if (root.scrollView(logView, event.key)) {
+              logView.followTail = event.key === Qt.Key_End
+              event.accepted = true
+            }
             return
           }
+
+          // An armed apply is cancelled by any other key -- but not by a
+          // bare modifier: SHIFT goes down before the A of a second SHIFT+A.
+          if (pkg.armedApply !== "" && event.key !== Qt.Key_A
+              && event.key !== Qt.Key_Shift && event.key !== Qt.Key_Control
+              && event.key !== Qt.Key_Alt && event.key !== Qt.Key_Meta
+              && event.key !== Qt.Key_Super_L && event.key !== Qt.Key_Super_R)
+            pkg.disarm()
 
           switch (event.key) {
             case Qt.Key_Escape:
@@ -168,7 +210,7 @@ Item {
                 // and hand the keyboard back, or `?` and the single letters
                 // stay unreachable: they are all gated on the field NOT
                 // having it, and clearing the text never moved it before.
-                if (!pkg.flakeTab) keys.forceActiveFocus()
+                if (!pkg.flakeTab) root.focusList()
               }
               else root.close()
               event.accepted = true; return
@@ -214,11 +256,24 @@ Item {
           // be opened at all.
           if (!search.activeFocus && event.key === Qt.Key_A
               && (event.modifiers & Qt.ShiftModifier)) {
-            pkg.applyInTerminal(); root.close(); event.accepted = true; return
+            if (!event.isAutoRepeat && pkg.armApply("terminal")) {
+              pkg.applyInTerminal(); root.close()
+            }
+            event.accepted = true; return
+          }
+
+          // r reindexes, and so does SHIFT+R: the footer said R for long
+          // enough that the capital is what hands reach for. Ctrl and Alt
+          // are left alone.
+          if (!search.activeFocus && event.key === Qt.Key_R
+              && (event.modifiers === Qt.NoModifier
+                  || event.modifiers === Qt.ShiftModifier)) {
+            pkg.reindex(); event.accepted = true; return
           }
 
           if (!search.activeFocus && event.key === Qt.Key_Question) {
             if (root.keyText.length === 0) keySheet.running = true
+            keySheetView.contentY = 0
             root.keysOpen = true
             event.accepted = true
             return
@@ -235,8 +290,12 @@ Item {
               case Qt.Key_Slash: search.forceActiveFocus(); event.accepted = true; return
               // Shift+A is handled above: this block only ever sees a key
               // pressed with no modifiers at all.
-              case Qt.Key_A: pkg.apply(); event.accepted = true; return
-              case Qt.Key_R: pkg.reindex(); event.accepted = true; return
+              case Qt.Key_A:
+                if (!event.isAutoRepeat && pkg.armApply("here")) {
+                  logView.followTail = true
+                  pkg.apply()
+                }
+                event.accepted = true; return
             }
           }
         }
@@ -251,7 +310,7 @@ Item {
           target: pkg
           function onTabChanged() {
             if (pkg.flakeTab) search.forceActiveFocus()
-            else keys.forceActiveFocus()
+            else root.focusList()
           }
         }
 
@@ -288,7 +347,7 @@ Item {
                 // flakeref; a rule that changed tabs only at the end of the
                 // text would work and would have to be reconstructed from
                 // first principles by whoever met it next.
-                keys.forceActiveFocus()
+                root.focusList()
                 event.accepted = false
                 return
             }
@@ -319,8 +378,11 @@ Item {
           visible: pkg.showingLog
           contentHeight: logText.implicitHeight
           clip: true
-          // Follows the tail, which is the part of a build anyone watches.
-          onContentHeightChanged: contentY = Math.max(0, contentHeight - height)
+          // Follows the tail, which is the part of a build anyone watches --
+          // until someone scrolls back to read something, and then it stays
+          // where they put it. End, or the next apply, follows again.
+          property bool followTail: true
+          onContentHeightChanged: if (followTail) contentY = Math.max(0, contentHeight - height)
 
           Text {
             id: logText
@@ -352,6 +414,7 @@ Item {
         }
 
         Flickable {
+          id: keySheetView
           anchors.fill: parent
           anchors.topMargin: search.height + Style.space(12)
           visible: root.keysOpen
@@ -378,7 +441,7 @@ Item {
           anchors.fill: parent
           model: pkg
           textScale: root.textScale
-          onClosed: Qt.callLater(function () { keys.forceActiveFocus() })
+          onClosed: Qt.callLater(root.focusList)
         }
       }
     }

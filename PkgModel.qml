@@ -154,6 +154,34 @@ QtObject {
 
   function disarm() {
     if (armedChannel !== "") { armedChannel = ""; message = "" }
+    if (armedApply !== "") { armedApply = ""; _applyArmTimer.stop(); message = "" }
+  }
+
+  // `a` rebuilds the whole system, so it takes two presses, the way
+  // SHIFT+RETURN does above: the first says what will happen, the second
+  // does it (#27). A stray `a` -- one typed while the keyboard was not
+  // where it looked -- once asked for a full apply. "here" is the panel's
+  // own apply, "terminal" the SHIFT+A route.
+  property string armedApply: ""
+  property Timer _applyArmTimer: Timer {
+    interval: 5000
+    onTriggered: root.disarm()
+  }
+
+  // True when this press is the second one and the apply should run.
+  function armApply(kind) {
+    if (armedApply === kind) {
+      armedApply = ""; _applyArmTimer.stop(); message = ""
+      return true
+    }
+    disarm()
+    armedApply = kind
+    message = (kind === "terminal" ? "SHIFT+A again" : "a again")
+      + " to rebuild the system"
+      + (kind === "terminal" ? " in a terminal" : "")
+      + " \u2014 any other key cancels"
+    _applyArmTimer.restart()
+    return false
   }
 
   function moveCursor(delta) {

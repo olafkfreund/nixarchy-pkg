@@ -43,8 +43,8 @@ Three likely reasons, in order:
 The index is stale. A search index built before unfree and broken flags
 existed carries none of them, so *every* package reads as free.
 
-The panel says **index stale — R to rebuild** when this is the case. Press
-`R`. It takes about a minute.
+The panel says **index stale — r to rebuild** when this is the case. Press
+`r`. It takes about a minute.
 
 An absent flag is absent evidence, not a "no".
 

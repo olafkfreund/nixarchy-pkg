@@ -9,7 +9,9 @@ the machine.
 
 ## `a`
 
-Press `a`. The card fills with a build log.
+Press `a`, and then `a` again: the first press says what will happen and
+waits, because this rebuilds the whole system. Any other key, or five
+seconds, cancels. The card then fills with a build log.
 
 What runs is `nixarchy-apply`: it copies your selection into the flake
 directory and rebuilds. It needs a password, and it gets one through your

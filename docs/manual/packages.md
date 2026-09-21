@@ -69,8 +69,8 @@ amount of it.
 ### A flag you do not see is not a "no"
 
 If the search index is stale, it carries **no flags at all**, and every
-package reads as free. The panel says **index stale — R to rebuild** when
-that is the case, and it means it. `R` rebuilds the index; it takes about a
+package reads as free. The panel says **index stale — r to rebuild** when
+that is the case, and it means it. `r` rebuilds the index; it takes about a
 minute.
 
 Absence of a flag is absence of evidence, not evidence of absence.

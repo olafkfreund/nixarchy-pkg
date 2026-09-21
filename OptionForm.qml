@@ -115,6 +115,11 @@ FocusScope {
     root.open = false
     root.option = ({})
     root.path = ""
+    // Let go of the keyboard. A hidden Item keeps focus and still gets keys,
+    // so a form closed while focused went on eating ESC (#27).
+    textField.focus = false
+    scaffoldField.focus = false
+    root.focus = false
     root.closed()
   }
 
@@ -142,6 +147,9 @@ FocusScope {
     // search box, which is exactly what happened the first time this
     // was driven from the keyboard.
     Qt.callLater(function () {
+      // Closed in the meantime: taking the keyboard now would take it
+      // from the list the form was closed back to.
+      if (!root.open) return
       if (root.widget === "string")        textField.forceActiveFocus()
       else if (root.widget === "scaffold") scaffoldField.forceActiveFocus()
       else                                 root.forceActiveFocus()
@@ -205,6 +213,8 @@ FocusScope {
   }
 
   Keys.onPressed: function (event) {
+    // A closed form handles nothing: every key belongs to the list.
+    if (!root.open) return
     switch (event.key) {
       case Qt.Key_Escape:
         root.finish(); event.accepted = true; return

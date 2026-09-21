@@ -47,13 +47,17 @@ SHIFT + RETURN             -> Add a search result from the OTHER channel.
                               share no store paths, even at the same version.
                               Press it twice: once to see what it will do,
                               once to do it
-a                          -> Apply the queued changes and rebuild
-SHIFT + A                  -> Apply in a terminal instead. The route for a
-                              host with no polkit agent to answer pkexec,
-                              and for any apply that asks something the
-                              panel cannot show
-R                          -> Rebuild the search index (about a minute)
-?                          -> This sheet
+a                          -> Apply the queued changes and rebuild. Press
+                              it twice: it rebuilds the whole system, so the
+                              first press only says so. Any other key, or
+                              five seconds, cancels
+SHIFT + A                  -> Apply in a terminal instead, also pressed
+                              twice. The route for a host with no polkit
+                              agent to answer pkexec, and for any apply that
+                              asks something the panel cannot show
+r  /  SHIFT + R            -> Rebuild the search index (about a minute)
+?                          -> This sheet. j / k, PAGE UP / PAGE DOWN and
+                              HOME / END scroll it; any other key closes it
 -- Option form --------------------
 SPACE                      -> Flip a boolean
 j  /  k                    -> Choose between an enum's alternatives
@@ -64,6 +68,8 @@ ESCAPE                     -> Cancel
                               shown is the option's own default or example,
                               and leaving it alone keeps the default
 -- While applying -----------------
+j / k, PAGE UP / PAGE DOWN -> Scroll the build log. Scrolling back stops it
+                              following the build; END follows again
 ESCAPE                     -> Stop watching the log. The build keeps going:
                               it is elevating, downloading and switching a
                               system, and stopping half way is never what
