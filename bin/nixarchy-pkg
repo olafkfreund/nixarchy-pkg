@@ -17,7 +17,10 @@
 #   opt remove <path>            take it out again
 #   draft new <url> | draft undraft <name>
 #   pending                      what is queued but not yet applied
-#   apply                        copy into the flake and rebuild
+#   apply                        copy into the flake and rebuild; the output
+#                                is the build log as it happens, without
+#                                colour, then ONE line:
+#                                {"nixarchyPkgApply":{"ok","exit","message"}}
 #   reindex                      rebuild the search index
 #
 # Every subcommand prints ONE object and exits 0, including on failure:
@@ -1073,68 +1076,50 @@ cmd_pending() {
 # This is the one command here that changes the machine, and it only ever
 # runs on an explicit key.
 #
-# Two things make it work from a panel that has no terminal:
+# `--yes --no-preview` answers nixarchy-apply's two questions (nixarchy
+# #769). This used to guess them on stdin, and the guess needed a belt: a
+# grep for "Not switching." that, piped under `pipefail`, missed the phrase
+# every time the log passed the pipe buffer -- and reported "applied" (#26).
+# With the flags there is nothing left to decline. A nixarchy too old to
+# know them fails at once with its usage line, which is reported as-is.
 #
-#   stdin `n\ny\n`  nixarchy-apply asks "Preview in a VM first?" and then
-#                   "Build and switch now?". It reads with `|| reply=""`
-#                   throughout, so a closed stdin declines the switch --
-#                   the safe failure, but not the one we want here.
+# pkexec: nh elevates itself, and a QML Process has no tty for a password.
+# Omarchy runs a polkit agent as an always-loaded service plugin, so pkexec
+# puts the prompt on screen in the same shell the panel lives in.
 #
-#   pkexec          nh elevates itself, and a QML Process has no tty for a
-#                   password. Omarchy runs a polkit agent as an always-
-#                   loaded service plugin, so pkexec puts the prompt on
-#                   screen in the same shell the panel lives in.
+# The log is STREAMED, line by line as the build prints it, through awk:
+# it strips terminal escapes (the panel draws plain text, and nh colours
+# even into a pipe), keeps only the last redraw of a carriage-return
+# progress line, flushes every line, and ends even an unterminated last
+# line with a newline so the record below is always alone on its own.
+# Not `sed -u`: ending the stream on a newline needs `$a\`, and `$` makes
+# sed hold every line until the next one arrives, to know which is last.
 #
-# Output is streamed as plain lines -- it is a build log, and the panel
-# draws it as text -- with a single JSON object on the last line, which is
-# the only thing the panel parses.
+# The last line is the one the panel parses, wrapped in a key a build log
+# cannot plausibly print, so a line of build output shaped like a result
+# is never taken for the end of the apply.
 cmd_apply() {
   need nixarchy-apply
-  local rc=0 out
+  local statuses rc filt
+  # Off for the pipeline, so both statuses can be read: under `pipefail`,
+  # $? is the rightmost failure, which is not necessarily the build's.
+  set +e +o pipefail
+  NO_COLOR=1 NH_ELEVATION_STRATEGY="${NH_ELEVATION_STRATEGY:-pkexec}" \
+    nixarchy-apply --yes --no-preview </dev/null 2>&1 |
+    awk '{ gsub(/\033\[[0-9;?]*[A-Za-z]/, ""); gsub(/\033[()][A-Za-z0-9]/, "")
+           sub(/.*\r/, ""); print; fflush() }'
+  statuses=("${PIPESTATUS[@]}")
+  set -e -o pipefail
+  rc=${statuses[0]}; filt=${statuses[1]}
 
-  # How many questions nixarchy-apply asks depends on the machine, and
-  # answering the wrong number is silent. It asks "Preview in a VM first?"
-  # only `if command -v nixarchy-preview` (nixarchy-apply:193), and always
-  # asks "Build and switch now?" after it.
-  #
-  # A fixed `n\ny\n` was therefore right on a machine with preview installed
-  # and wrong on one without: the `n` answered the SWITCH prompt, the switch
-  # was declined, the `y` was never read -- and declining is not an error, so
-  # this reported {"ok": true, "message": "applied"} for a rebuild that never
-  # happened.
-  #
-  # No single script is correct both ways: `y\n` alone would answer "yes" to
-  # the preview question on a machine that has it, and boot a VM nobody asked
-  # for. So the condition is duplicated from nixarchy-apply:193, and THE TWO
-  # MUST AGREE. Asking upstream for a non-interactive mode instead:
-  # https://github.com/olafkfreund/nixarchy/issues/769
-  local answers
-  if command -v nixarchy-preview >/dev/null 2>&1; then
-    answers=$'n\ny\n'
-  else
-    answers=$'y\n'
-  fi
-
-  out=$(printf '%s' "$answers" |
-    NH_ELEVATION_STRATEGY="${NH_ELEVATION_STRATEGY:-pkexec}" \
-    nixarchy-apply 2>&1) || rc=$?
-  printf '%s\n' "$out"
-
-  # And the belt to that brace. nixarchy-apply:225 prints "Not switching."
-  # when the switch is declined and then exits 0, which is exactly why the
-  # exit code has never been able to tell a switch from a decline. After the
-  # fix above this should be unreachable; it is here so that if the prompts
-  # change again -- they have changed once -- the panel says something true
-  # rather than something reassuring.
-  if printf '%s' "$out" | grep -q "Not switching\."; then
-    jq -nc '{ok: false, exit: 0,
-      message: "nixarchy-apply declined to switch, so nothing was applied. This means the answers it was sent did not match the questions it asked."}'
-    return 0
-  fi
-
-  jq -nc --argjson rc "$rc" \
-    '{ok: ($rc == 0), exit: $rc,
-      message: (if $rc == 0 then "applied" else "nixarchy-apply exited " + ($rc|tostring) end)}'
+  jq -nc --argjson rc "$rc" --argjson filt "$filt" '
+    {nixarchyPkgApply: {
+      ok: ($rc == 0 and $filt == 0),
+      exit: $rc,
+      message: (if $filt != 0 then
+                  "the log filter failed (exit \($filt)); nixarchy-apply exited \($rc)"
+                elif $rc == 0 then "applied"
+                else "nixarchy-apply exited \($rc)" end)}}'
 }
 
 # About a minute, and the panel says so before starting it. Worth doing:

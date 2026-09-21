@@ -101,85 +101,6 @@ check "an unparseable value is refused"    jq -e '.ok == false' <<<"$out"
 check "and the file is byte-identical"     test "$(md5sum < "$APPSNIX")" = "$before"
 rm -rf "$CONFIG"
 
-# The apply answers. Driven against a STUB of nixarchy-apply's shape, never
-# the real one: the real one elevates and rebuilds a machine, so a test that
-# invoked it would be a test that changed the machine.
-echo "apply answers"
-APPLY_TMP=$(mktemp -d)
-cleanup_apply() { rm -rf "$APPLY_TMP"; }
-trap cleanup_apply EXIT
-
-# The stub mirrors nixarchy-apply:193 onwards: the preview prompt exists only
-# when a preview binary is on PATH, and the switch prompt always follows.
-mkdir -p "$APPLY_TMP/bin"
-cat > "$APPLY_TMP/bin/nixarchy-apply" <<STUB
-#!$(command -v bash)
-if command -v nixarchy-preview >/dev/null 2>&1; then
-  read -r -p "Preview in a VM first? [y/N] " reply || reply=""
-  echo "PREVIEW_GOT=\$reply"
-fi
-read -r -p "Build and switch now? [y/N] " reply || reply=""
-echo "SWITCH_GOT=\$reply"
-case "\$reply" in
-  [yY]*) echo "SWITCHED" ;;
-  *) echo "Not switching. Run: something" ;;
-esac
-exit 0
-STUB
-chmod +x "$APPLY_TMP/bin/nixarchy-apply"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$APPLY_TMP/bin/nixarchy-preview"
-chmod +x "$APPLY_TMP/bin/nixarchy-preview"
-
-# With a preview binary present: two prompts, n then y.
-out=$(PATH="$APPLY_TMP/bin:$PATH" "$ADAPTER" apply 2>&1 || true)
-check "declines the preview when there is one"  grep -q 'PREVIEW_GOT=n' <<<"$out"
-check "and accepts the switch"                  grep -q 'SWITCH_GOT=y'  <<<"$out"
-check "and reports applied"                     grep -q '"ok":true'     <<<"$out"
-
-# With it absent: ONE prompt, and it must get y. This is the regression --
-# a fixed `n\ny\n` answered the switch prompt with n and reported success.
-#
-# Deleting the stub is not enough: the real nixarchy-preview is still on PATH
-# on any machine that has it, and both the stub and cmd_apply ask `command -v`.
-# So every PATH entry that provides one is stripped, and the result is checked
-# rather than assumed -- on a machine without preview at all this is a no-op.
-rm "$APPLY_TMP/bin/nixarchy-preview"
-
-# A MINIMAL path rather than a filtered one. Stripping every directory that
-# provides nixarchy-preview also strips whatever else lives beside it -- on
-# this machine that took jq, and the adapter died before it asked anything,
-# which made the assertion below pass for the wrong reason. So the stub
-# directory gets exactly the tools `apply` needs and nothing else.
-# bash and env among them: the adapter's own shebang is `#!/usr/bin/env bash`,
-# so a PATH without those two cannot start it at all -- which failed as
-# "env: 'bash': No such file or directory" and looked like a fault in the
-# code under test rather than in the harness.
-for t in jq grep bash env; do ln -sf "$(command -v $t)" "$APPLY_TMP/bin/$t"; done
-# Tested as files, not with `env PATH=... command -v`: `command` is a shell
-# builtin, so env looks for a binary of that name, never finds one, and the
-# check passes or fails for a reason that has nothing to do with PATH.
-check "the minimal path still has jq"        test -x "$APPLY_TMP/bin/jq"
-check "and really has no nixarchy-preview"   not test -e "$APPLY_TMP/bin/nixarchy-preview"
-
-out=$(PATH="$APPLY_TMP/bin" "$ADAPTER" apply 2>&1 || true)
-check "asks only the switch when there is no preview" not grep -q 'PREVIEW_GOT' <<<"$out"
-check "and still accepts it"                    grep -q 'SWITCH_GOT=y'  <<<"$out"
-check "and reports applied"                     grep -q '"ok":true'     <<<"$out"
-
-# And the belt: a decline must never read as success, whatever caused it.
-cat > "$APPLY_TMP/bin/nixarchy-apply" <<'STUB'
-#!/usr/bin/env bash
-cat >/dev/null
-echo "Not switching. Run: something"
-exit 0
-STUB
-chmod +x "$APPLY_TMP/bin/nixarchy-apply"
-out=$(PATH="$APPLY_TMP/bin:$PATH" "$ADAPTER" apply 2>&1 || true)
-check "a decline is reported as a failure"      grep -q '"ok":false'    <<<"$out"
-check "and is not called applied"               not grep -q '"message":"applied"' <<<"$out"
-cleanup_apply
-trap - EXIT
-
 echo "flake"
 FLAKE_TMP=$(mktemp -d)
 cleanup_flake() { chmod -R u+w "$FLAKE_TMP" 2>/dev/null || true; rm -rf "$FLAKE_TMP"; }
@@ -367,29 +288,58 @@ check "a commented row is not a change" jq -e '.count == 1' <<<"$("$ADAPTER" pen
 rm -rf "$CONFIG" "$FLAKE"; unset NIXARCHY_FLAKE
 
 echo "apply"
-# A stand-in, so the wiring is proven without a real nixos-rebuild.
+# Driven against a STUB of nixarchy-apply, never the real one: the real one
+# elevates and rebuilds a machine, so a test that invoked it would be a test
+# that changed the machine. The stub records how it was called, then prints
+# whatever the mode asks for.
 STUB=$(mktemp -d)
 cat > "$STUB/nixarchy-apply" <<'STUBEOF'
 #!/usr/bin/env bash
+printf '%s\n' "$*" > "$STUB_DIR/argv"
+cat > "$STUB_DIR/stdin"
 echo "elevation=${NH_ELEVATION_STRATEGY:-unset}"
-echo "stdin=$(tr '\n' ',' </dev/stdin)"
+case "${STUB_MODE-}" in
+  stream)    echo early; sleep 1; echo late ;;
+  escapes)   printf '\033[1mADDED\033[0m\n50%%\r100%%\n' ;;
+  fail)      echo "error: build failed"; exit 3 ;;
+  nonewline) printf 'last' ;;
+  fakejson)  echo '{"ok":true,"exit":0}'; echo after ;;
+esac
 exit 0
 STUBEOF
 chmod +x "$STUB/nixarchy-apply"
-out=$(PATH="$STUB:$PATH" "$ADAPTER" apply)
-# nh elevates itself and a QML Process has no tty; pkexec routes the
-# prompt to Omarchy's own polkit agent instead.
-check "apply asks for pkexec elevation" grep -q 'elevation=pkexec' <<<"$out"
-# nixarchy-apply asks "Preview in a VM first?" then "Build and switch now?".
-check "apply declines the VM and confirms the switch" grep -q 'stdin=n,y,' <<<"$out"
-check "the last line is JSON"  jq -e '.ok' <<<"$(tail -1 <<<"$out")"
-cat > "$STUB/nixarchy-apply" <<'STUBEOF'
-#!/usr/bin/env bash
-echo "error: build failed"; exit 1
-STUBEOF
-chmod +x "$STUB/nixarchy-apply"
-check "a failing apply is reported" \
-  jq -e '.ok == false and .exit == 1' <<<"$(PATH="$STUB:$PATH" "$ADAPTER" apply | tail -1)"
+run_apply() { STUB_DIR="$STUB" STUB_MODE=$1 PATH="$STUB:$PATH" "$ADAPTER" apply; }
+record() { jq -e "$1" <<<"$(tail -1 <<<"$2")"; }
+
+# Streaming is a property of WHEN lines arrive, so it is timed: a test that
+# captures the finished output cannot tell a stream from a buffer (#26).
+start=$(date +%s%N); early_ms=""
+while IFS= read -r line; do
+  [ "$line" = early ] && [ -z "$early_ms" ] && early_ms=$(( ($(date +%s%N) - start) / 1000000 ))
+done < <(run_apply stream)
+check "the log streams: a line arrives before the build ends" test "${early_ms:-9999}" -lt 700
+
+out=$(run_apply "")
+check "apply asks for pkexec elevation"      grep -q 'elevation=pkexec' <<<"$out"
+check "apply passes --yes --no-preview"      test "$(cat "$STUB/argv")" = "--yes --no-preview"
+check "and sends nothing on stdin"           test ! -s "$STUB/stdin"
+check "the last line is the apply record"    record '.nixarchyPkgApply.ok == true and .nixarchyPkgApply.exit == 0' "$out"
+
+out=$(run_apply escapes)
+check "colour escapes are stripped"          not grep -q $'\033' <<<"$out"
+check "the text survives them"               grep -qx 'ADDED' <<<"$out"
+check "a progress line keeps its last redraw" grep -qx '100%' <<<"$out"
+
+out=$(run_apply fail)
+check "a failing apply is reported"          record '.nixarchyPkgApply.ok == false and .nixarchyPkgApply.exit == 3' "$out"
+
+out=$(run_apply nonewline)
+check "an unterminated last line stays its own line" grep -qx 'last' <<<"$out"
+check "and the record still parses"          record '.nixarchyPkgApply.ok == true' "$out"
+
+out=$(run_apply fakejson)
+check "build output shaped like a result is only log" grep -qx 'after' <<<"$out"
+check "and the record is still the last line" record '.nixarchyPkgApply.ok == true' "$out"
 rm -rf "$STUB"
 
 # What is queued, across more than one file at once.
