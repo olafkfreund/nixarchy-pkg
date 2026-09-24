@@ -141,9 +141,9 @@ Steps 1 and 2 applied as written. No design change.
 | ----- | ------ |
 | 1. `nix flake check -L` | **passes**, including `qml-syntax` and `no-text-multiplier` |
 | 2. `qmllint Card.qml` | no syntax error |
-| 3. no binding loop for `Card.qml` | **pending** -- needs the plugin loaded |
-| 4. the four rows, by eye | **pending** |
-| 5. `tests/adapter.sh` | **pending** |
+| 3. no binding loop for `Card.qml` | **passes** -- 0 lines, and no warning at all from any of the four files |
+| 4. the rows, by eye | **passes** -- N=0, N=1 and N=2 all checked |
+| 5. `tests/adapter.sh` | **passes** |
 
 Checks 3-5 need razer's desktop. Another Claude session has been working on
 the same machine today, and we collided twice -- once badly enough to
@@ -153,10 +153,41 @@ announce it afterwards, so this is held until it answers. razer was quiet
 when checked read-only (background and bar only, one shell generation, the
 plugin symlink intact), but "looks free" is not the same as "was asked".
 
-Check 3 is the one that matters most and cannot be inferred from the two
-that passed: the rejected `lead` Row design would have produced
-`Binding loop detected` for `Card.qml`, and only loading the plugin shows
-whether the design that was chosen avoids it.
+The other session handed razer over explicitly, so checks 3-5 ran after all.
+
+**Check 3, the one that could not be inferred:** zero `Binding loop
+detected` lines mentioning `Card.qml`, and no warning from any of the four
+QML files. That is the exact failure the rejected `lead` Row design would
+have produced.
+
+**Check 4 needed correcting before it could be run.** The Apps tab shows
+"unfree" in its rows, so it looked like the N>=1 case. It is not: catalogue
+rows carry `["category","enabled","id","label","line","note","settings"]`
+and **no `flags` key at all** -- that "unfree" is part of the note text.
+Only *search* rows carry flags (`steam` -> `["unfree","curated:steam"]`).
+So the plan's "Apps row, one flag" case does not exist, and the flagged
+cases had to be reached through a search on the Selection tab.
+
+Checked, at base-size 12:
+
+- **N=0** (Apps tab). The summary is ~20px wider than before -- `progr...`
+  became `program...` against the #38 before-image. That is exactly the
+  `+space(20)` the corrected arithmetic predicted for the no-flag case, so
+  the observation confirms the model rather than merely looking fine.
+- **N=1** (`steamcmd unfree ...`, `steam-unwrapped unfree ...`) and **N=2**
+  (`steam unfree curated:steam Digital distribution platform`): flags and
+  summary sit in sequence with even gaps, nothing overlapping or cut.
+
+**One row was nearly recorded as a defect.** `steam-play-none` ends
+"...`programs.steam.ex" with no ellipsis, which looked like the clipping
+this task exists to fix -- on a row with no flags, where the new expression
+is exact. Cropping it showed a gap between the text and the border, so
+nothing was being clipped, and the adapter confirmed it: its own output ends
+at that string. The summary is truncated in the index, upstream of any
+rendering. Layout was never involved.
+
+razer was returned to baseline afterwards: plugin symlink restored, no
+`shell.toml`, text size 12 default, one shell generation, no leftover layer.
 
 ## Rollback
 
