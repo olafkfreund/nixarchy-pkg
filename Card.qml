@@ -185,24 +185,48 @@ Item {
         // unfree, broken, and the curated cross-reference: picking the raw
         // package gets a bare binary where the app row gets the module.
         // Worth saying before it is queued, not after it is built.
-        Repeater {
-          model: modelData.flags || []
-          Text {
-            required property string modelData
-            anchors.verticalCenter: parent.verticalCenter
-            text: modelData
-            textFormat: Text.PlainText
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.title
-            color: modelData === "broken" ? Color.urgent
-                 : modelData === "unfree" ? Color.accent
-                 : root.dim
+        // Wrapped so the summary below can subtract what the flags actually
+        // take. `visible` is load-bearing, not cosmetic: a Row ignores an
+        // invisible child when positioning, so with no flags the outer row
+        // is back to three children and two gaps, which is what the
+        // `? 3 : 2` below counts (#45).
+        //
+        // `modelData` here is the ROW, not a flag: the Repeater's delegate
+        // declares `required property string modelData`, which shadows it
+        // one level further in. Do not move this binding inside.
+        Row {
+          id: flags
+          anchors.verticalCenter: parent.verticalCenter
+          spacing: Style.space(10)
+          visible: (modelData.flags || []).length > 0
+
+          Repeater {
+            model: modelData.flags || []
+            Text {
+              required property string modelData
+              anchors.verticalCenter: parent.verticalCenter
+              text: modelData
+              textFormat: Text.PlainText
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.title
+              color: modelData === "broken" ? Color.urgent
+                   : modelData === "unfree" ? Color.accent
+                   : root.dim
+            }
           }
         }
 
         Text {
           anchors.verticalCenter: parent.verticalCenter
-          width: parent.width - name.width - Style.font.heading - Style.space(40)
+          // Every term is something on this row: the name, the state glyph,
+          // the flags, and one gap per boundary between them. The old
+          // Style.space(40) was right for no arrangement of this row -- 20px
+          // too generous with no flags and too mean with any -- because the
+          // Row's anchors already exclude its margins, so subtracting them
+          // again double-counted (#45).
+          width: Math.max(0, parent.width - name.width - Style.font.heading
+                             - flags.width
+                             - Style.space(10) * (flags.visible ? 3 : 2))
           elide: Text.ElideRight
           text: modelData.summary || modelData.note || modelData.type
                 || modelData.line || modelData.category || ""

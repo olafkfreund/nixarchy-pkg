@@ -133,6 +133,31 @@ segfaults quickshell on this host (nixarchy#847).
    `bin/nixarchy-pkg`, untouched here, so it proves nothing broke beside
    this.
 
+## Verification results
+
+Steps 1 and 2 applied as written. No design change.
+
+| check | result |
+| ----- | ------ |
+| 1. `nix flake check -L` | **passes**, including `qml-syntax` and `no-text-multiplier` |
+| 2. `qmllint Card.qml` | no syntax error |
+| 3. no binding loop for `Card.qml` | **pending** -- needs the plugin loaded |
+| 4. the four rows, by eye | **pending** |
+| 5. `tests/adapter.sh` | **pending** |
+
+Checks 3-5 need razer's desktop. Another Claude session has been working on
+the same machine today, and we collided twice -- once badly enough to
+invalidate a verification run for #43 and to leave a wrong `shell.toml` in
+place. I told that session I would ask before using razer again rather than
+announce it afterwards, so this is held until it answers. razer was quiet
+when checked read-only (background and bar only, one shell generation, the
+plugin symlink intact), but "looks free" is not the same as "was asked".
+
+Check 3 is the one that matters most and cannot be inferred from the two
+that passed: the rejected `lead` Row design would have produced
+`Binding loop detected` for `Card.qml`, and only loading the plugin shows
+whether the design that was chosen avoids it.
+
 ## Rollback
 
 One commit touching `Card.qml` only. No adapter change, no config format,
