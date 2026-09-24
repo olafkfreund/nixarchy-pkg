@@ -502,6 +502,75 @@ rm -rf "$PCFG" "$PBASE"
 
 # The shape that caused it, so the next one is caught before it ships.
 #
+# The adapter's answer is all the panel knows about a write. These cases
+# assert the two halves of that contract: a reported write really happened,
+# and a call that reports nothing changed really changed nothing -- content,
+# mode, owner and symlink alike (#39).
+echo "a write keeps the file it wrote to"
+CONFIG=$(fresh_config); export XDG_CONFIG_HOME="$CONFIG"
+APPSNIX="$CONFIG/nixarchy/apps.nix"
+
+# awk inserts before a line that is exactly `}`. A module closing any other
+# way used to be copied through unchanged, pass --parse BECAUSE it was
+# unchanged, and be reported as written.
+before=$(md5sum < "$APPSNIX")
+sed -i -E 's/^\}[[:space:]]*$/}  # the end/' "$APPSNIX"
+edited=$(md5sum < "$APPSNIX")
+check "the fixture really does close differently" not test "$edited" = "$before"
+out=$("$ADAPTER" opt set services.openssh.enable true 2>&1 || true)
+check "refuses a module it cannot find the end of" jq -e '.ok == false' <<<"$out"
+check "and says which brace it means" \
+  jq -e '.error | contains("does not close on a line of its own")' <<<"$out"
+check "and the file is byte-identical" test "$(md5sum < "$APPSNIX")" = "$edited"
+rm -rf "$CONFIG"
+
+# mv is rename(2): it replaces the target inode, so the file comes out with
+# the 0600 mktemp gave the temp file and the invoking user as its owner.
+CONFIG=$(fresh_config); export XDG_CONFIG_HOME="$CONFIG"
+APPSNIX="$CONFIG/nixarchy/apps.nix"
+chmod 644 "$APPSNIX"
+"$ADAPTER" opt set services.openssh.ports "[ 22 ]" >/dev/null 2>&1 || true
+check "opt set keeps the file's mode" test "$(stat -c %a "$APPSNIX")" = 644
+"$ADAPTER" opt replace services.openssh.ports "[ 2222 ]" >/dev/null 2>&1 || true
+check "opt replace keeps the file's mode" test "$(stat -c %a "$APPSNIX")" = 644
+rm -rf "$CONFIG"
+
+# Someone keeping apps.nix in a dotfiles repo: the write must reach what the
+# link points at, not replace the link with a regular file.
+CONFIG=$(fresh_config); export XDG_CONFIG_HOME="$CONFIG"
+APPSNIX="$CONFIG/nixarchy/apps.nix"
+REAL=$(mktemp -d)/apps.nix
+mv "$APPSNIX" "$REAL"; ln -s "$REAL" "$APPSNIX"
+"$ADAPTER" opt set services.openssh.enable true >/dev/null 2>&1 || true
+check "opt set leaves a symlinked apps.nix a symlink" test -L "$APPSNIX"
+check "and the option reached the file it points at" \
+  grep -q '#@opt services.openssh.enable$' "$REAL"
+rm -rf "$CONFIG" "$(dirname "$REAL")"
+
+# "nothing was changed" has to mean it. A failed add used to leave behind
+# both a mode change and a flake.lock that nix created on its way to
+# failing.
+FKW=$(fresh_flake)
+chmod 644 "$FKW/flake.nix"
+check "the fixture starts without a lock" not test -e "$FKW/flake.lock"
+out=$(NIXARCHY_FLAKE="$FKW" "$ADAPTER" flake add nope "path:$FLAKE_TMP/does-not-exist" 2>&1 || true)
+check "a failed add is reported as a failure" jq -e '.ok == false' <<<"$out"
+check "and leaves no flake.lock behind"       not test -e "$FKW/flake.lock"
+check "and keeps flake.nix's mode"            test "$(stat -c %a "$FKW/flake.nix")" = 644
+
+# Removal writes too, and used to do it with sed -i -- which copies the mode
+# across but still replaces the inode, losing the owner. Not tested through a
+# symlink: `nix flake metadata` refuses a flake whose flake.nix is a symlink
+# out of the git repo, so the baseline check turns it away before any of this
+# runs. Mode is the half that is reachable.
+FKS=$(fresh_flake)
+NIXARCHY_FLAKE="$FKS" "$ADAPTER" flake add lib "path:$FLAKE_TMP/lib" >/dev/null 2>&1 || true
+chmod 644 "$FKS/flake.nix"
+NIXARCHY_FLAKE="$FKS" "$ADAPTER" flake remove lib >/dev/null 2>&1 || true
+check "flake remove takes the line out"   \
+  test "$(grep -c '#@flake-input lib$' "$FKS/flake.nix" || true)" = 0
+check "and keeps flake.nix's mode"        test "$(stat -c %a "$FKS/flake.nix")" = 644
+
 # A pipeline whose FIRST command exits non-zero on a normal outcome --
 # `diff` finding differences, `grep` finding nothing, `head` closing the pipe
 # under it -- is a failure under `set -euo pipefail` (bin/nixarchy-pkg:39).
@@ -518,6 +587,15 @@ heads_a_pipeline() { code | grep -qE '^[[:space:]]*(diff|comm|cmp)[[:space:]][^|
 pipes_into_head() { code | grep -qE '(grep|diff|comm|cmp)[[:space:]][^|]*\|[[:space:]]*head([[:space:]]|$)'; }
 check "no diff, comm or cmp at the head of a pipeline" not heads_a_pipeline
 check "nothing is piped into head"                     not pipes_into_head
+
+# And the shape that caused #39: mv onto a config path replaces the inode,
+# taking the mode, the owner and any symlink with it. sed -i does the same
+# by way of its own temp file. Every writer here copies onto the live path
+# instead, the way the restores always have.
+renames_onto_a_config() { code | grep -qE '\bmv[[:space:]]+"'; }
+edits_in_place() { code | grep -qE '\bsed[[:space:]]+-i\b'; }
+check "no mv onto a file the adapter owns" not renames_onto_a_config
+check "no sed -i"                          not edits_in_place
 
 echo "failure is a value, not an exit code"
 out=$("$ADAPTER" nosuchcommand); rc=$?

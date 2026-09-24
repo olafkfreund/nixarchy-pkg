@@ -125,6 +125,39 @@ Self-contained: everything needed to implement this is below.
    `check "..."` / `md5sum` idiom (`:98`, `:156`, `:352`). -> verify by
    running the suite on razer.
 
+## Deviations found during implementation
+
+Recorded in the same commit as the code, per the workflow.
+
+**Step 5/6 were insufficient, and the reason was upstream of them.** The
+`had_lock` flag was being recorded *after* `cmd_flake_add`'s baseline
+`nix flake metadata "$dir"` check -- and that check **writes the lock file it
+reads** when the flake has none. So `had_lock` came out `true` on a flake
+that had no lock when the user asked, the restore dutifully put back a
+`flake.lock` this very call had caused to exist, and the approved outcome
+("no file created that was absent before") was still not met. Caught by the
+new test, which failed on the first run against razer.
+
+Rejected fix: `--no-update-lock-file` on the baseline check. It reads as the
+obvious answer -- "does it evaluate *as it stands*" is exactly what the flag
+means -- but a flake with no lock cannot produce metadata without locking,
+so it turned away the flakes the check exists to accept. Six existing tests
+failed. Reverted.
+
+Applied fix: capture the boolean where `lock` is defined, before any `nix`
+call, in both `cmd_flake_add` (`:878`) and `cmd_flake_remove` (`:980`); the
+backup copy stays where it was, now guarded by the flag
+(`$had_lock && cp "$lock" "$block" || :`). Two lines each.
+
+**One planned test was invalid and was replaced.** "flake remove leaves a
+symlinked flake.nix a symlink" asserts an unreachable state: `nix flake
+metadata` refuses a flake whose `flake.nix` is a symlink out of the git
+repo (*"Path ... does not exist in Git repository"*), so the baseline check
+turns it away before any adapter code runs. The spec already recorded that
+symlinked `flake.nix` is blocked upstream; the test contradicted it.
+Replaced with the reachable half -- `flake remove` keeps the file's mode --
+and the reason is a comment in the suite so nobody writes it again.
+
 ## Tests
 
 Run on **razer** over ssh, never locally, never p620.

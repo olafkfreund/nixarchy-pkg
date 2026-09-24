@@ -555,7 +555,24 @@ cmd_opt_set() {
     }
     { print }
   ' "$APPS" > "$tmp"
-  mv "$tmp" "$APPS"
+  # cp, not mv: mv is rename(2), which replaces the target inode and takes
+  # the 0600 mktemp gave us -- and the invoking user as owner -- with it. A
+  # root-owned /etc/nixos file edited through a writable directory would
+  # come out user-owned, and a symlinked apps.nix would be replaced by a
+  # real file with the dotfiles original left untouched. cp truncates in
+  # place, so inode, mode, owner and the symlink all survive. Same idiom
+  # the restores below already use (#39).
+  cp "$tmp" "$APPS"
+
+  # awk only inserts before a line that is exactly `}`. A module closing
+  # `}  # the end` matched nothing, the file was copied through unchanged,
+  # --parse passed BECAUSE it was unchanged, and this function reported
+  # `set ...` over a file it never touched. `opt replace` has always
+  # re-checked; this one never did (#39).
+  if ! grep -q "#@opt ${path//./\\.}\$" "$APPS"; then
+    cp "$backup" "$APPS"
+    die "could not find where to add $path in $APPS -- its module does not close on a line of its own. Nothing was changed."
+  fi
 
   # Nix's own words, not a guess at them. `--parse` also resolves names, so
   # the commonest failure here is not a syntax error at all: a value that
@@ -632,7 +649,7 @@ cmd_opt_replace() {
       print
     }
   ' "$APPS" > "$tmp"
-  mv "$tmp" "$APPS"
+  cp "$tmp" "$APPS"   # not mv; see cmd_opt_set (#39)
 
   if ! grep -q "#@opt ${path//./\\.}\$" "$APPS"; then
     cp "$backup" "$APPS"
@@ -854,6 +871,12 @@ cmd_flake_add() {
 
   local dir="${NIXARCHY_FLAKE:-/etc/nixos}" file lock
   file="$dir/flake.nix"; lock="$dir/flake.lock"
+  # Before ANY nix call. `nix flake metadata` writes the lock it reads when
+  # the flake has none, so asking later would record a lock this very call
+  # had caused to exist -- and a failure would then "restore" it, leaving a
+  # file behind that was not there when the user asked (#39).
+  local had_lock=false
+  [ -f "$lock" ] && had_lock=true || :
   [ -w "$file" ] || die "cannot write $file"
 
   local at; at=$(flake_anchor "$file") ||
@@ -885,10 +908,13 @@ cmd_flake_add() {
   cp "$file" "$bnix"
   # `|| :` because a bare `[ -f ] && cp` that tests false returns 1, which
   # under errexit ends the command here rather than skipping a copy.
-  [ -f "$lock" ] && cp "$lock" "$block" || :
+  # Backed up only if it was the user's to begin with. `[ -s "$block" ]`
+  # used to stand in for this and could not tell "there was no lock" from
+  # "the lock was empty".
+  $had_lock && cp "$lock" "$block" || :
   restore_flake() {
     cp "$bnix" "$file"
-    [ -s "$block" ] && cp "$block" "$lock" || :
+    if $had_lock; then cp "$block" "$lock"; else rm -f "$lock"; fi
   }
 
   # After the outer brace, so it lands at the top level of the flake's own
@@ -899,7 +925,7 @@ cmd_flake_add() {
   # Through the environment, not -v, which would process escapes in it.
   NIXARCHY_PKG_LINE="$line" awk -v at="$at" \
     'NR == at { print; print ENVIRON["NIXARCHY_PKG_LINE"]; next } { print }' \
-    "$file" > "$tmp" && mv "$tmp" "$file"
+    "$file" > "$tmp" && cp "$tmp" "$file"   # not mv; see cmd_opt_set (#39)
 
   if ! nix-instantiate --parse "$file" >/dev/null 2>"$err"; then
     restore_flake
@@ -942,6 +968,12 @@ cmd_flake_remove() {
 
   local dir="${NIXARCHY_FLAKE:-/etc/nixos}" file lock
   file="$dir/flake.nix"; lock="$dir/flake.lock"
+  # Before ANY nix call. `nix flake metadata` writes the lock it reads when
+  # the flake has none, so asking later would record a lock this very call
+  # had caused to exist -- and a failure would then "restore" it, leaving a
+  # file behind that was not there when the user asked (#39).
+  local had_lock=false
+  [ -f "$lock" ] && had_lock=true || :
   grep -qE "#@flake-input ${name}\$" "$file" ||
     die "no input '$name' declared here by this tool. Nothing was changed."
 
@@ -995,14 +1027,20 @@ cmd_flake_remove() {
     fi
   fi
 
-  local err bnix block
-  err=$(mktemp); bnix=$(mktemp); block=$(mktemp)
+  local err bnix block tmp
+  err=$(mktemp); bnix=$(mktemp); block=$(mktemp); tmp=$(mktemp)
   # shellcheck disable=SC2064  # fixed at trap time, deliberately
-  trap "rm -f '$err' '$bnix' '$block'" RETURN
+  trap "rm -f '$err' '$bnix' '$block' '$tmp'" RETURN
   cp "$file" "$bnix"
-  [ -f "$lock" ] && cp "$lock" "$block" || :
+  # See cmd_flake_add: recorded up front, not inferred from the backup's
+  # size (#39).
+  $had_lock && cp "$lock" "$block" || :
 
-  sed -i -E "/#@flake-input ${name}\$/d" "$file"
+  # Not `sed -i`: it writes a temp file beside the target and renames it, so
+  # although GNU sed copies the mode across, the inode is still replaced --
+  # which loses the owner and turns a symlinked flake.nix into a real file.
+  # Same reason the other three writers use cp (#39).
+  sed -E "/#@flake-input ${name}\$/d" "$file" > "$tmp" && cp "$tmp" "$file"
 
   if ! nix-instantiate --parse "$file" >/dev/null 2>"$err"; then
     cp "$bnix" "$file"
@@ -1010,7 +1048,7 @@ cmd_flake_remove() {
   fi
   if ! nix flake metadata "$dir" >/dev/null 2>"$err"; then
     cp "$bnix" "$file"
-    [ -s "$block" ] && cp "$block" "$lock" || :
+    if $had_lock; then cp "$block" "$lock"; else rm -f "$lock"; fi
     die "the flake stopped evaluating without '$name', so nothing was changed: $(nix_why "$err")"
   fi
 
