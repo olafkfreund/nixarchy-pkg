@@ -101,7 +101,12 @@ index_stale() {
 # than being mistaken for the service.
 rows_tsv() {
   local file=$1 kind=$2
-  [ -f "$file" ] || return 0
+  [ -e "$file" ] || return 0
+  # A file that exists and cannot be read is not an empty one -- the rule
+  # pending_changes already follows at :1146. Both callers below discard
+  # this status (process substitution swallows it), so cmd_state asks for
+  # itself; this is here so the next caller does not inherit the bug (#41).
+  [ -r "$file" ] || return 1
   awk -F'\t' -v kind="$kind" '
     # A section header, e.g. `  # \u2500\u2500 Network \u2500\u2500\u2500\u2500`. The rule is the
     # box-drawing character itself, so a comment that merely starts with a
@@ -304,6 +309,15 @@ cmd_toggle() {
   local kind=${1-} id=${2-}
   [ -n "$kind" ] && [ -n "$id" ] || die "usage: nixarchy-pkg toggle app|service <id>"
   case "$kind" in app|service) ;; *) die "toggle takes app or service, not '$kind'" ;; esac
+  # The grep below escapes only dots, so a metacharacter matches rows it was
+  # never meant to -- `[a-z]*` matches 54 of them in the shipped template.
+  # The outcome is right today only because the external writer refuses the
+  # id, which is correctness living outside this repository. Refusing what
+  # cannot be an id is this tool's own business; deciding whether one exists
+  # is the writer's (#41).
+  case "$id" in
+    *[!a-zA-Z0-9._-]* | "" ) die "'$id' is not a valid $kind id" ;;
+  esac
 
   # Asked of the file rather than remembered, so two panels open at once
   # cannot disagree about which way the toggle goes.
@@ -486,9 +500,17 @@ cmd_opt_describe() {
 #
 # Returns 1 instead of dying: it runs inside $(...), where die's object
 # would become the value.
+# Two refusals, because the callers below must not tell someone who forged a
+# marker to put their value on one line (#41).
+readonly MARKER_REFUSAL="a value cannot contain '#@' -- that is how this tool marks the options it wrote, and a value carrying one would make the panel name a different option than the one it changes. Nothing was changed."
 readonly FLAT_REFUSAL="a multi-line value with '' or # cannot be written on one line without changing its meaning -- put it on one line yourself. Nothing was changed."
 flat_value() {
   local v=$1
+  # `#@` is this tool's marker and a value must not be able to forge one:
+  # extras_tsv reads the FIRST marker on a line and nixarchy-opt-remove the
+  # LAST, so a forged one makes the panel name one option and delete
+  # another. 2, not 1, so the caller can say WHICH refusal this is (#41).
+  [[ $v == *'#@'* ]] && return 2
   if [[ $v == *$'\n'* ]] && [[ $v == *"''"* || $v == *'#'* ]]; then
     return 1
   fi
@@ -524,7 +546,10 @@ cmd_opt_set() {
     die "$path is already in $APPS -- remove it first"
   fi
 
-  value=$(flat_value "$value") || die "$FLAT_REFUSAL"
+  value=$(flat_value "$value") || case $? in
+    2) die "$MARKER_REFUSAL" ;;
+    *) die "$FLAT_REFUSAL" ;;
+  esac
 
   if [ -z "${value//[[:space:]]/}" ]; then
     state_with true "kept the default for $path -- nothing written"
@@ -622,7 +647,10 @@ cmd_opt_replace() {
   grep -q "#@opt ${path//./\\.}\$" "$APPS" ||
     die "$path is not in $APPS -- use 'opt set' to add it"
 
-  value=$(flat_value "$value") || die "$FLAT_REFUSAL"
+  value=$(flat_value "$value") || case $? in
+    2) die "$MARKER_REFUSAL" ;;
+    *) die "$FLAT_REFUSAL" ;;
+  esac
 
   # BEFORE anything is touched. This is the whole point of the command.
   local backup; backup=$(mktemp)
@@ -1290,6 +1318,17 @@ cmd_state() {
   local stale=false
   index_stale && stale=true
 
+  # Process substitution swallows a callee's exit status, so a read that
+  # fails inside the jq below cannot be noticed there -- `$(cat <(f))` is 0
+  # however f ended. Asked here instead, where the answer can still reach
+  # the object. `-e` first: a file that is simply absent is the ordinary
+  # first-run case, and an empty catalogue is the truth about it (#41).
+  local unreadable=()
+  [ -e "$APPS" ]     && [ ! -r "$APPS" ]     && unreadable+=("$APPS")     || :
+  [ -e "$SERVICES" ] && [ ! -r "$SERVICES" ] && unreadable+=("$SERVICES") || :
+  local unread_msg=""
+  [ ${#unreadable[@]} -gt 0 ] && unread_msg="could not read ${unreadable[*]} -- it exists but is not readable, so what it holds is not shown here" || :
+
   jq -n \
     --rawfile apps <(rows_tsv "$APPS" app) \
     --rawfile services <(rows_tsv "$SERVICES" service) \
@@ -1298,6 +1337,7 @@ cmd_state() {
     --argjson stale "$stale" \
     --arg appsFile "$APPS" \
     --arg servicesFile "$SERVICES" \
+    --arg unreadable "$unread_msg" \
     --arg channel "$(machine_channel)" \
     --rawfile flakes <(cmd_flake_list) \
     '
@@ -1311,6 +1351,12 @@ cmd_state() {
       indexStale: $stale,
       files: { apps: $appsFile, services: $servicesFile },
       channel: $channel,
+      # Absent when every file read, so an ordinary state carries no
+      # message. ok stays true: one unreadable file must not cost the user
+      # the tabs that were fine, or the panel they would fix it from (#41).
+    }
+    + (if $unreadable == "" then {} else { message: $unreadable } end)
+    + {
       # What this tool declared in the system flake. Read from the same
       # command a terminal calls, so the two cannot disagree.
       flakes: (($flakes | fromjson).inputs // []),
