@@ -14,13 +14,18 @@ jobs:
         with:
           extra_nix_config: "experimental-features = nix-command flakes"
 
-      # shellcheck, the manifest schema, and the no-hex-colour rule. The
-      # adapter's own suite is not here: it reads /etc/nixarchy, which only
-      # exists on a nixarchy machine, and it skips itself elsewhere rather
-      # than passing vacuously.
+      # shellcheck, the manifest schema, the no-hex-colour rule, the
+      # no-text-multiplier rule (#38) and qmllint (#44).
       - run: nix flake check --print-build-logs
 
       - run: nix build .#default --print-build-logs
+
+      # The catalogue sections skip here -- they build from /etc/nixarchy,
+      # which only a nixarchy machine has -- but the flake, search, apply,
+      # draft/reindex, file-mode and source-shape sections build their own
+      # fixtures or stub the writer, so they run. Before #44 the adapter had
+      # no protection at all on a pull request.
+      - run: bash tests/adapter.sh
 
       # The plugin has to survive the shell's own validator, and the rule
       # that bites is that no symlink may appear inside the folder -- which

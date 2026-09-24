@@ -37,8 +37,20 @@ fresh_config() {
   printf '%s' "$dir"
 }
 
-[ -d "$TEMPLATES" ] || { echo "skip: $TEMPLATES not present (not a nixarchy machine)"; exit 0; }
+# The catalogue sections build from this machine's own templates, so they
+# only run on a nixarchy box. The rest -- flake, search, apply, the mode and
+# symlink checks, and the source-shape greps -- build their own fixtures or
+# stub the writer, so they run anywhere. In CI they are the only protection
+# the adapter has on a pull request (#44).
+#
+# The bodies below are NOT re-indented inside their guards, deliberately:
+# bash does not care, and it keeps this diff to the guard lines instead of a
+# 350-line reformat that would bury what actually changed.
+HAVE_CATALOGUE=true
+[ -d "$TEMPLATES" ] || { HAVE_CATALOGUE=false
+  echo "note: $TEMPLATES not present; catalogue sections will be skipped"; }
 
+if $HAVE_CATALOGUE; then
 echo "state"
 CONFIG=$(fresh_config); export XDG_CONFIG_HOME="$CONFIG"
 state=$("$ADAPTER" state)
@@ -101,6 +113,9 @@ check "an unparseable value is refused"    jq -e '.ok == false' <<<"$out"
 check "and the file is byte-identical"     test "$(md5sum < "$APPSNIX")" = "$before"
 rm -rf "$CONFIG"
 
+else
+  echo "skip: needs $TEMPLATES (not a nixarchy machine)"
+fi
 echo "flake"
 FLAKE_TMP=$(mktemp -d)
 cleanup_flake() { chmod -R u+w "$FLAKE_TMP" 2>/dev/null || true; rm -rf "$FLAKE_TMP"; }
@@ -267,6 +282,7 @@ else
   echo "  skip (no search index; run nixarchy-pkg reindex)"
 fi
 
+if $HAVE_CATALOGUE; then
 echo "writers"
 CONFIG=$(fresh_config); export XDG_CONFIG_HOME="$CONFIG"
 on=$("$ADAPTER" toggle app brave)
@@ -416,6 +432,9 @@ printf '\n    # newthing.enable = true;  #@ newthing\n' >> "$CONFIG/nixarchy/app
 check "a commented row is not a change" jq -e '.count == 1' <<<"$("$ADAPTER" pending)"
 rm -rf "$CONFIG" "$FLAKE"; unset NIXARCHY_FLAKE
 
+else
+  echo "skip: needs $TEMPLATES (not a nixarchy machine)"
+fi
 echo "apply"
 # Driven against a STUB of nixarchy-apply, never the real one: the real one
 # elevates and rebuilds a machine, so a test that invoked it would be a test
@@ -477,6 +496,7 @@ rm -rf "$STUB"
 # `pending` came to report only the first file that differed: apps alone was
 # right, services alone was right, and the two together lost one of them.
 # Anything queued in `advanced` had never been counted at all.
+if $HAVE_CATALOGUE; then
 echo "pending across more than one file"
 PCFG=$(fresh_config)
 PBASE=$(mktemp -d); mkdir -p "$PBASE/nixarchy"
@@ -546,6 +566,9 @@ check "opt set leaves a symlinked apps.nix a symlink" test -L "$APPSNIX"
 check "and the option reached the file it points at" \
   grep -q '#@opt services.openssh.enable$' "$REAL"
 rm -rf "$CONFIG" "$(dirname "$REAL")"
+else
+  echo "skip: needs $TEMPLATES (not a nixarchy machine)"
+fi
 
 # "nothing was changed" has to mean it. A failed add used to leave behind
 # both a mode change and a flake.lock that nix created on its way to
@@ -570,6 +593,67 @@ NIXARCHY_FLAKE="$FKS" "$ADAPTER" flake remove lib >/dev/null 2>&1 || true
 check "flake remove takes the line out"   \
   test "$(grep -c '#@flake-input lib$' "$FKS/flake.nix" || true)" = 0
 check "and keeps flake.nix's mode"        test "$(stat -c %a "$FKS/flake.nix")" = 644
+
+# draft and reindex had no test at all, though draft calls writers that
+# create and mutate package files -- the same risk class as `pkg add` and
+# `flake add`, both of which are covered. Stub-driven and fixture-free, so
+# they run anywhere, including CI (#44).
+echo "draft and reindex"
+DSTUB=$(mktemp -d)
+DCFG=$(mktemp -d); mkdir -p "$DCFG/nixarchy"
+: > "$DCFG/nixarchy/apps.nix"; : > "$DCFG/nixarchy/services.nix"
+: > "$DCFG/nixarchy/advanced.nix"
+
+for w in nixarchy-pkg-new nixarchy-pkg-undraft; do
+  cat > "$DSTUB/$w" <<'WEOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$STUB_DIR/argv-$(basename "$0")"
+[ "${WRITER_MODE-}" = "fail" ] && { echo "the writer refused it" >&2; exit 4; }
+echo "wrote it"
+WEOF
+  chmod +x "$DSTUB/$w"
+done
+
+draft() { PATH="$DSTUB:$PATH" STUB_DIR="$DSTUB" XDG_CONFIG_HOME="$DCFG" "$ADAPTER" draft "$@"; }
+
+out=$(draft new https://example.invalid/thing.tar.gz 2>&1 || true)
+check "draft new reports ok"       jq -e '.ok == true' <<<"$out"
+check "and forwards its argument"  \
+  test "$(cat "$DSTUB/argv-nixarchy-pkg-new")" = "https://example.invalid/thing.tar.gz"
+
+out=$(draft undraft thing 2>&1 || true)
+check "draft undraft reports ok"   jq -e '.ok == true' <<<"$out"
+check "and forwards its argument"  \
+  test "$(cat "$DSTUB/argv-nixarchy-pkg-undraft")" = "thing"
+
+# A writer that refuses must be surfaced, not swallowed.
+out=$(WRITER_MODE=fail draft new https://example.invalid/x.tar.gz 2>&1 || true)
+check "a refusing writer is a failure"  jq -e '.ok == false' <<<"$out"
+check "and its words are carried out"   \
+  jq -e '(.error // .message) | contains("the writer refused it")' <<<"$out"
+
+check "draft with no action is a usage error" \
+  jq -e '.ok == false and (.error | contains("new or undraft"))' <<<"$(draft 2>&1 || true)"
+check "draft with an unknown action too" \
+  jq -e '.ok == false' <<<"$(draft sideways thing 2>&1 || true)"
+check "pkg with an unknown action too" \
+  jq -e '.ok == false and (.error | contains("add or remove"))' \
+  <<<"$(PATH="$DSTUB:$PATH" XDG_CONFIG_HOME="$DCFG" "$ADAPTER" pkg sideways thing 2>&1 || true)"
+
+# reindex: a search tool that does nothing leaves the index stale, and the
+# adapter must say so rather than claim it rebuilt. A review of #39 read
+# this the other way round, so it is worth pinning.
+cat > "$DSTUB/nixarchy-search" <<'SEOF'
+#!/usr/bin/env bash
+exit 0
+SEOF
+chmod +x "$DSTUB/nixarchy-search"
+RCACHE=$(mktemp -d)
+out=$(PATH="$DSTUB:$PATH" XDG_CACHE_HOME="$RCACHE" XDG_CONFIG_HOME="$DCFG" \
+      "$ADAPTER" reindex 2>&1 || true)
+check "reindex over a no-op search reports failure" jq -e '.ok == false' <<<"$out"
+check "and says the index is still stale"           jq -e '.indexStale == true' <<<"$out"
+rm -rf "$DSTUB" "$DCFG" "$RCACHE"
 
 # A pipeline whose FIRST command exits non-zero on a normal outcome --
 # `diff` finding differences, `grep` finding nothing, `head` closing the pipe

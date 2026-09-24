@@ -74,6 +74,29 @@
               touch "$out"
             '';
 
+          # ~2300 lines of QML and nothing parsed them: a syntax error
+          # shipped and failed at runtime in the shell, where the symptom is
+          # a plugin that silently never draws (#44).
+          #
+          # qmllint exits 255 on a syntax error and 0 on a clean file, and
+          # its import warnings do not affect that -- which is why they are
+          # not a gate here. qs.Commons and qs.Ui belong to the host shell
+          # and cannot resolve in this sandbox by design, so failing on them
+          # would mean deleting this check within a week.
+          #
+          # -I is for whoever reads a failure, not for the exit code: with
+          # it, two unresolvable host modules is a known condition; without
+          # it, three including QtQuick looks like a broken checker.
+          qml-syntax = pkgs.runCommand "nixarchy-pkg-qml-syntax"
+            { nativeBuildInputs = [ pkgs.qt6.qtdeclarative ]; }
+            ''
+              for f in ${./Menu.qml} ${./Panel.qml} ${./Card.qml} \
+                       ${./PkgModel.qml} ${./OptionForm.qml}; do
+                qmllint -I "${pkgs.qt6.qtdeclarative}/lib/qt-6/qml" "$f" || exit 1
+              done
+              touch "$out"
+            '';
+
           # The menu used to multiply every Style.font token by a flat 1.45.
           # Those tokens already follow `omarchy display text size`, so the
           # multiplier never made the menu scale-aware -- it just held the
