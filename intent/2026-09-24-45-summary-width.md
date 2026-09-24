@@ -20,10 +20,24 @@ The `Row` (`:140`) has `spacing: Style.space(10)` and margins of
 (`width: Style.font.heading`), `name`, a `Repeater` of flags (`:188`), then
 this summary.
 
-With **no** flags there are three children, so two gaps plus two margins is
-exactly `Style.space(40)`. The constant is precisely right for that case --
-**which means it carries no slack whatsoever**. Every flag then adds one
-more gap *and* its own width, and the expression subtracts neither.
+The `Row` is anchored with those margins, so `Row.width` -- and therefore
+`parent.width` as the summary sees it -- **already excludes them**.
+Subtracting them again double-counts. With N flags of widths `Fi`, children
+number 3+N and gaps (2+N):
+
+```
+needed = name.width + Style.font.heading + (2+N)*space(10) + sum(Fi)
+actual = name.width + Style.font.heading + 4*space(10)
+actual - needed = (2 - N)*space(10) - sum(Fi)
+```
+
+With no flags that is `+space(20)`: the summary is ~20px narrower than it
+could be, which is harmless -- it elides slightly early. With one flag it is
+`space(10) - F1`, negative for any real flag, and it worsens from there.
+
+So `Style.space(40)` is **arbitrary**: too generous by 20px with no flags
+and too mean with any. There is no arrangement of this row for which it is
+the correct number.
 
 So on any row with a flag, the summary `Text` believes it has more room than
 the row has. `elide: Text.ElideRight` computes its ellipsis for that wrong
