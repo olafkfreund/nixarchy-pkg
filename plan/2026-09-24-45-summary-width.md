@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 45
 spec: spec/2026-09-24-45-summary-width.md
 ---
