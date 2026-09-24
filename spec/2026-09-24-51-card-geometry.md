@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 51
 intent: intent/2026-09-24-51-card-geometry.md
 ---
