@@ -7,6 +7,10 @@
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAll = nixpkgs.lib.genAttrs systems;
+      # One source of truth for the version: the manifest is what the shell
+      # validates at load, so the derivation reads it rather than repeating
+      # it. Two places stating a number is two places to forget.
+      version = (builtins.fromJSON (builtins.readFile ./manifest.json)).version;
     in
     {
       packages = forAll (system:
@@ -21,8 +25,9 @@
           # Only what the plugin is. The artifacts, the tests and the README
           # are for whoever reads the repository, not for the shell that
           # loads this.
-          nixarchy-pkg = pkgs.runCommand "nixarchy-pkg"
+          nixarchy-pkg = pkgs.runCommand "nixarchy-pkg-${version}"
             {
+              inherit version;
               meta = with pkgs.lib; {
                 description = "Omarchy plugin for managing nixpkgs packages, services and NixOS options";
                 homepage = "https://github.com/olafkfreund/nixarchy-pkg";
