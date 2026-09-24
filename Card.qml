@@ -13,16 +13,12 @@ Item {
 
   property var model: null
   property real maxHeight: 0
-  // The shell's base sizes are tuned for the bar and for small panels.
-  // This is a full-screen list read like a document, so it sets its own
-  // scale rather than inheriting one meant for a 24px-high widget.
-  property real textScale: 1.45
 
   readonly property color fg: Color.menu.text
   readonly property color dim: Qt.darker(fg, 1.6)
   readonly property string fontFamily: Style.font.family
 
-  readonly property real rowHeight: Math.round(px(Style.font.body) * 2.2)
+  readonly property real rowHeight: Math.round(Style.font.heading * 2.2)
   // Deliberately NOT derived from the list's contentHeight: the surface
   // sizes itself from this, the list sizes itself from the surface, and
   // reading the content back closes the circle. Qt reported that as a
@@ -34,14 +30,12 @@ Item {
   // remove` -- clicking an option deleted it instead of opening its form.
   signal requestActivate(int index)
 
-  function px(base) { return Math.round(base * root.textScale) }
-
   // ---- tabs -----------------------------------------------------------
 
   Row {
     id: header
     anchors { top: parent.top; left: parent.left; right: parent.right }
-    height: px(Style.font.body) + Style.space(14)
+    height: Style.font.heading + Style.space(14)
     spacing: Style.space(14)
 
     Repeater {
@@ -68,7 +62,7 @@ Item {
           text: parent.modelData
           textFormat: Text.PlainText
           font.family: root.fontFamily
-          font.pixelSize: root.px(Style.font.body)
+          font.pixelSize: Style.font.heading
           color: parent.current ? Color.menu.selectedText : root.dim
         }
 
@@ -101,7 +95,7 @@ Item {
     textFormat: Text.PlainText
     wrapMode: Text.Wrap
     font.family: root.fontFamily
-    font.pixelSize: root.px(Style.font.caption)
+    font.pixelSize: Style.font.title
     color: root.dim
   }
 
@@ -154,7 +148,7 @@ Item {
         // with two states, so it gets no box pretending otherwise.
         Text {
           anchors.verticalCenter: parent.verticalCenter
-          width: root.px(Style.font.body)
+          width: Style.font.heading
           // A .settings row is the attrset that configures an app, not a
           // thing with two states, so it must not draw a box implying one.
           // Glyphs as \u escapes, so the source survives an editor or a
@@ -164,7 +158,7 @@ Item {
               : modelData.enabled                ? "\u25a0" : "\u25a1"
           textFormat: Text.PlainText
           font.family: root.fontFamily
-          font.pixelSize: root.px(Style.font.body)
+          font.pixelSize: Style.font.heading
           color: modelData.enabled ? Color.menu.selectedText : root.dim
         }
 
@@ -184,7 +178,7 @@ Item {
                 || modelData.path || modelData.id || ""
           textFormat: Text.PlainText
           font.family: root.fontFamily
-          font.pixelSize: root.px(Style.font.body)
+          font.pixelSize: Style.font.heading
           color: current ? Color.menu.selectedText : root.fg
         }
 
@@ -199,7 +193,7 @@ Item {
             text: modelData
             textFormat: Text.PlainText
             font.family: root.fontFamily
-            font.pixelSize: root.px(Style.font.caption)
+            font.pixelSize: Style.font.title
             color: modelData === "broken" ? Color.urgent
                  : modelData === "unfree" ? Color.accent
                  : root.dim
@@ -208,13 +202,13 @@ Item {
 
         Text {
           anchors.verticalCenter: parent.verticalCenter
-          width: parent.width - name.width - root.px(Style.font.body) - Style.space(40)
+          width: parent.width - name.width - Style.font.heading - Style.space(40)
           elide: Text.ElideRight
           text: modelData.summary || modelData.note || modelData.type
                 || modelData.line || modelData.category || ""
           textFormat: Text.PlainText
           font.family: root.fontFamily
-          font.pixelSize: root.px(Style.font.caption)
+          font.pixelSize: Style.font.title
           color: root.dim
         }
       }
@@ -249,7 +243,7 @@ Item {
           : "nothing here yet"
       textFormat: Text.PlainText
       font.family: root.fontFamily
-      font.pixelSize: root.px(Style.font.body)
+      font.pixelSize: Style.font.heading
       color: root.dim
     }
   }
@@ -302,14 +296,14 @@ Item {
         textFormat: Text.PlainText
         wrapMode: Text.Wrap
         font.family: root.fontFamily
-        font.pixelSize: root.px(Style.font.caption)
+        font.pixelSize: Style.font.title
         color: root.dim
       }
     }
 
     Item {
       width: parent.width
-      height: root.px(Style.font.caption) + Style.space(10)
+      height: Style.font.title + Style.space(10)
 
       Text {
         anchors {
@@ -325,7 +319,7 @@ Item {
         }
         textFormat: Text.PlainText
         font.family: root.fontFamily
-        font.pixelSize: root.px(Style.font.caption)
+        font.pixelSize: Style.font.title
         color: root.model && root.model.queued > 0 ? Color.menu.selectedText : root.dim
       }
 
@@ -338,7 +332,7 @@ Item {
         text: "index stale \u2014 r to rebuild"
         textFormat: Text.PlainText
         font.family: root.fontFamily
-        font.pixelSize: root.px(Style.font.caption)
+        font.pixelSize: Style.font.title
         color: Color.urgent
       }
 
@@ -350,7 +344,7 @@ Item {
         text: root.model && root.model.busy ? "working\u2026" : "? keys   a apply   esc close"
         textFormat: Text.PlainText
         font.family: root.fontFamily
-        font.pixelSize: root.px(Style.font.caption)
+        font.pixelSize: Style.font.title
         color: root.dim
       }
     }

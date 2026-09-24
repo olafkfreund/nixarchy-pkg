@@ -29,12 +29,6 @@ Item {
 
   readonly property int cardWidth: Style.space(1100)
 
-  // One scale for the whole surface, passed to the card so the search
-  // line, the list and the log all grow together. A catalogue read at
-  // full screen is read like a document, not like a bar widget.
-  readonly property real textScale: 1.45
-  function px(base) { return Math.round(base * root.textScale) }
-
   function focusedScreen() {
     var monitor = Hyprland.focusedMonitor
     var name = monitor ? String(monitor.name || "") : ""
@@ -79,7 +73,7 @@ Item {
   // keyboard-first surface cannot leave half of either behind a mouse
   // wheel (#27). Returns whether the key was one of them.
   function scrollView(view, key) {
-    var line = root.px(Style.font.caption) * 1.35
+    var line = Style.font.title * 1.35
     var max = Math.max(0, view.contentHeight - view.height)
     var y = view.contentY
     switch (key) {
@@ -388,7 +382,6 @@ Item {
           }
           visible: !pkg.showingLog && !root.keysOpen
           model: pkg
-          textScale: root.textScale
           maxHeight: surface.height - surface.padding * 2 - search.height
           onRequestActivate: root.activateRow()
         }
@@ -418,7 +411,7 @@ Item {
             textFormat: Text.PlainText
             wrapMode: Text.Wrap
             font.family: Style.font.family
-            font.pixelSize: root.px(Style.font.caption)
+            font.pixelSize: Style.font.title
             color: Color.menu.text
           }
         }
@@ -454,7 +447,7 @@ Item {
             textFormat: Text.PlainText
             wrapMode: Text.Wrap
             font.family: Style.font.family
-            font.pixelSize: root.px(Style.font.caption)
+            font.pixelSize: Style.font.title
             lineHeight: 1.35
             color: Color.menu.text
           }
@@ -466,7 +459,6 @@ Item {
           id: form
           anchors.fill: parent
           model: pkg
-          textScale: root.textScale
           onClosed: Qt.callLater(root.focusList)
         }
       }

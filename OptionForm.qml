@@ -51,10 +51,6 @@ FocusScope {
   property string writingPath: ""
   readonly property string fontFamily: Style.font.family
 
-  // The same scale the card uses, passed in rather than assumed: a form is
-  // read at the distance the list behind it is.
-  property real textScale: 1.0
-  function px(base) { return Math.round(base * root.textScale) }
 
   // nixpkgs documentation is hard-wrapped prose -- real newlines at about
   // seventy columns, meant for a terminal. PlainText honours them, so the
@@ -292,230 +288,249 @@ FocusScope {
     }
   }
 
-  Column {
-    anchors { top: parent.top; left: parent.left; right: parent.right }
-    spacing: Style.space(10)
-
-    Text {
-      width: parent.width
-      text: root.path
-      textFormat: Text.PlainText
-      elide: Text.ElideMiddle
-      font.family: root.fontFamily
-      font.pixelSize: root.px(Style.font.subtitle)
-      color: Color.menu.selectedText
-    }
-
-    Text {
-      width: parent.width
-      visible: (root.option.type || "").length > 0
-      text: root.option.type || ""
-      textFormat: Text.PlainText
-      wrapMode: Text.Wrap
-      font.family: root.fontFamily
-      font.pixelSize: root.px(Style.font.caption)
-      color: Qt.darker(Color.menu.text, 1.5)
-    }
-
-    // The option's own documentation. Markdown out of nixpkgs, shown as
-    // the plain text it is: this string is external and Qt will happily
-    // fetch an <img src> out of the shell process if told it is rich text.
-    Text {
-      width: parent.width
-      visible: (root.option.description || "").length > 0
-      text: root.reflow(root.option.description)
-      textFormat: Text.PlainText
-      wrapMode: Text.Wrap
-      maximumLineCount: 8
-      elide: Text.ElideRight
-      font.family: root.fontFamily
-      font.pixelSize: root.px(Style.font.caption)
-      color: Color.menu.text
-    }
-
-    Text {
-      width: parent.width
-      visible: (root.option.default || "").length > 0
-      text: "default:  " + (root.option.default || "").replace(/\n/g, " ")
-      textFormat: Text.PlainText
-      elide: Text.ElideRight
-      font.family: root.fontFamily
-      font.pixelSize: root.px(Style.font.caption)
-      color: Qt.darker(Color.menu.text, 1.5)
-    }
-
-    // What is there now, labelled as what it is: the expression written in
-    // apps.nix, not the value NixOS ends up with.
-    Text {
-      width: parent.width
-      visible: root.current.state !== "absent"
-      text: root.current.state === "set"
-        ? "set in apps.nix:  " + String(root.current.value || "")
-        : "a scaffold for this is in apps.nix"
-      textFormat: Text.PlainText
-      elide: Text.ElideRight
-      font.family: root.fontFamily
-      font.pixelSize: root.px(Style.font.caption)
-      color: Color.menu.text
-    }
-
-    Text {
-      width: parent.width
-      visible: root.option.choicesUnavailable === true
-      text: "This type's alternatives are not listed in a form this can offer \u2014 write a Nix expression."
-      textFormat: Text.PlainText
-      wrapMode: Text.Wrap
-      font.family: root.fontFamily
-      font.pixelSize: root.px(Style.font.caption)
-      color: Qt.darker(Color.menu.text, 1.4)
-    }
-
-    // ---- the widget ---------------------------------------------------
-
-    Toggle {
-      visible: root.widget === "boolean"
-      // The full path is the heading above; repeating it here only elides
-      // it into something less readable than the heading already is.
-      label: "value"
-      checked: root.boolValue
-      onClicked: { root.boolValue = !root.boolValue; root.touched = true }
-    }
-
-    Dropdown {
-      visible: root.widget === "enum"
-      width: Math.min(parent.width, Style.spacing.dropdownWidth)
-      label: "value"
-      options: root.choices
-      value: root.choices.length > 0 ? String(root.choices[root.enumIndex]) : ""
-      onChanged: function (v) {
-        for (var i = 0; i < root.choices.length; i++)
-          if (String(root.choices[i]) === v) { root.enumIndex = i; root.touched = true }
-      }
-    }
-
-    NumberField {
-      id: numberField
-      visible: root.widget === "integer"
-      label: "value"
-      from: -2147483647
-      to: 2147483647
-      onModified: root.touched = true
-    }
-
-    TextField {
-      id: textField
-      visible: root.widget === "string"
-      width: parent.width
-      placeholderText: "leave empty to keep the default"
-      foreground: Color.menu.text
-      onTextChanged: root.touched = true
-      Keys.onPressed: function (event) {
-        if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-          root.commit(); event.accepted = true
-        } else if (event.key === Qt.Key_Escape) {
-          root.finish(); event.accepted = true
-        }
-      }
-    }
+  // A Flickable, not a bare Column: the form is as tall as the option it
+  // describes, and an eight-line description with a scaffold box under it
+  // outgrows the card once the desktop text size goes up. Anchored top,
+  // left and right only, with nothing clipping it -- not this scope, not
+  // the surface -- the overflow painted outside the border onto the scrim
+  // (#38). Same shape as the build log in Menu.qml and the footer message
+  // in Card.qml.
+  Flickable {
+    id: body
+    anchors.fill: parent
+    contentWidth: width
+    contentHeight: column.implicitHeight
+    clip: true
 
     Column {
-      visible: root.widget === "scaffold"
-      width: parent.width
-      spacing: Style.space(6)
+      id: column
+      // body.width, not parent.width: a Flickable positions its content
+      // rather than anchoring it, and `parent` here is the content item,
+      // whose width is not the Flickable's.
+      width: body.width
+      spacing: Style.space(10)
 
-      // Said plainly rather than hidden behind a widget that cannot mean
-      // it: this type has no single answer to prompt for.
       Text {
         width: parent.width
-        text: "This type has no one-word answer, so here is its own example to edit."
+        text: root.path
+        textFormat: Text.PlainText
+        elide: Text.ElideMiddle
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.heading
+        color: Color.menu.selectedText
+      }
+
+      Text {
+        width: parent.width
+        visible: (root.option.type || "").length > 0
+        text: root.option.type || ""
         textFormat: Text.PlainText
         wrapMode: Text.Wrap
         font.family: root.fontFamily
-        font.pixelSize: root.px(Style.font.caption)
+        font.pixelSize: Style.font.title
+        color: Qt.darker(Color.menu.text, 1.5)
+      }
+
+      // The option's own documentation. Markdown out of nixpkgs, shown as
+      // the plain text it is: this string is external and Qt will happily
+      // fetch an <img src> out of the shell process if told it is rich text.
+      Text {
+        width: parent.width
+        visible: (root.option.description || "").length > 0
+        text: root.reflow(root.option.description)
+        textFormat: Text.PlainText
+        wrapMode: Text.Wrap
+        maximumLineCount: 8
+        elide: Text.ElideRight
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.title
+        color: Color.menu.text
+      }
+
+      Text {
+        width: parent.width
+        visible: (root.option.default || "").length > 0
+        text: "default:  " + (root.option.default || "").replace(/\n/g, " ")
+        textFormat: Text.PlainText
+        elide: Text.ElideRight
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.title
+        color: Qt.darker(Color.menu.text, 1.5)
+      }
+
+      // What is there now, labelled as what it is: the expression written in
+      // apps.nix, not the value NixOS ends up with.
+      Text {
+        width: parent.width
+        visible: root.current.state !== "absent"
+        text: root.current.state === "set"
+          ? "set in apps.nix:  " + String(root.current.value || "")
+          : "a scaffold for this is in apps.nix"
+        textFormat: Text.PlainText
+        elide: Text.ElideRight
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.title
+        color: Color.menu.text
+      }
+
+      Text {
+        width: parent.width
+        visible: root.option.choicesUnavailable === true
+        text: "This type's alternatives are not listed in a form this can offer \u2014 write a Nix expression."
+        textFormat: Text.PlainText
+        wrapMode: Text.Wrap
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.title
         color: Qt.darker(Color.menu.text, 1.4)
       }
 
-      BorderSurface {
-        id: scaffoldBox
+      // ---- the widget ---------------------------------------------------
+
+      Toggle {
+        visible: root.widget === "boolean"
+        // The full path is the heading above; repeating it here only elides
+        // it into something less readable than the heading already is.
+        label: "value"
+        checked: root.boolValue
+        onClicked: { root.boolValue = !root.boolValue; root.touched = true }
+      }
+
+      Dropdown {
+        visible: root.widget === "enum"
+        width: Math.min(parent.width, Style.spacing.dropdownWidth)
+        label: "value"
+        options: root.choices
+        value: root.choices.length > 0 ? String(root.choices[root.enumIndex]) : ""
+        onChanged: function (v) {
+          for (var i = 0; i < root.choices.length; i++)
+            if (String(root.choices[i]) === v) { root.enumIndex = i; root.touched = true }
+        }
+      }
+
+      NumberField {
+        id: numberField
+        visible: root.widget === "integer"
+        label: "value"
+        from: -2147483647
+        to: 2147483647
+        onModified: root.touched = true
+      }
+
+      TextField {
+        id: textField
+        visible: root.widget === "string"
         width: parent.width
-        // Room for a real expression. The examples this fallback exists to
-        // show are multiline Nix -- services.postgresql.package's default
-        // is a nine-line conditional -- and a single-line field could not
-        // hold one, which made the fallback unusable for the very types it
-        // was there for.
-        height: Math.max(root.px(Style.font.body) * 6, scaffoldField.implicitHeight + Style.space(16))
-        color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.06)
-        radius: Style.cornerRadius
-        borderSpec: Border.controlSpec(scaffoldField.activeFocus ? "focus" : "normal",
-                                       Color.menu.text, Color.accent)
+        placeholderText: "leave empty to keep the default"
+        foreground: Color.menu.text
+        onTextChanged: root.touched = true
+        Keys.onPressed: function (event) {
+          if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+            root.commit(); event.accepted = true
+          } else if (event.key === Qt.Key_Escape) {
+            root.finish(); event.accepted = true
+          }
+        }
+      }
 
-        Flickable {
-          anchors.fill: parent
-          anchors.margins: Style.space(8)
-          contentWidth: width
-          contentHeight: scaffoldField.implicitHeight
-          clip: true
+      Column {
+        visible: root.widget === "scaffold"
+        width: parent.width
+        spacing: Style.space(6)
 
-          TextEdit {
-            id: scaffoldField
-            width: parent.width
-            wrapMode: TextEdit.Wrap
-            selectByMouse: true
-            font.family: root.fontFamily
-            font.pixelSize: root.px(Style.font.caption)
-            color: Color.menu.text
-            selectionColor: Color.accent
-            // seed() fills this and then clears `touched`, so the seed
-            // itself never counts as an edit.
-            onTextChanged: root.touched = true
-            Keys.onPressed: function (event) {
-              if (event.key === Qt.Key_Escape) { root.finish(); event.accepted = true }
-              // RETURN is a newline here, because the value may be several
-              // lines. Ctrl+RETURN writes, the way any multiline editor
-              // that also has a submit does it.
-              else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
-                       && (event.modifiers & Qt.ControlModifier)) {
-                root.commit(); event.accepted = true
+        // Said plainly rather than hidden behind a widget that cannot mean
+        // it: this type has no single answer to prompt for.
+        Text {
+          width: parent.width
+          text: "This type has no one-word answer, so here is its own example to edit."
+          textFormat: Text.PlainText
+          wrapMode: Text.Wrap
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.title
+          color: Qt.darker(Color.menu.text, 1.4)
+        }
+
+        BorderSurface {
+          id: scaffoldBox
+          width: parent.width
+          // Room for a real expression. The examples this fallback exists to
+          // show are multiline Nix -- services.postgresql.package's default
+          // is a nine-line conditional -- and a single-line field could not
+          // hold one, which made the fallback unusable for the very types it
+          // was there for.
+          height: Math.max(Style.font.heading * 6, scaffoldField.implicitHeight + Style.space(16))
+          color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.06)
+          radius: Style.cornerRadius
+          borderSpec: Border.controlSpec(scaffoldField.activeFocus ? "focus" : "normal",
+                                         Color.menu.text, Color.accent)
+
+          Flickable {
+            anchors.fill: parent
+            anchors.margins: Style.space(8)
+            contentWidth: width
+            contentHeight: scaffoldField.implicitHeight
+            clip: true
+
+            TextEdit {
+              id: scaffoldField
+              width: parent.width
+              wrapMode: TextEdit.Wrap
+              selectByMouse: true
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.title
+              color: Color.menu.text
+              selectionColor: Color.accent
+              // seed() fills this and then clears `touched`, so the seed
+              // itself never counts as an edit.
+              onTextChanged: root.touched = true
+              Keys.onPressed: function (event) {
+                if (event.key === Qt.Key_Escape) { root.finish(); event.accepted = true }
+                // RETURN is a newline here, because the value may be several
+                // lines. Ctrl+RETURN writes, the way any multiline editor
+                // that also has a submit does it.
+                else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                         && (event.modifiers & Qt.ControlModifier)) {
+                  root.commit(); event.accepted = true
+                }
               }
             }
           }
         }
       }
-    }
 
-    Text {
-      width: parent.width
-      visible: root.option.readOnly === true
-      text: "read-only \u2014 this option is set by its own module"
-      textFormat: Text.PlainText
-      wrapMode: Text.Wrap
-      font.family: root.fontFamily
-      font.pixelSize: root.px(Style.font.caption)
-      color: Color.urgent
-    }
+      Text {
+        width: parent.width
+        visible: root.option.readOnly === true
+        text: "read-only \u2014 this option is set by its own module"
+        textFormat: Text.PlainText
+        wrapMode: Text.Wrap
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.title
+        color: Color.urgent
+      }
 
-    Text {
-      width: parent.width
-      visible: root.error.length > 0
-      text: root.error
-      textFormat: Text.PlainText
-      wrapMode: Text.Wrap
-      font.family: root.fontFamily
-      font.pixelSize: root.px(Style.font.caption)
-      color: Color.urgent
-    }
+      Text {
+        width: parent.width
+        visible: root.error.length > 0
+        text: root.error
+        textFormat: Text.PlainText
+        wrapMode: Text.Wrap
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.title
+        color: Color.urgent
+      }
 
-    Text {
-      width: parent.width
-      text: root.widget === "boolean" ? "SPACE toggles   RETURN writes   ESC cancels"
-          : root.widget === "enum"    ? "j / k choose    RETURN writes   ESC cancels"
-          : root.widget === "scaffold"
-            ? "CTRL+RETURN writes   ESC cancels   \u2014 RETURN is a newline, empty keeps the default"
-            : "RETURN writes   ESC cancels   \u2014 empty keeps the default"
-      textFormat: Text.PlainText
-      font.family: root.fontFamily
-      font.pixelSize: root.px(Style.font.caption)
-      color: Qt.darker(Color.menu.text, 1.6)
+      Text {
+        width: parent.width
+        text: root.widget === "boolean" ? "SPACE toggles   RETURN writes   ESC cancels"
+            : root.widget === "enum"    ? "j / k choose    RETURN writes   ESC cancels"
+            : root.widget === "scaffold"
+              ? "CTRL+RETURN writes   ESC cancels   \u2014 RETURN is a newline, empty keeps the default"
+              : "RETURN writes   ESC cancels   \u2014 empty keeps the default"
+        textFormat: Text.PlainText
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.title
+        color: Qt.darker(Color.menu.text, 1.6)
+      }
     }
   }
 }
