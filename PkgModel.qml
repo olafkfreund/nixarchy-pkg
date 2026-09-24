@@ -72,6 +72,10 @@ QtObject {
   // Not "stateChanged": `state` is a property, so Qt generates that signal
   // itself and declaring it again shadows the one bindings listen to.
   signal refreshed()
+  // Naming cancelled because the user LEFT, not because they pressed ESC.
+  // Menu.qml restores the flakeref to the field on ESC, on purpose, so the
+  // two cancellations cannot share one notification (#43).
+  signal namingAbandoned()
 
   // ---- what the current tab shows -------------------------------------
 
@@ -198,6 +202,11 @@ QtObject {
   function setTab(i) {
     disarm()
     invalidateInspection()
+    // A mode must not outlive the tab it belongs to. Left behind, naming
+    // swallowed every keystroke into the input name -- setQuery returns
+    // early while it is on -- and turned RETURN into a declare against a
+    // ref from the tab the user had already left (#43).
+    if (naming) { cancelNaming(); namingAbandoned() }
     tab = Math.max(0, Math.min(tabs.length - 1, i))
     cursor = 0
     if (indexTab && searching) runSearch()
@@ -213,12 +222,33 @@ QtObject {
     }
   }
 
+  // Search reads on its own channel. Sharing _reader with refresh() meant
+  // assigning .command while it was already running -- a no-op in
+  // Quickshell -- so a reindex or an apply completing during a search
+  // silently dropped its state read, and the footer went on claiming a
+  // stale index after a successful rebuild (#43). Every other operation in
+  // this file has its own Process for exactly this reason.
+  property Process _searcher: Process {
+    stdout: StdioCollector {
+      onStreamFinished: root._absorb(text, false)
+    }
+  }
+
   property Process _writer: Process {
     stdout: StdioCollector {
       onStreamFinished: {
         root.busy = false
         root._absorb(text, true)
       }
+    }
+    // busy is cleared by the answer and by nothing else, so a writer that
+    // dies without one used to leave the panel refusing every later write
+    // with "still writing" until the menu was reopened (#43).
+    onExited: function (code, status) {
+      root.busy = false
+      if (code !== 0 && root.message === "")
+        root.message = "the adapter ended without answering (exit " + code
+                     + "); nothing is known to be written"
     }
   }
 
@@ -306,10 +336,10 @@ QtObject {
   function runSearch() {
     if (!indexTab || !searching) { results = []; return }
     // `--` last, so a query starting with a dash is a query (#30).
-    _reader.command = [script, "search",
-                       "--kind", tab === 2 ? "pkg" : "opt",
-                       "--limit", "60", "--", query]
-    _reader.running = true
+    _searcher.command = [script, "search",
+                         "--kind", tab === 2 ? "pkg" : "opt",
+                         "--limit", "60", "--", query]
+    _searcher.running = true
   }
 
   // True when the write started; false when one was already running.
