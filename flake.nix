@@ -74,6 +74,34 @@
               touch "$out"
             '';
 
+          # qmllint proves the QML parses. It cannot prove the panel
+          # behaves, and #43's four defects were behaviour -- a stale write
+          # closing a form the user had reopened, a mode surviving a tab
+          # change, a shared Process dropping a read, and a writer that
+          # could die leaving the panel refusing every later write (#50).
+          #
+          # PkgModel is the data layer and imports no qs.* at all, so it
+          # runs here against inert stubs that spawn nothing and decide
+          # nothing: the tests hand it a canned answer or a death and assert
+          # what the MODEL did. Card is not covered -- the harness cannot
+          # drive a ListView delegate's nested content faithfully, and a
+          # measurement it cannot be trusted to make is worse than none.
+          qml-tests = pkgs.runCommand "nixarchy-pkg-qml-tests"
+            { nativeBuildInputs = [ pkgs.qt6.qtdeclarative ]; }
+            ''
+              cp ${./PkgModel.qml} PkgModel.qml
+              cp ${./tests/qml/tst_pkgmodel.qml} tst_pkgmodel.qml
+              cp -r ${./tests/qml/imports} imports
+              # Qt's own modules are not on the path inside the sandbox --
+              # outside it the devShell supplies them, which is exactly the
+              # kind of difference a check should not depend on.
+              export QT_QPA_PLATFORM=offscreen HOME=$PWD
+              qmltestrunner -input tst_pkgmodel.qml \
+                -import "$PWD/imports" \
+                -import "${pkgs.qt6.qtdeclarative}/lib/qt-6/qml"
+              touch "$out"
+            '';
+
           # ~2300 lines of QML and nothing parsed them: a syntax error
           # shipped and failed at runtime in the shell, where the symptom is
           # a plugin that silently never draws (#44).
