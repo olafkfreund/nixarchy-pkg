@@ -566,6 +566,69 @@ check "opt set leaves a symlinked apps.nix a symlink" test -L "$APPSNIX"
 check "and the option reached the file it points at" \
   grep -q '#@opt services.openssh.enable$' "$REAL"
 rm -rf "$CONFIG" "$(dirname "$REAL")"
+
+# #39 made a write either happen as reported or be reported as not
+# happening. These are the read and validation paths, which had the same
+# defect: an unreadable file described as an empty one, and a value able to
+# forge the marker the panel reads (#41).
+echo "a read says what it could not read"
+CONFIG=$(fresh_config); export XDG_CONFIG_HOME="$CONFIG"
+APPSNIX="$CONFIG/nixarchy/apps.nix"
+
+check "a readable catalogue carries no message" \
+  jq -e '.message == null' <<<"$("$ADAPTER" state 2>/dev/null)"
+
+chmod 000 "$APPSNIX"
+out=$("$ADAPTER" state 2>/dev/null)
+check "an unreadable apps.nix still lists services" jq -e '.services | length > 0' <<<"$out"
+check "but reports no apps"                        jq -e '.apps | length == 0' <<<"$out"
+check "and says which file it could not read" \
+  jq -e '.message | contains("could not read") and contains("apps.nix")' <<<"$out"
+chmod 600 "$APPSNIX"
+out=$("$ADAPTER" state 2>/dev/null)
+check "and the catalogue comes back once readable" jq -e '.apps | length > 0' <<<"$out"
+check "with the message gone"                      jq -e '.message == null' <<<"$out"
+
+# An absent file is the ordinary first run, not an error.
+rm -f "$APPSNIX"
+check "an absent apps.nix is not reported as unreadable" \
+  jq -e '.message == null' <<<"$("$ADAPTER" state 2>/dev/null)"
+rm -rf "$CONFIG"
+
+CONFIG=$(fresh_config); export XDG_CONFIG_HOME="$CONFIG"
+APPSNIX="$CONFIG/nixarchy/apps.nix"
+before=$(md5sum < "$APPSNIX")
+out=$("$ADAPTER" opt set my.opt 'true;  #@opt other.thing' 2>&1 || true)
+check "a value forging a marker is refused"  jq -e '.ok == false' <<<"$out"
+check "and the refusal says why"             jq -e '.error | contains("#@")' <<<"$out"
+check "and the file is byte-identical"       test "$(md5sum < "$APPSNIX")" = "$before"
+
+# The two refusals must stay distinct: telling someone who forged a marker to
+# put their value on one line is wrong advice.
+out=$("$ADAPTER" opt set my.opt "$(printf "''a\nb''")" 2>&1 || true)
+check "a multi-line value keeps its own refusal" \
+  jq -e '.error | contains("multi-line")' <<<"$out"
+
+# Narrow on purpose: a # inside a string is legitimate Nix, and a hex colour
+# is the commonest option value there is.
+check "a # inside a string is still allowed" \
+  jq -e '.ok == true' <<<"$("$ADAPTER" opt set my.colour '"#ff0000"' 2>&1 || true)"
+check "and it was written verbatim" grep -q 'my.colour = "#ff0000";' "$APPSNIX"
+rm -rf "$CONFIG"
+
+CONFIG=$(fresh_config); export XDG_CONFIG_HOME="$CONFIG"
+APPSNIX="$CONFIG/nixarchy/apps.nix"
+before=$(md5sum < "$APPSNIX")
+out=$("$ADAPTER" toggle app '[a-z]*' 2>&1 || true)
+check "a regex where an id belongs is refused here" jq -e '.ok == false' <<<"$out"
+check "by this tool, in its own words" \
+  jq -e '.error | contains("is not a valid app id")' <<<"$out"
+check "and nothing was toggled"  test "$(md5sum < "$APPSNIX")" = "$before"
+realid=$(grep -oE '#@ [a-z0-9-]+' "$APPSNIX" | head -1 | awk '{print $2}')
+check "a real id still toggles" \
+  jq -e '.ok == true' <<<"$("$ADAPTER" toggle app "$realid" 2>&1 || true)"
+rm -rf "$CONFIG"
+
 else
   echo "skip: needs $TEMPLATES (not a nixarchy machine)"
 fi

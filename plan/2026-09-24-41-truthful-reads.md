@@ -171,6 +171,41 @@ text-size sweep -- nothing here needs one.
 4. Each new case fails when its fix is reverted in a scratch copy, so they
    are assertions rather than smoke.
 
+## Verification results
+
+All checks ran. **No code deviated from the plan. One plan test was wrong
+and was corrected.**
+
+| check | result |
+| ----- | ------ |
+| 1. `nix flake check -L` | passes |
+| 2. suite on razer, count not lower | **170 -> 187**, 0 failures |
+| 3a-3f | all pass, verified by hand and in the suite |
+| 3g | **the test was wrong** -- see below |
+| 4. each case fails when its fix is reverted | **6 FAIL**, suite exit 1 |
+
+**Test 3g asked for the wrong thing.** It said a single-line value
+containing `#` but not `#@` should still succeed, and used a comment-style
+value (`true # a plain comment`). That can never succeed and never did: `#`
+comments out the rest of the line, taking the `;` and the marker with it, so
+`--parse` fails and the backup is restored. Confirmed identical on `main`,
+so it is pre-existing and not caused by this work.
+
+That briefly looked like evidence against the spec's Q2 decision -- if a `#`
+in a value can never work, why not refuse them all? One test settled it the
+other way: `opt set my.colour '"#ff0000"'` **succeeds** and writes
+`my.colour = "#ff0000";`. A `#` inside a string literal is legitimate Nix,
+and a hex colour is about the commonest option value there is. **The spec's
+narrow `#@` rule was right and stands.** The suite now asserts that
+positively, which 3g should have done in the first place.
+
+**Worth keeping from check 4:** with the `cmd_toggle` guard reverted, the
+assertion "a regex where an id belongs is refused here" still **passes** --
+the external writer refuses it. That is exactly the layering the intent
+described, and it is why the assertion that actually pins this change is
+"by this tool, in its own words". A test that passes without the fix would
+have been worthless here.
+
 ## Rollback
 
 `bin/nixarchy-pkg` and `tests/adapter.sh` only. No QML, no config format, no
