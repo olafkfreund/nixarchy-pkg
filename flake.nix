@@ -96,6 +96,11 @@
               # outside it the devShell supplies them, which is exactly the
               # kind of difference a check should not depend on.
               export QT_QPA_PLATFORM=offscreen HOME=$PWD
+              cp ${./Card.qml} Card.qml
+              cp ${./tests/qml/tst_card.qml} tst_card.qml
+              qmltestrunner -input tst_card.qml \
+                -import "$PWD/imports" \
+                -import "${pkgs.qt6.qtdeclarative}/lib/qt-6/qml"
               qmltestrunner -input tst_pkgmodel.qml \
                 -import "$PWD/imports" \
                 -import "${pkgs.qt6.qtdeclarative}/lib/qt-6/qml"

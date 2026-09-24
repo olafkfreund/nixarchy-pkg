@@ -82,6 +82,30 @@ out. They land with the implementation commit and not before.
 5. `tests/adapter.sh` on razer still passes, unchanged.
 6. CI green with both suites in the log.
 
+## Verification results
+
+Both steps applied. No deviation.
+
+| check | result |
+| ----- | ------ |
+| 1. `nix flake check -L`, both suites in `qml-tests` | **passes** |
+| 2. **negative -- revert #45's fix** | **FAILS**, exit 1: *"2 flag(s): the summary must fit its row -- overflows by 163.6"* |
+| 3. **negative -- remove the `Window`** | **FAILS**, exit 1: *"overflows by 10.0"* -- the phantom, on demand |
+| 4. runs with no display, no `/etc/nixarchy`, no shell, no razer | **yes**, inside `nix build` |
+| 5. `tests/adapter.sh` on razer | **187 assertions, 0 failures**, unchanged |
+| 6. CI | pending the pull request |
+
+**Check 2 is worth reading twice.** Reverted, the two-flag row overflows by
+**163.6px** -- which is the flags row's width plus its gap, the term the old
+expression never subtracted at all. That is an independent confirmation of
+#45's analysis, arrived at from the opposite direction: #45 reasoned about
+the arithmetic and checked it by eye, and this measures the consequence.
+
+**Check 3 turns a session's worth of confusion into a guard rail.** The
+`Window` is not scaffolding, and the comment above it now makes a claim the
+suite enforces: delete it and the phantom 10px returns and the build fails.
+Nobody has to rediscover why it is there.
+
 ## Rollback
 
 One new test file and a few lines of `flake.nix`. **No change to any of the
