@@ -84,6 +84,13 @@ FocusScope {
         root.seed()
       }
     }
+    // Same reason as writeProc: without this a describe that never answers
+    // leaves the form open showing neither an option nor a reason (#43).
+    onExited: function (code, status) {
+      if (root.open && root.error === "" && !root.option.path)
+        root.error = "the adapter ended without answering (exit " + code
+                   + "); that option could not be read"
+    }
   }
 
   Process {
@@ -95,7 +102,14 @@ FocusScope {
         if (root.model) root.model.busy = false
         var data
         try { data = JSON.parse(text) } catch (e) { data = null }
-        if (!root.open || root.writingPath !== root.path) return
+        if (!root.open || root.writingPath !== root.path) {
+          // The form moved on, but the write still happened -- the adapter
+          // had written the file before this answer was sent. The panel
+          // must not go on showing pre-write state just because nobody is
+          // watching it any more (#43).
+          if (data && data.ok !== false && root.model) root.model.refresh()
+          return
+        }
         if (data === null) {
           // No answer is not a yes (#28).
           root.error = "the adapter gave no answer; nothing is known to be written"
@@ -113,6 +127,16 @@ FocusScope {
         }
         root.finish()
       }
+    }
+    // stdout finishing is the only thing the handler above waits on, so an
+    // adapter that never writes -- missing, not executable, killed -- left
+    // model.busy true and every later write refused "still writing" (#43).
+    // Unblocking is not reporting success: the wording keeps #28's rule.
+    onExited: function (code, status) {
+      if (root.model) root.model.busy = false
+      if (root.open && root.writingPath === root.path && root.error === "")
+        root.error = "the adapter ended without answering (exit " + code
+                   + "); nothing is known to be written"
     }
   }
 
@@ -132,6 +156,10 @@ FocusScope {
     root.open = false
     root.option = ({})
     root.path = ""
+    // And the path the write is answering to. Left set, a response that
+    // arrived after the form closed still matched once the SAME option was
+    // reopened, and closed the form the user was typing into (#43).
+    root.writingPath = ""
     // Let go of the keyboard. A hidden Item keeps focus and still gets keys,
     // so a form closed while focused went on eating ESC (#27).
     textField.focus = false

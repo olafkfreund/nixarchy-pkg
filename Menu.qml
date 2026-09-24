@@ -117,6 +117,10 @@ Item {
   PkgModel {
     id: pkg
     host: root
+    // Only fired when naming was abandoned by leaving the tab. ESC goes
+    // through the handler below, which puts the flakeref BACK in the field
+    // on purpose -- so this cannot be a plain naming-changed watcher (#43).
+    onNamingAbandoned: { search.text = ""; pkg.setQuery("") }
   }
 
   PanelWindow {
