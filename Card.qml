@@ -19,6 +19,8 @@ Item {
   // Alpha, not darkening: darkening inverts the hierarchy on light themes.
   readonly property color dim: Qt.rgba(fg.r, fg.g, fg.b, 0.6)
   readonly property string fontFamily: Style.font.family
+  // Apps and Services rows carry an icon; the other tabs don't.
+  readonly property bool showIcons: root.model && root.model.tab <= 1
 
   // Queue rows say how much they matter: a conflict or a failed check is
   // urgent, other check results stand out, notes recede.
@@ -176,6 +178,20 @@ Item {
           color: modelData.enabled ? Commons.Color.menu.selectedText : root.dim
         }
 
+        // The column is reserved while the picture loads or is missing, so
+        // rows don't shift as icons arrive.
+        Image {
+          id: icon
+          visible: root.showIcons
+          anchors.verticalCenter: parent.verticalCenter
+          width: Style.font.heading
+          height: Style.font.heading
+          sourceSize: Qt.size(width, height)
+          source: root.showIcons && modelData.id ? "image://icon/" + modelData.id : ""
+          opacity: status === Image.Ready ? 1 : 0
+          asynchronous: true
+        }
+
         Text {
           id: name
           anchors.verticalCenter: parent.verticalCenter
@@ -248,10 +264,13 @@ Item {
           // Style.space(40) was right for no arrangement of this row -- 20px
           // too generous with no flags and too mean with any -- because the
           // Row's anchors already exclude its margins, so subtracting them
-          // again double-counted (#45).
+          // again double-counted (#45). The icon is a term too, and an
+          // invisible one takes no width and no gap.
           width: Math.max(0, parent.width - name.width - Style.font.heading
+                             - (icon.visible ? icon.width : 0)
                              - flags.width
-                             - Style.space(10) * (flags.visible ? 3 : 2))
+                             - Style.space(10) * ((flags.visible ? 3 : 2)
+                                                  + (icon.visible ? 1 : 0)))
           elide: Text.ElideRight
           text: modelData.summary || modelData.note || modelData.type
                 || modelData.line || modelData.category || ""
