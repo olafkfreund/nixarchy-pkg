@@ -154,6 +154,13 @@ spec: spec/2026-10-11-55-row-hierarchy-contrast.md
        afterwards.
      - `test_preview_hidden_without_text`: put the cursor on a row with no
        preview, at `tab: 2`. The pane is not visible.
+     - `test_preview_sits_beside_the_list` (added in review, after step 4's
+       first attempt nested the pane inside the ListView and every test
+       still passed): the pane starts at or after the list's right edge and
+       ends within the card. `Card.qml` gets `objectName: "preview"` on the
+       pane, so the test can find it.
+   - `fakeModel` becomes a `QtObject`: a plain JS object does not notify, so
+     setting `tab` or `cursor` from a test would not reach Card.
    - Leave the `Window` and its comment exactly as they are (#51).
    - Verify: `nix flake check` passes with all old and new tests.
 

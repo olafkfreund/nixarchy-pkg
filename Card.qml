@@ -339,6 +339,7 @@ Item {
   // Wheel-scrolled only and never focused, so the keyboard stays on the list.
   Item {
     id: preview
+    objectName: "preview"
     anchors {
       top: scope.bottom; topMargin: Style.space(10)
       bottom: footer.top; bottomMargin: Style.space(8)
