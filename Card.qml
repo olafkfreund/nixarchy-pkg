@@ -16,7 +16,8 @@ Item {
   property real maxHeight: 0
 
   readonly property color fg: Commons.Color.menu.text
-  readonly property color dim: Qt.darker(fg, 1.6)
+  // Alpha, not darkening: darkening inverts the hierarchy on light themes.
+  readonly property color dim: Qt.rgba(fg.r, fg.g, fg.b, 0.6)
   readonly property string fontFamily: Style.font.family
 
   // Queue rows say how much they matter: a conflict or a failed check is
