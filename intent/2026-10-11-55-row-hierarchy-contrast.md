@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 55
 author: olafkfreund
 ---
@@ -67,9 +67,8 @@ icons and secondary text give each row a shape.
 
 ## Open questions
 
-1. **Pills for flags.** `Card.qml` says "a pill is a second surface, and this
-   is one". Make an exception for flags only, with tabs keeping their
-   underline?
-2. **Empty space.** Should the card show a preview pane for the current row,
-   or shrink to fit the list? (Recommended: the preview pane.)
-3. **Tab counts and motion (items 6–7):** in this task, or a follow-up?
+Resolved at approval (no answer was given, so the recommended options were taken):
+
+1. Pills: yes, for flags only. Tabs keep their underline.
+2. Empty space: a preview pane for the row under the cursor.
+3. Tab counts and motion: a follow-up issue, not this task.
