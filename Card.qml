@@ -33,6 +33,24 @@ Item {
     return fg
   }
 
+  // The row under the cursor, and what the pane beside the list says about
+  // it. A search row brings its own preview, minus the key hints, which
+  // belong to the footer. Apps and Services rows have none, so the pane
+  // composes one from what the row already knows.
+  readonly property var currentRow: list.currentItem ? list.currentItem.modelData : null
+  readonly property string previewText: {
+    const r = currentRow
+    if (!r) return ""
+    if (typeof r.preview === "string")
+      return r.preview.split("\n")
+              .filter(l => !l.trim().startsWith("ctrl-")).join("\n")
+    if (root.model && root.model.tab <= 1)
+      return [r.label, r.category, "", r.note, "", r.line]
+             .filter(x => x).join("\n")
+    return ""
+  }
+  readonly property bool showPreview: previewText.length > 0 && width >= Style.space(760)
+
   readonly property real rowHeight: Math.round(Style.font.heading * 2.2)
   // Deliberately NOT derived from the list's contentHeight: the surface
   // sizes itself from this, the list sizes itself from the surface, and
@@ -121,7 +139,9 @@ Item {
     id: list
     anchors {
       top: scope.bottom; topMargin: Style.space(10)
-      left: parent.left; right: parent.right; bottom: footer.top
+      left: parent.left; right: root.showPreview ? preview.left : parent.right
+      rightMargin: root.showPreview ? Style.space(14) : 0
+      bottom: footer.top
       bottomMargin: Style.space(8)
     }
     clip: true
@@ -313,6 +333,48 @@ Item {
       font.family: root.fontFamily
       font.pixelSize: Style.font.heading
       color: root.dim
+    }
+  }
+
+  // Wheel-scrolled only and never focused, so the keyboard stays on the list.
+  Item {
+    id: preview
+    anchors {
+      top: scope.bottom; topMargin: Style.space(10)
+      bottom: footer.top; bottomMargin: Style.space(8)
+      right: parent.right
+    }
+    width: Math.round(parent.width * 0.38)
+    visible: root.showPreview
+
+    Rectangle {
+      width: 1
+      anchors { top: parent.top; bottom: parent.bottom; left: parent.left }
+      color: root.dim
+      opacity: 0.25
+    }
+
+    Flickable {
+      id: flick
+      anchors {
+        top: parent.top; bottom: parent.bottom
+        left: parent.left; leftMargin: Style.space(14)
+        right: parent.right
+      }
+      clip: true
+      contentHeight: body.implicitHeight
+      boundsBehavior: Flickable.StopAtBounds
+
+      Text {
+        id: body
+        width: flick.width
+        wrapMode: Text.Wrap
+        textFormat: Text.PlainText
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.title
+        color: root.fg
+        text: root.previewText
+      }
     }
   }
 
