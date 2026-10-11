@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 55
 spec: spec/2026-10-11-55-row-hierarchy-contrast.md
 ---
