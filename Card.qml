@@ -45,8 +45,10 @@ Item {
       return r.preview.split("\n")
               .filter(l => !l.trim().startsWith("ctrl-")).join("\n")
     if (root.model && root.model.tab <= 1)
-      return [r.label, r.category, "", r.note, "", r.line]
-             .filter(x => x).join("\n")
+      // Groups, blank line between: a missing field must not leave a gap.
+      return [[r.label, r.category], [r.note], [r.line]]
+             .map(g => g.filter(x => x).join("\n"))
+             .filter(x => x).join("\n\n")
     return ""
   }
   readonly property bool showPreview: previewText.length > 0 && width >= Style.space(760)
@@ -375,6 +377,8 @@ Item {
         font.pixelSize: Style.font.title
         color: root.fg
         text: root.previewText
+        // A new row opens at its top, not where the last one was scrolled to.
+        onTextChanged: flick.contentY = 0
       }
     }
   }

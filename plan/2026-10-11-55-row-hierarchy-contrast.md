@@ -164,6 +164,17 @@ spec: spec/2026-10-11-55-row-hierarchy-contrast.md
    - Leave the `Window` and its comment exactly as they are (#51).
    - Verify: `nix flake check` passes with all old and new tests.
 
+5a. **Review fixes (session model, after the Opus review).**
+   - `previewText` composes in groups (`label`/`category`, `note`, `line`)
+     joined by a blank line. The plan's literal `""` spacers were dropped by
+     its own empty-filter, so the groups ran together.
+   - The pane's `Flickable` scrolls back to the top when the text changes,
+     so a new row doesn't open partway down.
+   - Tests: the icon column is visible on tab 0 and hidden on tab 2, and a
+     new `test_preview_composed_for_app_rows`.
+   - Mouse drag in the pane is left as it is. It never takes focus, so the
+     keyboard is unaffected.
+
 6. **By eye, then screenshots (done by the session model with the user,
    not the coder).**
    - Install the branch build and open the menu on one dark and one light

@@ -19,7 +19,8 @@ TestCase {
     { id: "two",  label: "steam", summary: "Digital distribution platform",
       flags: ["unfree", "curated:steam"],
       preview: "steam  1.0\nctrl-t tries it now\nversion:  1.0" },
-    { id: "one",  label: "one",   summary: "one flag here", flags: ["unfree"] },
+    { id: "one",  label: "one",   summary: "one flag here", flags: ["unfree"],
+      note: "a note" },
     { id: "none", label: "plain", summary: "no flags here", flags: [] }
   ]
   // A QtObject, so a test can set tab and cursor and Card sees it change.
@@ -157,10 +158,24 @@ TestCase {
   }
 
   function test_summary_fits_with_and_without_icons() {
+    var lv = find(card, "QQuickListView")
     fakeModel.tab = 0
     checkSummaries()
+    verify(find(lv.itemAtIndex(0), "QQuickImage").visible,
+           "tab 0 must reserve the icon column")
     fakeModel.tab = 2
     checkSummaries()
+    verify(!find(lv.itemAtIndex(0), "QQuickImage").visible,
+           "tab 2 must not reserve the icon column")
+  }
+
+  // Apps and Services rows carry no preview; the pane composes one, with
+  // a blank line between groups and none for a missing field.
+  function test_preview_composed_for_app_rows() {
+    var pane = byName(card, "preview")
+    fakeModel.cursor = 1
+    tryCompare(pane, "visible", true)
+    compare(textOf(pane), "one\n\na note")
   }
 
   function test_preview_shows_and_filters() {
