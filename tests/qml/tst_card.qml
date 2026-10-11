@@ -161,8 +161,11 @@ TestCase {
     var lv = find(card, "QQuickListView")
     fakeModel.tab = 0
     checkSummaries()
-    verify(find(lv.itemAtIndex(0), "QQuickImage").visible,
-           "tab 0 must reserve the icon column")
+    var img = find(lv.itemAtIndex(0), "QQuickImage")
+    verify(img.visible, "tab 0 must reserve the icon column")
+    // A missing icon must not be requested at all: image://icon/ answers
+    // with a checkerboard that reports itself Ready.
+    compare(img.source.toString(), "")
     fakeModel.tab = 2
     checkSummaries()
     verify(!find(lv.itemAtIndex(0), "QQuickImage").visible,

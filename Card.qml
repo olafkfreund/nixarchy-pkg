@@ -1,4 +1,5 @@
 import QtQuick
+import Quickshell
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
@@ -44,11 +45,14 @@ Item {
     if (typeof r.preview === "string")
       return r.preview.split("\n")
               .filter(l => !l.trim().startsWith("ctrl-")).join("\n")
-    if (root.model && root.model.tab <= 1)
+    if (root.model && root.model.tab <= 1) {
       // Groups, blank line between: a missing field must not leave a gap.
-      return [[r.label, r.category], [r.note], [r.line]]
+      // The catalogue's label already ends "(Category)"; don't say it twice.
+      const cat = (r.label || "").indexOf(r.category) < 0 ? r.category : ""
+      return [[r.label, cat], [r.note], [r.line]]
              .map(g => g.filter(x => x).join("\n"))
              .filter(x => x).join("\n\n")
+    }
     return ""
   }
   readonly property bool showPreview: previewText.length > 0 && width >= Style.space(760)
@@ -209,7 +213,11 @@ Item {
           width: Style.font.heading
           height: Style.font.heading
           sourceSize: Qt.size(width, height)
-          source: root.showIcons && modelData.id ? "image://icon/" + modelData.id : ""
+          // iconPath(_, true) is "" for a missing icon. image://icon/ draws a
+          // checkerboard instead, reports it Ready, and logs a warning per row.
+          // A .settings row is not an app, so it never has one.
+          source: root.showIcons && modelData.id && !modelData.settings
+                  ? Quickshell.iconPath(modelData.id, true) : ""
           opacity: status === Image.Ready ? 1 : 0
           asynchronous: true
         }

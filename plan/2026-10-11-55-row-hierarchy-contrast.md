@@ -175,6 +175,19 @@ spec: spec/2026-10-11-55-row-hierarchy-contrast.md
    - Mouse drag in the pane is left as it is. It never takes focus, so the
      keyboard is unaffected.
 
+5b. **Fix found by eye in step 6 (session model). This changes a spec decision.**
+   - On the real shell, `image://icon/<id>` returns a magenta and black
+     checkerboard for a missing icon, reports it as `Image.Ready`, and logs a
+     warning per row. The spec's no-import design can't tell a missing icon
+     from a real one.
+   - `Card.qml` now imports `Quickshell` and uses
+     `Quickshell.iconPath(id, true)`, which returns `""` for a missing icon.
+     `.settings` rows never look an icon up.
+   - Test stub: `tests/qml/imports/Quickshell/{qmldir,Quickshell.qml}`,
+     whose `iconPath` returns `""`. The icon test asserts an empty source.
+   - The composed preview drops `category` when the label already
+     contains it, because catalogue labels read "Alacritty (Terminal)".
+
 6. **By eye, then screenshots (done by the session model with the user,
    not the coder).**
    - Install the branch build and open the menu on one dark and one light
