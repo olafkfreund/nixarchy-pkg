@@ -54,8 +54,8 @@ spec: spec/2026-10-11-55-row-hierarchy-contrast.md
    - `Card.qml:18` becomes
      `readonly property color dim: Qt.rgba(fg.r, fg.g, fg.b, 0.6)`, with a
      one-line comment explaining why (darkening inverts on light themes).
-   - In `OptionForm.qml`, add the same `dim` property beside its
-     `fontFamily` property on `root`, and point the five `color:` lines at
+   - In `OptionForm.qml`, add the same `dim` property beside
+     `fontFamily` at `OptionForm.qml:52`, and point the five `color:` lines at
      `root.dim`.
    - Verify: `grep -n "Qt.darker" Card.qml OptionForm.qml` prints nothing,
      and `nix flake check` passes.
