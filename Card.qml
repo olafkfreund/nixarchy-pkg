@@ -80,7 +80,8 @@ Item {
         }
 
         // The current tab is named by a rule under it rather than by a
-        // filled pill: a pill is a second surface, and this is one.
+        // filled pill: a pill is a second surface, and this is one. Flag pills
+        // are the exception, because they are warnings.
         Rectangle {
           anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
           height: Math.max(1, Style.space(2))
@@ -192,6 +193,7 @@ Item {
           textFormat: Text.PlainText
           font.family: root.fontFamily
           font.pixelSize: Style.font.heading
+          font.weight: Font.Medium
           color: current ? Commons.Color.menu.selectedText : root.rowColor(modelData)
         }
 
@@ -215,16 +217,26 @@ Item {
 
           Repeater {
             model: modelData.flags || []
-            Text {
+            Rectangle {
               required property string modelData
+              readonly property color tone: modelData === "broken" ? Commons.Color.urgent
+                                          : modelData === "unfree" ? Commons.Color.accent
+                                          : root.dim
               anchors.verticalCenter: parent.verticalCenter
-              text: modelData
-              textFormat: Text.PlainText
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.title
-              color: modelData === "broken" ? Commons.Color.urgent
-                   : modelData === "unfree" ? Commons.Color.accent
-                   : root.dim
+              color: Qt.rgba(tone.r, tone.g, tone.b, 0.15)
+              radius: Style.cornerRadius
+              width: tag.implicitWidth + Style.space(12)
+              height: tag.implicitHeight + Style.space(4)
+
+              Text {
+                id: tag
+                anchors.centerIn: parent
+                text: parent.modelData
+                textFormat: Text.PlainText
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.title
+                color: parent.tone
+              }
             }
           }
         }
