@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // The list, drawn the same way whether it arrived on a chord or from the
@@ -14,7 +15,7 @@ Item {
   property var model: null
   property real maxHeight: 0
 
-  readonly property color fg: Color.menu.text
+  readonly property color fg: Commons.Color.menu.text
   readonly property color dim: Qt.darker(fg, 1.6)
   readonly property string fontFamily: Style.font.family
 
@@ -63,7 +64,7 @@ Item {
           textFormat: Text.PlainText
           font.family: root.fontFamily
           font.pixelSize: Style.font.heading
-          color: parent.current ? Color.menu.selectedText : root.dim
+          color: parent.current ? Commons.Color.menu.selectedText : root.dim
         }
 
         // The current tab is named by a rule under it rather than by a
@@ -72,7 +73,7 @@ Item {
           anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
           height: Math.max(1, Style.space(2))
           visible: parent.current
-          color: Color.menu.selectedText
+          color: Commons.Color.menu.selectedText
         }
       }
     }
@@ -126,7 +127,7 @@ Item {
 
       width: list.width
       height: root.rowHeight
-      color: current ? Color.menu.selectedBackground : "transparent"
+      color: current ? Commons.Color.menu.selectedBackground : "transparent"
 
       MouseArea {
         anchors.fill: parent
@@ -159,7 +160,7 @@ Item {
           textFormat: Text.PlainText
           font.family: root.fontFamily
           font.pixelSize: Style.font.heading
-          color: modelData.enabled ? Color.menu.selectedText : root.dim
+          color: modelData.enabled ? Commons.Color.menu.selectedText : root.dim
         }
 
         Text {
@@ -179,7 +180,7 @@ Item {
           textFormat: Text.PlainText
           font.family: root.fontFamily
           font.pixelSize: Style.font.heading
-          color: current ? Color.menu.selectedText : root.fg
+          color: current ? Commons.Color.menu.selectedText : root.fg
         }
 
         // unfree, broken, and the curated cross-reference: picking the raw
@@ -209,8 +210,8 @@ Item {
               textFormat: Text.PlainText
               font.family: root.fontFamily
               font.pixelSize: Style.font.title
-              color: modelData === "broken" ? Color.urgent
-                   : modelData === "unfree" ? Color.accent
+              color: modelData === "broken" ? Commons.Color.urgent
+                   : modelData === "unfree" ? Commons.Color.accent
                    : root.dim
             }
           }
@@ -344,7 +345,7 @@ Item {
         textFormat: Text.PlainText
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
-        color: root.model && root.model.queued > 0 ? Color.menu.selectedText : root.dim
+        color: root.model && root.model.queued > 0 ? Commons.Color.menu.selectedText : root.dim
       }
 
       // A stale index has no unfree or broken flags in it at all, so every
@@ -357,7 +358,7 @@ Item {
         textFormat: Text.PlainText
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
-        color: Color.urgent
+        color: Commons.Color.urgent
       }
 
       Text {

@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // One NixOS option, with a widget chosen from its declared type.
@@ -287,7 +288,7 @@ FocusScope {
 
   Rectangle {
     anchors.fill: parent
-    color: Color.menu.background
+    color: Commons.Color.menu.background
   }
 
   Keys.onPressed: function (event) {
@@ -345,7 +346,7 @@ FocusScope {
         elide: Text.ElideMiddle
         font.family: root.fontFamily
         font.pixelSize: Style.font.heading
-        color: Color.menu.selectedText
+        color: Commons.Color.menu.selectedText
       }
 
       Text {
@@ -356,7 +357,7 @@ FocusScope {
         wrapMode: Text.Wrap
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
-        color: Qt.darker(Color.menu.text, 1.5)
+        color: Qt.darker(Commons.Color.menu.text, 1.5)
       }
 
       // The option's own documentation. Markdown out of nixpkgs, shown as
@@ -372,7 +373,7 @@ FocusScope {
         elide: Text.ElideRight
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
-        color: Color.menu.text
+        color: Commons.Color.menu.text
       }
 
       Text {
@@ -383,7 +384,7 @@ FocusScope {
         elide: Text.ElideRight
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
-        color: Qt.darker(Color.menu.text, 1.5)
+        color: Qt.darker(Commons.Color.menu.text, 1.5)
       }
 
       // What is there now, labelled as what it is: the expression written in
@@ -398,7 +399,7 @@ FocusScope {
         elide: Text.ElideRight
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
-        color: Color.menu.text
+        color: Commons.Color.menu.text
       }
 
       Text {
@@ -409,7 +410,7 @@ FocusScope {
         wrapMode: Text.Wrap
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
-        color: Qt.darker(Color.menu.text, 1.4)
+        color: Qt.darker(Commons.Color.menu.text, 1.4)
       }
 
       // ---- the widget ---------------------------------------------------
@@ -449,7 +450,7 @@ FocusScope {
         visible: root.widget === "string"
         width: parent.width
         placeholderText: "leave empty to keep the default"
-        foreground: Color.menu.text
+        foreground: Commons.Color.menu.text
         onTextChanged: root.touched = true
         Keys.onPressed: function (event) {
           if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
@@ -474,7 +475,7 @@ FocusScope {
           wrapMode: Text.Wrap
           font.family: root.fontFamily
           font.pixelSize: Style.font.title
-          color: Qt.darker(Color.menu.text, 1.4)
+          color: Qt.darker(Commons.Color.menu.text, 1.4)
         }
 
         BorderSurface {
@@ -486,10 +487,10 @@ FocusScope {
           // hold one, which made the fallback unusable for the very types it
           // was there for.
           height: Math.max(Style.font.heading * 6, scaffoldField.implicitHeight + Style.space(16))
-          color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.06)
+          color: Qt.rgba(Commons.Color.menu.text.r, Commons.Color.menu.text.g, Commons.Color.menu.text.b, 0.06)
           radius: Style.cornerRadius
           borderSpec: Border.controlSpec(scaffoldField.activeFocus ? "focus" : "normal",
-                                         Color.menu.text, Color.accent)
+                                         Commons.Color.menu.text, Commons.Color.accent)
 
           Flickable {
             anchors.fill: parent
@@ -505,8 +506,8 @@ FocusScope {
               selectByMouse: true
               font.family: root.fontFamily
               font.pixelSize: Style.font.title
-              color: Color.menu.text
-              selectionColor: Color.accent
+              color: Commons.Color.menu.text
+              selectionColor: Commons.Color.accent
               // seed() fills this and then clears `touched`, so the seed
               // itself never counts as an edit.
               onTextChanged: root.touched = true
@@ -533,7 +534,7 @@ FocusScope {
         wrapMode: Text.Wrap
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
-        color: Color.urgent
+        color: Commons.Color.urgent
       }
 
       Text {
@@ -544,7 +545,7 @@ FocusScope {
         wrapMode: Text.Wrap
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
-        color: Color.urgent
+        color: Commons.Color.urgent
       }
 
       Text {
@@ -557,7 +558,7 @@ FocusScope {
         textFormat: Text.PlainText
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
-        color: Qt.darker(Color.menu.text, 1.6)
+        color: Qt.darker(Commons.Color.menu.text, 1.6)
       }
     }
   }

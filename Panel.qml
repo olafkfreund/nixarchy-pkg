@@ -7,6 +7,7 @@ import QtQuick.Effects
 import QtQuick.Window
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // What is waiting for the next rebuild, in the bar.
@@ -121,7 +122,7 @@ BarWidget {
           layer.enabled: true
         }
 
-        // barForeground, not Color.foreground: on a transparent bar the
+        // barForeground, not Commons.Color.foreground: on a transparent bar the
         // shell picks the icon colour off whatever is behind it, so using
         // the theme's foreground leaves the mark invisible over a light
         // wallpaper. Every other bar icon follows the same rule.
@@ -145,12 +146,12 @@ BarWidget {
           height: Math.round(Style.bar.iconFont * 0.95)
           width: Math.max(height, count.implicitWidth + Math.round(height * 0.45))
           radius: height / 2
-          color: Color.accent
+          color: Commons.Color.accent
           // A rim in the bar's own background, so the corner the badge
           // covers still reads as a corner rather than the two shapes
           // fusing into one.
           border.width: Math.round(Style.bar.iconFont * 0.06)
-          border.color: Color.bar.background
+          border.color: Commons.Color.bar.background
 
           Text {
             id: count
@@ -164,7 +165,7 @@ BarWidget {
             font.pixelSize: Math.round((badge.height - 2 * badge.border.width) * 0.88)
             font.bold: true
             renderType: Text.NativeRendering
-            color: Color.background
+            color: Commons.Color.background
           }
         }
       }

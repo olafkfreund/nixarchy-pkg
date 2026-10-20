@@ -4,6 +4,7 @@ import Quickshell.Io
 import Quickshell.Hyprland
 import Quickshell.Wayland
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // The catalogue on a keybind, over whatever you were working in.
@@ -140,7 +141,7 @@ Item {
 
     Rectangle {
       anchors.fill: parent
-      color: Color.menu.scrim
+      color: Commons.Color.menu.scrim
     }
 
     // Clicking away closes, as every summoned surface on this desktop
@@ -161,8 +162,8 @@ Item {
                        panel.height - Style.gapsOut * 2)
       anchors.horizontalCenter: parent.horizontalCenter
       y: Math.max(Style.gapsOut, Math.round((panel.height - height) / 2))
-      color: Color.menu.background
-      borderSpec: Border.surfaceSpec("menu", "border", Color.menu.border,
+      color: Commons.Color.menu.background
+      borderSpec: Border.surfaceSpec("menu", "border", Commons.Color.menu.border,
                                      Math.max(1, Style.space(2)))
       padding: Style.spacing.panelPadding
       radius: Style.cornerRadius
@@ -345,7 +346,7 @@ Item {
                          : pkg.flakeTab ? "github:owner/repo\u2026"
                          : pkg.tab === 3 ? "search NixOS options\u2026"
                          : pkg.indexTab ? "search nixpkgs\u2026" : "filter\u2026"
-          foreground: Color.menu.text
+          foreground: Commons.Color.menu.text
           onTextChanged: pkg.setQuery(text)
           Keys.onPressed: function (event) {
             switch (event.key) {
@@ -416,7 +417,7 @@ Item {
             wrapMode: Text.Wrap
             font.family: Style.font.family
             font.pixelSize: Style.font.title
-            color: Color.menu.text
+            color: Commons.Color.menu.text
           }
         }
 
@@ -453,7 +454,7 @@ Item {
             font.family: Style.font.family
             font.pixelSize: Style.font.title
             lineHeight: 1.35
-            color: Color.menu.text
+            color: Commons.Color.menu.text
           }
         }
 
