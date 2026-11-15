@@ -4,137 +4,186 @@ issue: 60
 author: olafkfreund
 ---
 
-# Intent: before apply, show what it will really do, and whether it will build
+# Intent: before apply, show what it will copy, and whether the result evaluates
 
 ## Problem
 
 The panel's only account of what an apply will change is a number: "4 changes
-queued" in the footer and a badge on the bar. That number is often wrong, the
-user cannot see what it counts, and nothing between "queued" and "build and
-switch" tells them whether the result will even evaluate.
+queued" in the footer and a badge on the bar. That number misses real changes,
+the user cannot see what it counts, and nothing between "queued" and "build
+and switch" says whether the result will even evaluate.
+
+**How apply decides what to copy** (`nixarchy-apply`, read on 2026-11-15):
+
+- It copies whole files, by content (`diff -q`), from
+  `~/.config/nixarchy/{apps,services,advanced,flatsnap}.nix` and every
+  `~/.config/nixarchy/packages/*.nix` into the flake, under `$base/nixarchy/`.
+  `$base` is the flake root, or `hosts/<hostname>` when that exists.
+- It regenerates `$base/nixarchy-apps.nix`, which imports only the part files
+  that exist.
+- Package copies accumulate; a deleted source is never removed.
+- A `packages/*.nix` that was edited in the flake since the last apply makes
+  apply exit 1 before anything is built.
+- A part file that was edited in the flake is kept aside, then overwritten.
 
 **1. The count misses real changes.**
-`pending` diffs only lines carrying a `#@` marker (`bin/nixarchy-pkg`,
-`marked()` and `pending_changes()`). Changes it never sees, all of which apply
-does copy into the flake:
+`pending` (`bin/nixarchy-pkg`: `marked()`, `pending_changes()`) compares only
+`apps`, `services` and `advanced`, and in them only active lines that carry a
+`#@` marker. So "nothing queued" is reported while apply would still copy:
 
-- an edit inside a multi-line `firefox.settings = { … };` block (the panel
-  itself tells users to edit `apps.nix` for these);
-- anything in `advanced.nix`, which exists to hold unmarked Nix;
-- a hand edit to a marked line's value that keeps its marker (it shows as a
-  change only if the marked line's text differs; a change on the next line
-  does not).
+- any change to `flatsnap.nix` or to a `packages/*.nix` draft;
+- a change on an unmarked line, such as the body of a multi-line
+  `firefox.settings = { … };` block below an unchanged marked line, or
+  unmarked Nix in `advanced.nix`;
+- comment-only or whitespace-only edits, which `diff -q` sees and `marked()`
+  strips;
+- a part file created or deleted, which changes what `nixarchy-apps.nix`
+  imports.
 
-All of these report "nothing queued", and apply then rebuilds anyway.
-
-**2. The count can merge changes that are different.**
-Changes are grouped by marker without the file name (`cmd_pending`'s
-`group_by(.marker)`). The same marker in two files collapses into one change.
-Codex reproduced this on 2026-11-15.
+**2. The count can merge, or invent, changes.**
+`cmd_pending` groups by marker with no file name (`group_by(.marker)`). The
+same marker in two files, or twice in one file, collapses into one change. The
+merged record can take its file from one side and its line from the other.
+Codex reproduced the merge on 2026-11-15.
 
 **3. The user cannot see what is queued.**
-`pending` already returns a `changes` array (marker, file, line, on/off/added/
-removed). The panel reads only `count` (`PkgModel.qml:298`, `Panel.qml:53`)
-and throws the list away. The apply then runs with `--yes --no-preview`
-(`cmd_apply`), so there is no point at which the user looks at the change
-before the machine switches.
+`pending` already returns `changes[]`. The panel reads only `count` and
+`neverApplied` (`PkgModel.qml:298-299`, `Panel.qml:53-54`), and throws the
+list away. Apply then runs `nixarchy-apply --yes --no-preview` (`cmd_apply`),
+so the user never looks at the change before the machine switches. Nothing
+warns that an edit made in the flake copy will be overwritten, or will stop
+the apply.
 
-**4. "Accepted" does not mean "will build".**
-A value is checked only with `nix-instantiate --parse`. A wrong type
-(`services.openssh.ports = "22"`), an option that does not exist, a failed
-assertion or a conflict with the user's own modules is accepted, queued, and
-fails only when apply evaluates the system. On this machine that is 68 s into
-the apply (measured: evaluating `nixosConfigurations.p620`'s toplevel). The
-error then names a line in the flake's copy, not the edit the user made.
+**4. "Accepted" does not mean "evaluates".**
+A value is checked only with `nix-instantiate --parse`. A wrong type, a
+nonexistent option, a failed assertion or a conflict with the user's own
+modules is queued without complaint. It fails only when apply evaluates the
+system: on this machine that is 68 s in (measured by evaluating
+`nixosConfigurations.p620`'s `toplevel.drvPath`). The error then names a
+module or the flake's copy, not the edit the user made.
 
-**5. Errors look like "all clear".**
-- When `pending` fails, the bar is wrong either way. Output it cannot parse
-  shows 0 queued (`Panel.qml:58`). An `ok:false` answer leaves the previous
-  count up, with no sign that it is stale (`Panel.qml:52`).
-- `reindex` throws away its error (`cmd_reindex` sends everything to
-  `/dev/null` and reports only "still stale").
-- The search index goes stale silently. On this machine it was 13 days old,
-  with every input changed, and nothing rebuilt it until the user pressed `r`.
+**5. A failed `pending` looks like "nothing queued".**
+- `Panel.qml`:
+  - unparseable output sets `queued = 0` (`:58`);
+  - an `ok:false` answer leaves the previous count up, unmarked (`:52`);
+  - at startup the count is 0 (`:32`), so an early failure reads as
+    "nothing queued".
+- `PkgModel.qml:295-302` has the same two gaps, so the footer
+  (`Card.qml:340`) says "nothing queued" too.
 
 **6. Apply does not pin what was reviewed.**
-`nixarchy-apply` can refuse to build files that changed after the caller
-checked them (`--expect-sha256 <part>=<sha256>`, #979 in nixarchy). The panel
-never passes it, so a file edited after the user looked (by hand, a script, or
-a second panel) is built anyway.
+`nixarchy-apply --expect-sha256 <part>=<sha256>` refuses to build a selection
+part that changed after the caller checked it. The panel never passes it. The
+pin also covers only the selection parts as they stand. It does not cover
+`packages/*.nix`, which apply copies straight from the source, nor the
+flake's own files.
 
 ## Proposed outcome
 
-- **The count is honest.** "Nothing queued" means apply would copy nothing
-  new. Every change apply would copy is counted, including unmarked edits and
-  `advanced.nix`, and two changes are never merged into one.
-- **The user can read the queue.** It lists each change in plain words
-  ("brave on", "services.openssh.ports set", "advanced.nix: 3 lines
-  changed"), shows the raw lines on request, and lets them drop one change
-  before applying.
-- **"Will it build" is answered before the switch, and without one.** The
-  user can ask for a check, or it runs on its own when cheap enough. It
-  evaluates the real host with the queued files and reports either "builds"
-  or the error, naming the queued line it comes from where that can be
-  worked out. It never switches and never needs root.
-- **What was reviewed is what is built.** Apply from the panel passes the
-  hashes of the files the user saw. A file that changed since then is
-  refused with a message, not built.
-- **Failures are visible.** When `pending` or `reindex` fails, the panel says
-  so instead of showing 0 or "stale". A stale index says how old it is.
-- `nixarchy-pkg pending` stays one JSON object; its existing fields keep
-  their meaning, so terminal users and scripts do not break.
+- **The queue is honest about the selection.** "Nothing queued" means apply
+  would copy nothing new from `~/.config/nixarchy`. Every file apply would
+  copy, create or stop importing is accounted for: the four part files, every
+  draft, and unmarked and comment-only edits. Distinct changes are never
+  merged into one, and no record mixes two files.
+- **The user can read the queue.** Each change has a plain description:
+  - marked rows as a selection: "brave on", "services.openssh.ports changed";
+  - everything else as a file change: "advanced.nix: 3 lines changed",
+    "packages/foo.nix: new".
+
+  The raw lines are available on request.
+- **Conflicts in the flake are shown before apply, not during it.** An edit
+  made in the flake copy that apply would overwrite is shown, and so is one
+  that would stop the apply.
+- **"Does it evaluate" can be asked before switching, and without one.** On
+  request, the real host is evaluated with the files apply would produce. The
+  answer is exactly one of:
+  - "evaluates";
+  - the error, naming the queued file and line where it can be traced there;
+  - "superseded": the selection changed while it ran.
+
+  It never switches, never elevates, and never writes the flake. A result is
+  shown only for the selection it checked.
+- **The parts apply can pin are the parts that were reviewed.** An apply from
+  the panel passes `--expect-sha256` for the selection parts the user saw, so
+  a part edited since then is refused, not built. Whatever stays unpinned
+  (drafts, the flake's own files) is said plainly in the panel.
+- **A failed `pending` is visible.** The bar and the footer show that the
+  count is unknown, never 0 or a stale number.
+- **Existing `pending` users do not break.** The answer stays one JSON object.
+  Existing fields keep their meaning for marked rows. What they cannot express
+  is added alongside them (see open question 2).
+
+Scope: this task is about what an **apply** will copy from
+`~/.config/nixarchy`. Changes `flake add` and `flake remove` make directly in
+the flake are not "queued": they are in the flake already, and are shown by
+the Flakes tab.
 
 ## Affected users and systems
 
-- Everyone who applies from the panel, and anyone using `nixarchy-pkg pending`
-  from a terminal.
-- `bin/nixarchy-pkg`: `pending_changes`, `cmd_pending`, `cmd_apply`,
-  `cmd_reindex`, and a new read-only check.
-- `PkgModel.qml`, `Card.qml`/`Menu.qml` (a queue view), `Panel.qml` (bar
-  count and its error state).
+- Everyone who applies from the panel, and anyone who uses
+  `nixarchy-pkg pending` from a terminal.
+- `bin/nixarchy-pkg`: `marked`, `pending_changes`, `cmd_pending`, `cmd_apply`,
+  and a new read-only check.
+- `PkgModel.qml`, the menu and footer (`Menu.qml`, `Card.qml`), `Panel.qml`.
 - `tests/adapter.sh`, `tests/qml/`.
-- Outside this repo: `nixarchy-apply`'s `--expect-sha256` contract, used
-  as it stands, and the flake layout it copies into (`hosts/<host>/nixarchy/`).
-- Verification host is **razer**. Never p620. (p620's 68 s was a one-off
-  read-only `nix eval`.)
+- Outside this repo: `nixarchy-apply`'s copy rules and `--expect-sha256`, used
+  as they stand. Pinning drafts would need a nixarchy change, to be filed if
+  the spec wants it.
+- Verification host is **razer**. Never p620; p620's 68 s was a single
+  read-only `nix eval`.
 
 ## Constraints
 
-- **Never switch, never elevate, never write the flake** from the new check.
-  It may evaluate, and may build in the user's store if the spec chooses that.
-  It must not activate anything.
-- Must not slow the panel: no evaluation on every keystroke or toggle. An
-  evaluation is tens of seconds and must run in the background, be
-  cancellable, and never block a write.
-- Must not change the meaning of existing `pending` fields
-  (`count`, `changes[].marker/file/line/change`, `neverApplied`, `base`).
-- Must work when the machine has never applied (`neverApplied: true`), and
-  when the flake is not at `/etc/nixos`.
-- Must hold the #59 guarantees: the check is a read, takes no lock, and
-  ignores a write in progress rather than waiting for it.
-- No secrets in the output. A diff of `apps.nix` can contain a value the user
-  typed, so the queue view shows the user's own lines and nothing reaches a
-  log or an external service.
+- **The check never switches, never elevates, and never writes the flake or
+  the user's selection.** It may evaluate. Anything more (a dry run, a build)
+  is labelled as what it is.
+- **It runs only when asked.** It never runs per edit or on its own.
+  Evaluating a full host is tens of seconds and gigabytes of memory, and it
+  copies source into the world-readable store. At most one runs at a time, it
+  is cancellable, it never blocks a write, and an apply cancels it.
+- **Unreviewed or untracked files never reach the store.** The check
+  evaluates the flake's tracked files plus the selection apply would copy,
+  nothing else. This matches what apply builds.
+- **Evaluation purity matches apply.** No `--impure`, and nothing added to
+  make the check pass.
+- **#59 still holds.** The check and `pending` are reads: they take no lock
+  and never wait for a write. #59's in-place writes are not atomic, so a read
+  can catch a file mid-write. A result taken from a selection that was
+  incomplete, or changed during the check, must never be shown as current.
+  Any working copy lives in the user's private state directory, and is
+  removed afterwards.
+- **No secrets leak beyond what apply already does.** The queue view and
+  error excerpts can show values the user typed. They stay in the panel and
+  the user's terminal, and reach no log or service.
+- **It must work when there is nothing to compare against**: a machine that
+  has never applied, or a missing `$base/nixarchy`. And when the flake is not
+  at `/etc/nixos`.
 
 ## Open questions
 
-1. **What does the check evaluate, and against what?** Evaluate the host's
-   toplevel `drvPath` with the queued files overlaid on a copy of the flake
-   (exact, about 68 s here), or only the user's module against the option
-   declarations (fast, but misses conflicts with other modules)? Recommended:
-   the real host, run on demand and when the queue settles, never per edit.
-2. **Should it also build** (`nix build --dry-run`, or a real build without
-   switching, with an `nvd`-style package diff)? It is far more useful
-   ("firefox 132 → 133, +2 packages, 1.4 GB to download") and far slower.
-   Recommended: dry-run size and package diff in this task, full build left
-   to apply.
-3. **Drop one change from the queue:** revert that one line in
-   `~/.config/nixarchy/*.nix` to the applied copy, or only offer to open the
-   file? Reverting is a write under #59's lock and guard. Recommended: revert
-   for marked rows, open-in-editor for unmarked hunks.
-4. **Scope:** the stale index (part of problem 5) could be its own small
-   task. Fold it in or split it out? Recommended: keep the "say how old"
-   message here, and split automatic reindexing into its own task.
-5. **#66 overlap:** `apply` should refuse while an interrupted write is open
-   (#66). It touches the same `cmd_apply`. Fold #66 in? Recommended: yes,
-   it is three lines on the same path.
+1. **Evaluate only, or also a dry run?**
+   - Evaluating `toplevel.drvPath` answers "does it evaluate".
+   - `nix build --dry-run` adds what would be downloaded or built.
+   - A package diff (`nvd`-style) needs the closure realised, which is a
+     full build.
+
+   Recommended: evaluation, plus the dry-run counts, clearly labelled. Leave
+   package diffs to apply, which `nh` already prints.
+2. **How does `pending` show what its fields cannot?** Today `count` equals
+   `changes | length`, and `changes[].change` is one of
+   on/off/added/removed. Recommended: keep `changes[]` for marked rows, and
+   add `modified` for a marked line whose value changed. Add a separate
+   `files[]` for whole-file changes, and a `total` that counts both.
+   `count` keeps its meaning for marked rows. Alternatively, `count` becomes
+   the total, which is a contract change for terminal users.
+3. **Dropping one change from the queue.** "Revert to the applied copy" has
+   no safe baseline when the flake copy was edited, or the machine never
+   applied. Recommended: leave it to a follow-up. This task shows the queue,
+   and opens the file at the line.
+4. **Stale search index.** Showing its age and surfacing real `reindex`
+   errors is a separate problem from apply truthfulness. Note that the picker
+   exits non-zero even after a good reindex. Recommended: split it into its
+   own issue.
+5. **#66** (apply refuses while an interrupted write is open) touches
+   `cmd_apply` too, but depends on #59's recovery state, not on this queue.
+   Recommended: keep it separate.
