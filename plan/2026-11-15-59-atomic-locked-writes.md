@@ -666,3 +666,16 @@ changes until the plugin is rebuilt. After a revert, the lock file and
 `pkg-recovery/` are inert. A user left with `pkg-recovery/open/` restores by
 hand from its `N.path` and `N.data` files, as step 7's troubleshooting page
 describes.
+
+## Deviations recorded during implementation
+
+- **Step 1:** the `mv` exemption counts matches instead of using `grep -q`
+  (see step 1).
+- **Steps 1 and 7, found in the lead's review of step 7:** `nixarchy-pkg` is
+  not on `PATH`. It is the plugin's own script. "run: nixarchy-pkg recover"
+  was therefore not a command anyone could type. The adapter now sets
+  `SELF` (its own path, made absolute) and the two recover hints say
+  "run: $SELF recover". When the panel runs it, that is
+  `~/.config/omarchy/plugins/nixarchy.pkg/bin/nixarchy-pkg`. The
+  troubleshooting page gives that full path. Step 6 case 3's assertion
+  (`.error` contains "nixarchy-pkg recover") still holds.

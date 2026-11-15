@@ -48,6 +48,8 @@ umask 077
 readonly STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/nixarchy"
 readonly LOCK="$STATE_DIR/applied/lock"   # nixarchy-apply's lock, same expression
 readonly TXN="$STATE_DIR/pkg-recovery"    # one write at a time, under the lock
+# This script is not on PATH; a hint to run it must name it the way it was run.
+SELF=$0; case $SELF in /*) ;; *) SELF=$PWD/$SELF ;; esac; readonly SELF
 WORK=""
 GUARDED=false        # true only while pkg-recovery/open belongs to this call
 ROLLBACK_NOTE=""
@@ -118,7 +120,7 @@ begin_write() {
   # write was final. Neither needs anything from the user.
   rm -rf "$TXN/new" "$TXN/done" 2>/dev/null || :
   if [ -e "$TXN/open" ] && [ "$mode" != recover ]; then
-    die "an earlier write was interrupted. To put back what was there before, run: nixarchy-pkg recover. If the files look right as they are, run: nixarchy-pkg recover --discard. Nothing was changed."
+    die "an earlier write was interrupted. To put back what was there before, run: $SELF recover. If the files look right as they are, run: $SELF recover --discard. Nothing was changed."
   fi
 }
 
@@ -164,7 +166,7 @@ rollback() {
     ROLLBACK_NOTE=""
     rm -rf "$TXN/open" 2>/dev/null || :
   else
-    ROLLBACK_NOTE="Could not put back: ${failed[*]}. Then run: nixarchy-pkg recover (to try again) or nixarchy-pkg recover --discard (to keep things as they are)."
+    ROLLBACK_NOTE="Could not put back: ${failed[*]}. Then run: $SELF recover (to try again) or $SELF recover --discard (to keep things as they are)."
   fi
 }
 
