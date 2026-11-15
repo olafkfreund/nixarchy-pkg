@@ -20,6 +20,30 @@ TestCase {
     m._applyTerm.running = false
     if (m.naming) m.cancelNaming()
     m.setTab(0)
+    m.queued = -1
+    m.pendingData = null
+    m.queueError = ""
+    m.checkResult = null
+    m.checkRunning = false
+    m.detailText = ""
+    m.disarm()
+    m.armingState = ""
+    m._pendingWant = 0
+    m._pendingRun = 0
+    m._armWant = 0
+    m._pendingAgain = false
+    m._checkStopping = false
+    m._afterCheck = ""
+    m._pending.running = false
+    m._check.running = false
+    m._apply.command = []
+  }
+
+  function pend(o) {
+    var d = { ok: true, total: 1, count: 1, fingerprint: "f1", writing: false,
+              pins: { apps: "aa" }, files: [], changes: [], sources: {}, unpinned: { drafts: [] } }
+    for (var k in o) d[k] = o[k]
+    return JSON.stringify(d)
   }
 
   // #59: a write must not start while an apply holds the lock.
@@ -133,5 +157,121 @@ TestCase {
     m.busy = true
     m._writer.deliver(JSON.stringify({ ok: true, apps: [], services: [] }))
     compare(m.busy, false)
+  }
+
+  // ---- #60: the queue is what apply will copy ----------------------
+
+  function test_queue_unknown_before_any_answer() { compare(m.queued, -1) }
+
+  function test_error_answer_is_unknown() {
+    m._pending.deliver(JSON.stringify({ ok: false, error: "boom" }))
+    compare(m.queued, -1)
+    compare(m.queueError, "boom")
+  }
+
+  function test_zero_total_stays_zero() {
+    m._pending.deliver(pend({ total: 0 }))
+    compare(m.queued, 0)
+  }
+
+  function test_arming_reads_afresh_then_confirms() {
+    compare(m.armApply("here"), false)
+    compare(m.armingState, "reading")
+    m._pending.deliver(pend({}))
+    compare(m.armingState, "armed")
+    compare(m.armedApply, "here")
+    compare(m.armedPins.apps, "aa")
+    verify(m.message.indexOf("1 change") >= 0, m.message)
+    compare(m.armApply("here"), true)
+    compare(m.armedPins.apps, "aa", "pins survive the confirming press")
+  }
+
+  function test_old_run_does_not_arm() {
+    m.refreshPending()
+    compare(m._pending.running, true)
+    m.armApply("here")
+    m._pending.deliver(pend({}))
+    compare(m.armingState, "reading", "an answer from before the press must not arm")
+    m._pending.finish(0)
+    m._pending.deliver(pend({}))
+    compare(m.armingState, "armed")
+  }
+
+  function test_changed_queue_disarms() {
+    m.armApply("here")
+    m._pending.deliver(pend({}))
+    m._pending.deliver(pend({ fingerprint: "f2" }))
+    compare(m.armingState, "")
+    verify(m.message.indexOf("the queue changed") >= 0)
+  }
+
+  function test_arming_refused_when_queue_unknown() {
+    m._pending.deliver(JSON.stringify({ ok: false, error: "boom" }))
+    compare(m.armApply("here"), false)
+    compare(m.armingState, "")
+    verify(m.message.indexOf("queue unknown") >= 0)
+  }
+
+  function test_apply_sends_the_frozen_pins() {
+    m.armApply("here")
+    m._pending.deliver(pend({ pins: { apps: "abc" } }))
+    compare(m.armApply("here"), true)
+    m.apply()
+    compare(m._apply.command.join(" "), m.script + " apply --pin apps=abc")
+    compare(m.armedKind, "")
+    compare(Object.keys(m.armedPins).length, 0)
+  }
+
+  function test_draft_only_change_clears_check() {
+    m._pending.deliver(pend({}))
+    m.checkResult = { verdict: "evaluates", fingerprint: "f1" }
+    m._pending.deliver(pend({ fingerprint: "f2" }))
+    compare(m.checkResult, null)
+  }
+
+  function test_stale_check_is_superseded() {
+    m._pending.deliver(pend({}))
+    m.checkRunning = true
+    m._check.deliver(JSON.stringify({ ok: true, verdict: "evaluates", fingerprint: "old" }))
+    compare(m.checkResult.verdict, "superseded")
+  }
+
+  function test_cancelled_check_drops_its_result() {
+    m.checkRunning = true
+    m.cancelCheck()
+    m._check.deliver(JSON.stringify({ ok: true, verdict: "evaluates", fingerprint: "f1" }))
+    m._check.finish(0)
+    compare(m.checkResult, null)
+    compare(m.checkRunning, false)
+  }
+
+  function test_row_texts() {
+    m._pending.deliver(pend({
+      total: 5,
+      writing: true,
+      sources: { apps: "/c/apps.nix" },
+      changes: [
+        { marker: "app:foo", file: "apps", line: "x", change: "on", lineNo: 3 },
+        { marker: "app:bar", file: "apps", line: "y", change: "off", lineNo: null },
+        { marker: "service:baz", file: "services", line: "z", change: "modified", lineNo: null } ],
+      files: [
+        { file: "packages/foo.nix", label: "packages/foo.nix", status: "new", unmarked: 0,
+          hunk: "h", conflict: "blocks", explained: false, path: "/c/packages/foo.nix" },
+        { file: "advanced", label: "advanced.nix", status: "modified", unmarked: 2,
+          hunk: "", conflict: "overwrite", explained: false, path: "/c/advanced.nix" } ],
+      unpinned: { drafts: ["packages/foo.nix"] } }))
+    var t = m.queueRows().map(function (r) { return r.text })
+    verify(t.indexOf("foo on (apps.nix:3)") >= 0, t.join("|"))
+    verify(t.indexOf("bar off (apps.nix)") >= 0, t.join("|"))
+    verify(t.indexOf("baz changed (services.nix)") >= 0, t.join("|"))
+    verify(t.indexOf("packages/foo.nix: new") >= 0, t.join("|"))
+    verify(t.indexOf("advanced.nix: 2 lines changed") >= 0, t.join("|"))
+    verify(t.indexOf("packages/foo.nix was edited in the flake -- apply will stop") >= 0, t.join("|"))
+    verify(t.indexOf("advanced.nix was edited in the flake -- apply will keep a copy and overwrite it") >= 0, t.join("|"))
+    verify(t.indexOf("a write is in progress or was interrupted -- the queue may be out of date") >= 0)
+    verify(t.indexOf("not pinned: the flake's own files, and drafts: packages/foo.nix") >= 0, t.join("|"))
+    compare(m.queueRows()[t.indexOf("foo on (apps.nix:3)")].path, "/c/apps.nix")
+    m.checkResult = { verdict: "fails", summary: "bad", at: { file: "a.nix", line: 4 } }
+    compare(m.queueRows()[0].text, "fails: bad (a.nix:4, as checked)")
   }
 }
