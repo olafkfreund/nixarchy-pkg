@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 60
 intent: intent/2026-11-15-60-truthful-queue.md
 ---
