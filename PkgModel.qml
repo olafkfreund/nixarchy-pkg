@@ -344,6 +344,8 @@ QtObject {
 
   // True when the write started; false when one was already running.
   function write(args) {
+    // reindex writes only the search cache, so an apply does not block it.
+    if (applying && args[0] !== "reindex") { message = "an apply is running \u2014 wait for it to finish"; return false }
     if (busy) return false
     busy = true
     message = ""
@@ -525,7 +527,8 @@ QtObject {
   // the inspection, where clearing them used to lose both.
   function declareAs(name) {
     if (!write(["flake", "add", String(name), namingRef])) {
-      message = "still writing \u2014 try again in a moment"
+      // write() has already said why when an apply is running.
+      if (!applying) message = "still writing \u2014 try again in a moment"
       return false
     }
     naming = false
@@ -634,9 +637,13 @@ QtObject {
     command: ["omarchy-launch-floating-terminal-with-presentation", "nixarchy-apply"]
   }
 
+  // True when the terminal was started; the caller closes the menu only then,
+  // so a refusal stays on screen.
   function applyInTerminal() {
-    if (applying) return
+    if (applying) { message = "an apply is running \u2014 wait for it to finish"; return false }
+    if (busy) { message = "still writing \u2014 try again in a moment"; return false }
     _applyTerm.running = true
+    return true
   }
 
   // Detaching from the log leaves the build running: it is elevating,

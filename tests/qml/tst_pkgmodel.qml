@@ -15,8 +15,41 @@ TestCase {
 
   function cleanup() {
     m.busy = false
+    m.applying = false
+    m.message = ""
+    m._applyTerm.running = false
     if (m.naming) m.cancelNaming()
     m.setTab(0)
+  }
+
+  // #59: a write must not start while an apply holds the lock.
+  function test_write_refused_while_applying() {
+    m.applying = true
+    compare(m.write(["toggle", "app", "x"]), false)
+    verify(m.message.indexOf("apply is running") >= 0, "it says why")
+    compare(m.busy, false, "and does not become busy")
+  }
+
+  // #59: a refused flake declaration keeps the apply's reason.
+  function test_declare_during_apply_keeps_the_reason() {
+    m.applying = true
+    compare(m.declareAs("x"), false)
+    verify(m.message.indexOf("apply is running") >= 0, "not 'still writing'")
+  }
+
+  // #59: reindex writes only the cache, so an apply does not block it.
+  function test_reindex_not_refused_while_applying() {
+    m.applying = true
+    m.reindex()
+    compare(m.busy, true, "the reindex started")
+  }
+
+  // #59: the terminal apply must not start under a running write.
+  function test_terminal_apply_refused_while_busy() {
+    m.busy = true
+    compare(m.applyInTerminal(), false, "so the menu stays open")
+    compare(m._applyTerm.running, false)
+    verify(m.message.indexOf("still writing") >= 0, "it says why")
   }
 
   // A state answer and a rows answer are told apart by shape, not by which

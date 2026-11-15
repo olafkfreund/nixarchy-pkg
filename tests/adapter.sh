@@ -24,6 +24,10 @@ check() {
 # one rather than every negative assertion silently failing.
 not() { ! "$@"; }
 
+# The adapter keeps its lock and recovery data under XDG_STATE_HOME. Never
+# the real one.
+XDG_STATE_HOME=$(mktemp -d); export XDG_STATE_HOME
+
 # A selection of this machine's own catalogue, in a directory that is thrown
 # away afterwards.
 fresh_config() {
@@ -718,6 +722,229 @@ check "reindex over a no-op search reports failure" jq -e '.ok == false' <<<"$ou
 check "and says the index is still stale"           jq -e '.indexStale == true' <<<"$out"
 rm -rf "$DSTUB" "$DCFG" "$RCACHE"
 
+echo "a write that fails or races leaves the files recoverable (#59)"
+REAL_CP=$(command -v cp); REAL_MV=$(command -v mv); REAL_NIX=$(command -v nix)
+REAL_NI=$(command -v nix-instantiate); REAL_AWK=$(command -v awk)
+W59=$(mktemp -d)
+ADAPTER_TMP=$(mktemp -d)
+mkdir -p "$W59/cfg/nixarchy" "$W59/stub"
+A59="$W59/cfg/nixarchy/apps.nix"
+reset_apps() { printf '{ ... }:\n{\n}\n' > "$A59"; }
+st() { printf '%s' "$XDG_STATE_HOME/nixarchy"; }
+one_json() { test "$(printf '%s\n' "$1" | grep -c '^{')" = 1; }
+run59() { TMPDIR="$ADAPTER_TMP" XDG_CONFIG_HOME="$W59/cfg" PATH="$W59/stub:$PATH" "$ADAPTER" "$@"; }
+left_nothing() {
+  check "$1: adapter TMPDIR is empty" test -z "$(ls -A "$ADAPTER_TMP")"
+  check "$1: no working directory remains" not compgen -G "$(st)/pkg-work.*"
+  check "$1: no recovery is open" not test -e "$(st)/pkg-recovery/open"
+}
+
+# A failed live copy must be undone from the recovery data.
+reset_apps; before=$(md5sum < "$A59")
+cat > "$W59/stub/cp" <<EOF
+#!/usr/bin/env bash
+if [ "\${!#}" = "$A59" ] && [ ! -e "$W59/once" ]; then
+  touch "$W59/once"; : > "$A59"; exit 1
+fi
+exec "$REAL_CP" "\$@"
+EOF
+chmod +x "$W59/stub/cp"
+out=$(run59 opt set services.x.enable true) || true
+check "failed copy gives one answer" one_json "$out"
+check "failed copy reports failure" jq -e '.ok == false' <<<"$out"
+check "failed copy restores the file" test "$(md5sum < "$A59")" = "$before"
+rm -f "$W59/stub/cp" "$W59/once"
+left_nothing "failed copy"
+
+reset_apps; before=$(md5sum < "$A59"); touch -d '2000-01-01' "$A59"; stamp=$(stat -c %Y.%i "$A59")
+cat > "$W59/stub/awk" <<EOF
+#!/usr/bin/env bash
+if [ -n "\${NIXARCHY_PKG_VALUE-}" ]; then exit 1; fi
+exec "$REAL_AWK" "\$@"
+EOF
+chmod +x "$W59/stub/awk"
+out=$(run59 opt set services.x.enable true) || true
+check "failed candidate gives one answer" one_json "$out"
+check "failed candidate reports failure" jq -e '.ok == false' <<<"$out"
+check "failed candidate leaves the file" test "$(md5sum < "$A59")" = "$before"
+check "failed candidate does not rewrite it" test "$(stat -c %Y.%i "$A59")" = "$stamp"
+rm -f "$W59/stub/awk"
+left_nothing "failed candidate"
+
+# SIGKILL leaves the complete backup for an explicit recovery.
+reset_apps; before=$(md5sum < "$A59"); cp "$A59" "$W59/original"
+cat > "$W59/stub/cp" <<EOF
+#!/usr/bin/env bash
+if [ "\${!#}" = "$A59" ] && [ ! -e "$W59/once" ]; then
+  touch "$W59/once"; : > "$A59"; kill -9 "\$PPID"; exit 1
+fi
+exec "$REAL_CP" "\$@"
+EOF
+chmod +x "$W59/stub/cp"
+out=$(run59 opt set services.x.enable true) || true
+check "killed write keeps recovery open" test -d "$(st)/pkg-recovery/open"
+check "killed write keeps original bytes" cmp -s "$(st)/pkg-recovery/open/0.data" "$W59/original"
+check "killed write records the path" grep -qx "$A59" "$(st)/pkg-recovery/open/0.path"
+rm -f "$W59/stub/cp" "$W59/once"
+out=$(run59 opt set services.y.enable true) || true
+check "next write gives one answer" one_json "$out"
+check "next write requests recovery" jq -e '.ok == false and (.error | contains("nixarchy-pkg recover"))' <<<"$out"
+check "next write leaves the damaged file" test ! -s "$A59"
+out=$(run59 recover) || true
+check "recovery gives one answer" one_json "$out"
+check "recovery succeeds" jq -e '.ok == true' <<<"$out"
+check "recovery restores original bytes" test "$(md5sum < "$A59")" = "$before"
+left_nothing "killed write recovered"
+
+reset_apps; before=$(md5sum < "$A59")
+cat > "$W59/stub/cp" <<EOF
+#!/usr/bin/env bash
+if [ "\${!#}" = "$A59" ]; then : > "$A59"; exit 1; fi
+exec "$REAL_CP" "\$@"
+EOF
+chmod +x "$W59/stub/cp"
+out=$(run59 opt set services.x.enable true) || true
+check "failed undo gives one answer" one_json "$out"
+check "failed undo reports its backup" jq -e '.ok == false and (.error | contains("0.data") and contains("nixarchy-pkg recover"))' <<<"$out"
+check "failed undo keeps recovery open" test -d "$(st)/pkg-recovery/open"
+rm -f "$W59/stub/cp"
+out=$(run59 recover) || true
+check "retrying undo succeeds" jq -e '.ok == true' <<<"$out"
+check "retrying undo restores the file" test "$(md5sum < "$A59")" = "$before"
+left_nothing "failed undo recovered"
+
+reset_apps; before=$(md5sum < "$A59")
+cat > "$W59/stub/mv" <<EOF
+#!/usr/bin/env bash
+if [[ \${!#} == */pkg-recovery/done ]]; then exit 1; fi
+exec "$REAL_MV" "\$@"
+EOF
+chmod +x "$W59/stub/mv"
+out=$(run59 opt set services.x.enable true) || true
+check "failed commit gives one answer" one_json "$out"
+check "failed commit reports undo" jq -e '.ok == false and (.error | contains("so it was undone"))' <<<"$out"
+check "failed commit restores the file" test "$(md5sum < "$A59")" = "$before"
+rm -f "$W59/stub/mv"
+left_nothing "failed commit"
+
+reset_apps; before=$(md5sum < "$A59")
+cat > "$W59/stub/nix-instantiate" <<EOF
+#!/usr/bin/env bash
+sleep 1
+exec "$REAL_NI" "\$@"
+EOF
+chmod +x "$W59/stub/nix-instantiate"
+run59 opt set services.a.enable true > "$W59/a" & pida=$!
+run59 opt set services.b.enable true > "$W59/b" & pidb=$!
+wait "$pida" || true; wait "$pidb" || true
+check "first simultaneous write succeeds" jq -e '.ok == true' < "$W59/a"
+check "second simultaneous write succeeds" jq -e '.ok == true' < "$W59/b"
+check "first line survives the race" grep -q '#@opt services.a.enable$' "$A59"
+check "second line survives the race" grep -q '#@opt services.b.enable$' "$A59"
+rm -f "$W59/stub/nix-instantiate"
+left_nothing "simultaneous writes"
+
+reset_apps; before=$(md5sum < "$A59")
+mkdir -p "$(st)/applied"
+( flock 9; touch "$W59/held"; exec sleep 15 ) 9>"$(st)/applied/lock" & lockpid=$!
+i=0
+while [ ! -e "$W59/held" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+check "apply holds the lock" test -e "$W59/held"
+SECONDS=0; out=$(run59 opt set services.c.enable true) || true; elapsed=$SECONDS
+check "locked write gives one answer" one_json "$out"
+check "locked write names the holder" jq -e '.ok == false and (.error | contains("another write or an apply"))' <<<"$out"
+check "locked write times out promptly" test "$elapsed" -le 10
+check "locked write leaves the file" test "$(md5sum < "$A59")" = "$before"
+kill "$lockpid" 2>/dev/null || true; wait "$lockpid" 2>/dev/null || true
+rm -f "$W59/held"
+left_nothing "apply lock"
+
+mkdir -p "$W59/fk" "$W59/dep"
+printf '{\n  outputs = { self }: { };\n}\n' > "$W59/fk/flake.nix"
+printf '{\n  outputs = { self }: { nixosModules.default = { }; };\n}\n' > "$W59/dep/flake.nix"
+for d in "$W59/fk" "$W59/dep"; do git -C "$d" init -q .; git -C "$d" add -A; done
+nix flake lock "$W59/fk" >/dev/null 2>&1
+# Nix does not create a lock file for a flake with no inputs.
+[ -e "$W59/fk/flake.lock" ] || printf '{"nodes":{"root":{}},"root":"root","version":7}\n' > "$W59/fk/flake.lock"
+reset_apps; before=$(md5sum < "$A59")
+before_nix=$(md5sum < "$W59/fk/flake.nix"); before_lock=$(md5sum < "$W59/fk/flake.lock")
+cat > "$W59/stub/nix" <<EOF
+#!/usr/bin/env bash
+if [ "\$1 \$2" = 'flake metadata' ] && [ ! -e "$W59/once" ]; then
+  touch "$W59/once"; printf 'damage\n' >> "$W59/fk/flake.lock"; exit 1
+fi
+exec "$REAL_NIX" "\$@"
+EOF
+chmod +x "$W59/stub/nix"
+out=$(NIXARCHY_FLAKE="$W59/fk" run59 flake add dep "path:$W59/dep") || true
+check "failed metadata gives one answer" one_json "$out"
+check "failed metadata reports failure" jq -e '.ok == false' <<<"$out"
+check "failed metadata restores flake.nix" test "$(md5sum < "$W59/fk/flake.nix")" = "$before_nix"
+check "failed metadata restores flake.lock" test "$(md5sum < "$W59/fk/flake.lock")" = "$before_lock"
+rm -f "$W59/stub/nix" "$W59/once"
+left_nothing "failed add metadata"
+
+reset_apps; before=$(md5sum < "$A59")
+out=$(NIXARCHY_FLAKE="$W59/fk" run59 flake add dep "path:$W59/dep") || true
+check "fixture add succeeds" jq -e '.ok == true' <<<"$out"
+printf 'inputs.dep.nixosModules.default\n' > "$W59/fk/referred.nix"
+before_nix=$(md5sum < "$W59/fk/flake.nix"); before_lock=$(md5sum < "$W59/fk/flake.lock")
+cat > "$W59/stub/nix" <<EOF
+#!/usr/bin/env bash
+if [ "\$1 \$2" = 'flake metadata' ]; then printf '\n' >> "$W59/fk/flake.lock"; fi
+exec "$REAL_NIX" "\$@"
+EOF
+chmod +x "$W59/stub/nix"
+out=$(NIXARCHY_FLAKE="$W59/fk" run59 flake remove dep) || true
+check "refused remove gives one answer" one_json "$out"
+check "refused remove names the reference" jq -e '.ok == false and (.error | contains("still referred to"))' <<<"$out"
+check "refused remove restores flake.nix" test "$(md5sum < "$W59/fk/flake.nix")" = "$before_nix"
+check "refused remove restores flake.lock" test "$(md5sum < "$W59/fk/flake.lock")" = "$before_lock"
+rm -f "$W59/stub/nix" "$W59/once"
+left_nothing "refused remove metadata"
+
+# A refusal must not need to write a file it never changed: a read-only
+# flake.lock used to fail the undo and wedge every later write.
+chmod 444 "$W59/fk/flake.lock"; before_lock=$(md5sum < "$W59/fk/flake.lock")
+out=$(NIXARCHY_FLAKE="$W59/fk" run59 flake add dep "path:$W59/dep") || true
+check "read-only lock: one answer" one_json "$out"
+check "read-only lock: refused, no failed undo" jq -e '.ok == false and (.error | contains("undo failed") | not)' <<<"$out"
+check "read-only lock: unchanged" test "$(md5sum < "$W59/fk/flake.lock")" = "$before_lock"
+chmod 644 "$W59/fk/flake.lock"
+left_nothing "read-only lock"
+
+# A dangling symlink is refused, never recorded as absent and deleted.
+reset_apps; mv "$A59" "$W59/real.nix"; ln -s "$W59/gone.nix" "$A59"
+out=$(run59 opt set services.d.enable true) || true
+check "dangling symlink: one answer" one_json "$out"
+check "dangling symlink: refused" jq -e '.ok == false' <<<"$out"
+check "dangling symlink: still a symlink" test -L "$A59"
+rm -f "$A59"; mv "$W59/real.nix" "$A59"
+left_nothing "dangling symlink"
+
+# Killed while an external writer runs: the lock must die with the adapter,
+# not live on in the $(...) subshell that waits for the writer.
+reset_apps
+cat > "$W59/stub/nixarchy-opt-remove" <<EOF
+#!/usr/bin/env bash
+echo \$\$ > "$W59/writer"; exec sleep 20   # exec keeps the pid
+EOF
+chmod +x "$W59/stub/nixarchy-opt-remove"
+# Not through run59: a backgrounded function is a forked subshell, so $!
+# would be that shell and kill -9 would miss the adapter.
+TMPDIR="$ADAPTER_TMP" XDG_CONFIG_HOME="$W59/cfg" PATH="$W59/stub:$PATH" \
+  "$ADAPTER" opt remove services.x.enable > /dev/null 2>&1 & adapter=$!
+i=0; while [ ! -s "$W59/writer" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+kill -9 "$adapter" 2>/dev/null || true; wait "$adapter" 2>/dev/null || true
+check "killed during a writer: lock is free" flock -n "$(st)/applied/lock" true
+kill "$(cat "$W59/writer")" 2>/dev/null || true   # never pkill -f: it can match the caller
+rm -f "$W59/stub/nixarchy-opt-remove" "$W59/writer"
+out=$(run59 recover --discard) || true
+check "recover --discard gives one answer" one_json "$out"
+check "recover --discard keeps the files" jq -e '.ok == true' <<<"$out"
+left_nothing "killed during a writer"
+rm -rf "$W59" "$ADAPTER_TMP"
+
 # A pipeline whose FIRST command exits non-zero on a normal outcome --
 # `diff` finding differences, `grep` finding nothing, `head` closing the pipe
 # under it -- is a failure under `set -euo pipefail` (bin/nixarchy-pkg:39).
@@ -735,11 +962,19 @@ pipes_into_head() { code | grep -qE '(grep|diff|comm|cmp)[[:space:]][^|]*\|[[:sp
 check "no diff, comm or cmp at the head of a pipeline" not heads_a_pipeline
 check "nothing is piped into head"                     not pipes_into_head
 
-# And the shape that caused #39: mv onto a config path replaces the inode,
-# taking the mode, the owner and any symlink with it. sed -i does the same
-# by way of its own temp file. Every writer here copies onto the live path
-# instead, the way the restores always have.
-renames_onto_a_config() { code | grep -qE '\bmv[[:space:]]+"'; }
+# And the shape that caused #39: mv onto a user's file replaces the inode,
+# taking the mode, the owner and any symlink with it. Recovery data is the
+# adapter's own, so its stage changes are allowed.
+renames_onto_a_config() {
+  # Counted, not -q (or >/dev/null, which GNU grep treats the same): stopping
+  # at the first match SIGPIPEs the grep before it, and under pipefail that
+  # hides the very mv this looks for.
+  local n
+  # shellcheck disable=SC2016  # match literal $TXN text in source
+  n=$(code | grep -E '\bmv[[:space:]]+"' |
+        grep -cvE '\bmv[[:space:]]+"\$TXN/(new|open)"[[:space:]]+"\$TXN/(open|done)"' || true)
+  [ "$n" -gt 0 ]
+}
 edits_in_place() { code | grep -qE '\bsed[[:space:]]+-i\b'; }
 check "no mv onto a file the adapter owns" not renames_onto_a_config
 check "no sed -i"                          not edits_in_place
@@ -750,5 +985,6 @@ check "exits 0 on an unknown command" test "$rc" = 0
 check "says so in the object"         jq -e '.ok == false and (.error | length > 0)' <<<"$out"
 
 echo
+rm -rf "$XDG_STATE_HOME"
 if [ "$fails" -gt 0 ]; then echo "$fails failed"; exit 1; fi
 echo "all passed"

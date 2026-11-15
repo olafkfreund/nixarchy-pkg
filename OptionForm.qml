@@ -276,6 +276,7 @@ FocusScope {
     if (value.length === 0) { root.finish(); return }
     // One write at a time, and none while an apply could start: this used
     // to run beside the model's guard, so `a` could apply mid-write (#28).
+    if (root.model.applying) { root.error = "an apply is running \u2014 wait for it to finish"; return }
     if (root.model.busy) { root.error = "still writing \u2014 try again in a moment"; return }
     // A line that is already there is changed in place, atomically; `set`
     // refuses it ("remove it first"), which is what `replace` exists for.
