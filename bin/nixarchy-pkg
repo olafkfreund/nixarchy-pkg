@@ -1383,91 +1383,144 @@ marked() {
 }
 
 
-# The marked lines that differ, one per line, as `sign<TAB>part<TAB>line`.
-#
-# A function called in the main shell rather than a <(…) inside the jq call,
-# because nothing inside a process substitution can stop the command reading
-# it: the subshell exits, its end of the pipe closes, and jq carries on and
-# prints a confident answer built from however much arrived. Every failure
-# below has to be one this can RETURN, so cmd_pending can act on it.
-pending_changes() {
-  local base=$1 part src dst out rc
-  for part in apps services advanced; do
-    src="$CONFIG_DIR/$part.nix"
-    dst="$base/nixarchy/$part.nix"
-    [ -f "$src" ] || continue
-    # A file that exists and cannot be read is not an empty one. marked()
-    # sends its errors to /dev/null and returns nothing, so an unreadable
-    # selection file used to report every live line in the applied copy as
-    # REMOVED -- a confident list of changes nobody made.
-    [ -r "$src" ] || return 2
-    # A machine that has never applied has no copy, which is the same
-    # question asked against an empty one.
-    #
-    # `diff` is run on its own rather than piped, because its three exit
-    # codes mean three different things and only one is a failure: 0 no
-    # differences, 1 differences, 2 or more it could not do the job. Piped
-    # under `pipefail` the 1 took the whole loop down on the FIRST file that
-    # had a change, so apps was reported and services and advanced were
-    # dropped -- the count the panel's footer draws, wrong by every change
-    # after the first. `|| true` would have fixed that by making an
-    # unreadable file look like an identical one, which is the distinction
-    # worth keeping.
-    rc=0
-    out=$(diff <([ -f "$dst" ] && marked "$dst" || true) <(marked "$src")) || rc=$?
-    [ "$rc" -le 1 ] || return 3
-    printf '%s\n' "$out" |
-      awk -v part="$part" '
-        /^> / { print "+\t" part "\t" substr($0, 3) }
-        /^< / { print "-\t" part "\t" substr($0, 3) }'
-  done
+# twoway A B OUT -- a missing side is empty; diff status 1 means changed.
+twoway() {
+  local a=$1 b=$2 rc=0
+  [ -e "$a" ] || a=/dev/null
+  [ -e "$b" ] || b=/dev/null
+  if diff "${@:4}" "$a" "$b" >"$3"; then :; else rc=$?; fi
+  [ "$rc" -le 1 ] || die "could not compare $1 and $2"
+}
+
+# One file row, using the same comparison for parts and drafts.
+pending_file() {
+  local file=$1 label=$2 src=$3 dst=$4 status=$5 conflict=$6 live=$7
+  local a=$src b=$dst unmarked hunk
+  [ -e "$a" ] || a=/dev/null
+  [ -e "$b" ] || b=/dev/null
+  grep -v '#@' "$b" >"$READDIR/dst.u" || :
+  grep -v '#@' "$a" >"$READDIR/src.u" || :
+  twoway "$READDIR/dst.u" "$READDIR/src.u" "$READDIR/ud"
+  unmarked=$(grep -c '^[<>]' "$READDIR/ud" || :)
+  twoway "$dst" "$src" "$READDIR/hunk" -u
+  hunk=$(sed -n '1,200p' "$READDIR/hunk")
+  jq -nc --arg file "$file" --arg label "$label" --arg path "$live" \
+    --arg status "$status" --arg conflict "$conflict" --argjson unmarked "$unmarked" \
+    --arg hunk "$hunk" \
+    '{file:$file, label:$label, path:(if $path == "" then null else $path end),
+      status:$status, unmarked:$unmarked, hunk:$hunk,
+      conflict:(if $conflict == "" then null else $conflict end)}' >>"$READDIR/files.jsonl"
 }
 
 cmd_pending() {
-  local base; base=$(flake_base)
-  local never=true
+  local base p src dst live status conflict rc never=true writing=false f label line n entry
+  base=$(flake_base)
   [ -d "$base/nixarchy" ] && never=false
+  private_dir READDIR pkg-read
+  [ -e "$TXN/open" ] && writing=true
+  snapshot_selection "$READDIR"
+  [ -e "$TXN/open" ] && writing=true
+  : >"$READDIR/files.jsonl"
+  : >"$READDIR/marked.jsonl"
+  : >"$READDIR/changes.jsonl"
 
-  local changes rc=0
-  changes=$(pending_changes "$base") || rc=$?
-  case $rc in
-    0) ;;
-    2) die "a selection file exists but cannot be read, so what is queued cannot be told" ;;
-    *) die "the selection could not be compared with the applied copy" ;;
-  esac
+  for p in apps services advanced flatsnap; do
+    src=$READDIR/$p.nix
+    dst=$base/nixarchy/$p.nix
+    live=""; [ -e "$CONFIG_DIR/$p.nix" ] && live=$CONFIG_DIR/$p.nix
+    [ ! -e "$dst" ] || [ -r "$dst" ] || die "cannot read $dst"
+    status=""; conflict=""; rc=0
+    if [ -f "$src" ] && [ -e "$dst" ]; then
+      if cmp -s "$src" "$dst"; then rc=0; else rc=$?; fi
+      [ "$rc" -le 1 ] || die "could not compare $src and $dst"
+    fi
+    if [ -f "$src" ]; then
+      if ! imported "$p" "$base" || [ ! -e "$dst" ]; then status=new
+      elif [ "$rc" = 1 ]; then status=modified
+      fi
+    elif imported "$p" "$base"; then status=dropped
+    fi
+    [ -n "$status" ] || continue
+    if [ -f "$src" ] && [ -e "$dst" ] && [ "$rc" = 1 ] && edited_in_flake "$dst"; then
+      conflict=overwrite
+    fi
+    pending_file "$p" "$p.nix" "$src" "$dst" "$status" "$conflict" "$live"
+    marked "$dst" >"$READDIR/dst.marked"
+    marked "$src" >"$READDIR/src.marked"
+    twoway "$READDIR/dst.marked" "$READDIR/src.marked" "$READDIR/marked.diff"
+    jq -Rsc --arg file "$p" '
+      def marker: capture("#@(?<t>[a-z-]*)[ \t]+(?<n>[^ \t]+)") | (.t + ":" + .n);
+      split("\n") | map(select(test("^[<>] "))) | .[] |
+      {file:$file, sign:(if .[0:1] == "<" then "-" else "+" end),
+       line:.[2:]} | . + {marker:(try (.line | marker) catch .line)}
+    ' "$READDIR/marked.diff" >>"$READDIR/marked.jsonl"
+  done
 
-  jq -n \
-    --arg changes "$changes" \
-    --argjson never "$never" \
-    --arg base "$base" \
-    '
-    def lines: split("\n") | map(select(length > 0));
-    # A toggle reaches the diff as two lines -- the commented one leaving
-    # and the live one arriving -- but it is one choice, so changes are
-    # keyed on the #@ marker and a pair collapses into a single entry.
-    # The surviving line decides which way it went.
-    def marker: capture("#@(?<t>[a-z-]*)[ \t]+(?<n>[^ \t]+)") | (.t + ":" + .n);
-    ($changes | lines | map(split("\t")) | map({
-      change: .[0], file: .[1], line: (.[2] // "")
-    } | . + {marker: (try (.line | marker) catch .line)})) as $c
-    | ($c | group_by(.marker) | map(
-        (map(select(.change == "+")) | first) as $arrived
-        | (first) as $any
-        | {
-            marker: $any.marker,
-            file:   $any.file,
-            line:   (($arrived // $any).line),
-            # A catalogue row (an empty marker type) goes on or off; a
-            # package, option or draft line is added or removed.
-            change:
-              if $arrived == null then
-                (if ($any.marker | startswith(":")) then "off" else "removed" end)
-              else
-                (if ($any.marker | startswith(":")) then "on" else "added" end)
-              end
-          })) as $collapsed
-    | { ok: true, neverApplied: $never, base: $base,
-        count: ($collapsed | length), changes: $collapsed }'
+  for f in "$READDIR"/packages/*.nix; do
+    [ -f "$f" ] || continue
+    label=packages/${f##*/}
+    dst=$base/nixarchy/$label
+    live=""; [ -e "$CONFIG_DIR/$label" ] && live=$CONFIG_DIR/$label
+    [ ! -e "$dst" ] || [ -r "$dst" ] || die "cannot read $dst"
+    status=new; conflict=""
+    if [ -e "$dst" ]; then
+      if cmp -s "$f" "$dst"; then rc=0; else rc=$?; fi
+      [ "$rc" -le 1 ] || die "could not compare $f and $dst"
+      [ "$rc" = 0 ] && continue
+      status=modified
+      edited_in_flake "$dst" && conflict=blocks
+    fi
+    pending_file "$label" "$label" "$f" "$dst" "$status" "$conflict" "$live"
+  done
+
+  jq -sc '
+    group_by([.file, .marker]) | map(
+      (map(select(.sign == "-"))) as $minus |
+      (map(select(.sign == "+"))) as $plus |
+      [range(0; [$minus|length, $plus|length] | max) as $i |
+        if $i < ($plus|length) then
+          $plus[$i] as $row |
+          $row + {change:(if $i < ($minus|length) then "modified"
+                          elif ($row.marker | startswith(":")) then "on" else "added" end),
+                  occurrence:([$plus[:$i+1][] | select(.line == $row.line)] | length)}
+        else $minus[$i] + {change:(if ($minus[$i].marker | startswith(":")) then "off" else "removed" end)} end
+      ]) | add // [] | .[]
+  ' "$READDIR/marked.jsonl" >"$READDIR/paired.jsonl"
+
+  while IFS= read -r entry; do
+    n=null
+    if [ "$(jq -r '.sign' <<<"$entry")" = + ]; then
+      p=$(jq -r '.file' <<<"$entry")
+      line=$(jq -r '.line' <<<"$entry")
+      n=$(LINE_TEXT="$line" LINE_ORDINAL="$(jq -r '.occurrence' <<<"$entry")" \
+        awk '{sub(/^[[:space:]]*/, ""); if ($0 == ENVIRON["LINE_TEXT"] && ++seen == ENVIRON["LINE_ORDINAL"]) {print NR; exit}}' "$READDIR/$p.nix")
+      [ -n "$n" ] || n=null
+    fi
+    jq -nc --argjson row "$entry" --argjson no "$n" \
+      '$row | {marker, file, line, change, lineNo:$no}' >>"$READDIR/changes.jsonl"
+  done <"$READDIR/paired.jsonl"
+
+  local fingerprint pins drafts
+  fingerprint=$(fingerprint "$READDIR")
+  pins=$(pins_json "$READDIR")
+  drafts=$(find "$READDIR/packages" -maxdepth 1 -type f -name '*.nix' -printf 'packages/%f\n' | sort | jq -Rsc 'split("\n") | map(select(length > 0))')
+  jq -n --slurpfile files "$READDIR/files.jsonl" --slurpfile changes "$READDIR/changes.jsonl" \
+    --argjson never "$never" --argjson writing "$writing" --arg base "$base" \
+    --arg fingerprint "$fingerprint" --argjson pins "$pins" --argjson drafts "$drafts" \
+    --arg apps "$([ ! -e "$CONFIG_DIR/apps.nix" ] || printf '%s' "$CONFIG_DIR/apps.nix")" \
+    --arg services "$([ ! -e "$CONFIG_DIR/services.nix" ] || printf '%s' "$CONFIG_DIR/services.nix")" \
+    --arg advanced "$([ ! -e "$CONFIG_DIR/advanced.nix" ] || printf '%s' "$CONFIG_DIR/advanced.nix")" \
+    --arg flatsnap "$([ ! -e "$CONFIG_DIR/flatsnap.nix" ] || printf '%s' "$CONFIG_DIR/flatsnap.nix")" '
+    ($files | map(.file as $name | . + {explained:(.status == "modified" and .unmarked == 0 and
+                                  any($changes[]; .file == $name))})) as $f |
+    {ok:true, neverApplied:$never, base:$base, writing:$writing,
+     count:($changes|length), changes:$changes, files:$f,
+     total:(($changes|length) + ($f | map(select(.explained|not)) | length)),
+     fingerprint:$fingerprint, pins:$pins,
+     sources:({apps:$apps, services:$services, advanced:$advanced, flatsnap:$flatsnap} |
+       with_entries(.value |= if . == "" then null else . end)),
+     unpinned:{drafts:$drafts, flake:true}}
+  '
 }
 
 # Copy the selection into the flake and rebuild.
