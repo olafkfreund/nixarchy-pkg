@@ -679,3 +679,7 @@ describes.
   `~/.config/omarchy/plugins/nixarchy.pkg/bin/nixarchy-pkg`. The
   troubleshooting page gives that full path. Step 6 case 3's assertion
   (`.error` contains "nixarchy-pkg recover") still holds.
+- **Step 6 (codex):** this Nix version writes no `flake.lock` for a flake with
+  no inputs. Case 8's fixture therefore writes a minimal valid lock
+  (`{"nodes":{"root":{}},"root":"root","version":7}`) when `nix flake lock`
+  left none.
