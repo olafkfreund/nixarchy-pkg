@@ -686,15 +686,10 @@ flat_value() {
 cmd_opt_set() {
   local path=${1-} value=${2-}
   [ -n "$path" ] || die "usage: nixarchy-pkg opt set <path> <nix-value>"
-  [ -f "$APPS" ] || die "no $APPS -- log in again to have it created"
 
   case "$path" in
     *[!a-zA-Z0-9._-]* | "" ) die "'$path' is not an option path" ;;
   esac
-
-  if grep -q "#@opt ${path//./\\.}\$" "$APPS"; then
-    die "$path is already in $APPS -- remove it first"
-  fi
 
   value=$(flat_value "$value") || case $? in
     2) die "$MARKER_REFUSAL" ;;
@@ -706,10 +701,12 @@ cmd_opt_set() {
     return 0
   fi
 
-  local backup; backup=$(mktemp)
-  cp "$APPS" "$backup"
-  # shellcheck disable=SC2064  # $backup is fixed at trap time, deliberately
-  trap "rm -f '$backup'" RETURN
+  begin_write
+  [ -f "$APPS" ] || die "no $APPS -- log in again to have it created"
+  if grep -q "#@opt ${path//./\\.}\$" "$APPS"; then
+    die "$path is already in $APPS -- remove it first"
+  fi
+  guard "$APPS"
 
   local tmp; tmp=$(mktemp)
   # Through the environment, not `awk -v`: -v processes escape sequences in
@@ -730,22 +727,13 @@ cmd_opt_set() {
     }
     { print }
   ' "$APPS" > "$tmp"
-  # cp, not mv: mv is rename(2), which replaces the target inode and takes
-  # the 0600 mktemp gave us -- and the invoking user as owner -- with it. A
-  # root-owned /etc/nixos file edited through a writable directory would
-  # come out user-owned, and a symlinked apps.nix would be replaced by a
-  # real file with the dotfiles original left untouched. cp truncates in
-  # place, so inode, mode, owner and the symlink all survive. Same idiom
-  # the restores below already use (#39).
-  cp "$tmp" "$APPS"
 
   # awk only inserts before a line that is exactly `}`. A module closing
   # `}  # the end` matched nothing, the file was copied through unchanged,
   # --parse passed BECAUSE it was unchanged, and this function reported
   # `set ...` over a file it never touched. `opt replace` has always
   # re-checked; this one never did (#39).
-  if ! grep -q "#@opt ${path//./\\.}\$" "$APPS"; then
-    cp "$backup" "$APPS"
+  if ! grep -q "#@opt ${path//./\\.}\$" "$tmp"; then
     die "could not find where to add $path in $APPS -- its module does not close on a line of its own. Nothing was changed."
   fi
 
@@ -755,8 +743,7 @@ cmd_opt_set() {
   # "undefined variable 'pkgs'", and "that would have left the file
   # unparseable" sends the reader looking for a typo that is not there.
   local why
-  if ! why=$(nix-instantiate --parse "$APPS" 2>&1 >/dev/null); then
-    cp "$backup" "$APPS"
+  if ! why=$(nix-instantiate --parse "$tmp" 2>&1 >/dev/null 9>&-); then
     # One awk rather than `grep … | head -1`: grep exits 1 when nothing
     # matches, and under `pipefail` that killed this function before the
     # die() below could report anything -- the fallback on the next line
@@ -767,6 +754,15 @@ cmd_opt_set() {
     why=$(awk '/^error:/ { print; exit }' <<<"$why")
     die "that value was refused, so nothing was changed. ${why:-nix could not parse the result}"
   fi
+
+  # cp, not mv: mv is rename(2), which replaces the target inode and takes
+  # the 0600 mktemp gave us -- and the invoking user as owner -- with it. A
+  # root-owned /etc/nixos file edited through a writable directory would
+  # come out user-owned, and a symlinked apps.nix would be replaced by a
+  # real file with the dotfiles original left untouched. cp truncates in
+  # place, so inode, mode, owner and the symlink all survive (#39).
+  cp "$tmp" "$APPS"
+  committed
 
   state_with true "set $path = $value"
 }
@@ -788,25 +784,23 @@ cmd_opt_replace() {
   local path=${1-} value=${2-}
   [ -n "$path" ] && [ $# -ge 2 ] ||
     die "usage: nixarchy-pkg opt replace <path> <nix-value>"
-  [ -f "$APPS" ] || die "no $APPS -- log in again to have it created"
 
   case "$path" in
     *[!a-zA-Z0-9._-]* | "" ) die "'$path' is not an option path" ;;
   esac
-
-  grep -q "#@opt ${path//./\\.}\$" "$APPS" ||
-    die "$path is not in $APPS -- use 'opt set' to add it"
 
   value=$(flat_value "$value") || case $? in
     2) die "$MARKER_REFUSAL" ;;
     *) die "$FLAT_REFUSAL" ;;
   esac
 
+  begin_write
+  [ -f "$APPS" ] || die "no $APPS -- log in again to have it created"
+  grep -q "#@opt ${path//./\\.}\$" "$APPS" ||
+    die "$path is not in $APPS -- use 'opt set' to add it"
+
   # BEFORE anything is touched. This is the whole point of the command.
-  local backup; backup=$(mktemp)
-  cp "$APPS" "$backup"
-  # shellcheck disable=SC2064  # $backup is fixed at trap time, deliberately
-  trap "rm -f '$backup'" RETURN
+  guard "$APPS"
 
   # Keyed on the marker rather than on position: the line is wherever the
   # person moved it to, and the marker is what finds it. Through the
@@ -827,16 +821,13 @@ cmd_opt_replace() {
       print
     }
   ' "$APPS" > "$tmp"
-  cp "$tmp" "$APPS"   # not mv; see cmd_opt_set (#39)
 
-  if ! grep -q "#@opt ${path//./\\.}\$" "$APPS"; then
-    cp "$backup" "$APPS"
+  if ! grep -q "#@opt ${path//./\\.}\$" "$tmp"; then
     die "could not find $path to replace after all. Nothing was changed."
   fi
 
   local why
-  if ! why=$(nix-instantiate --parse "$APPS" 2>&1 >/dev/null); then
-    cp "$backup" "$APPS"
+  if ! why=$(nix-instantiate --parse "$tmp" 2>&1 >/dev/null 9>&-); then
     # One awk rather than `grep … | head -1`: grep exits 1 when nothing
     # matches, and under `pipefail` that killed this function before the
     # die() below could report anything -- the fallback on the next line
@@ -847,6 +838,9 @@ cmd_opt_replace() {
     why=$(awk '/^error:/ { print; exit }' <<<"$why")
     die "that value was refused, so nothing was changed. ${why:-nix could not parse the result}"
   fi
+
+  cp "$tmp" "$APPS"   # not mv; see cmd_opt_set (#39)
+  committed
 
   state_with true "replaced $path = $value"
 }
