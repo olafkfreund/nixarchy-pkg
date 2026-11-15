@@ -4,7 +4,7 @@ title: The menu
 
 # The menu
 
-One card, six tabs, a list, and two lines at the bottom. Everything in this
+One card, seven tabs, a list, and two lines at the bottom. Everything in this
 manual happens on this surface, so it is worth thirty seconds.
 
 ![The menu, on the Apps tab](../img/01-apps.png)
@@ -22,6 +22,7 @@ manual happens on this surface, so it is worth thirty seconds.
 | **Options** | Every NixOS option there is |
 | **Drafts** | Software nixpkgs does not carry |
 | **Flakes** | What a flakeref of its own carries — type one, `RETURN` lists it |
+| **Queue** | What the next apply will copy, and whether it evaluates — see [Applying](applying) |
 
 ## The list
 
@@ -62,7 +63,9 @@ query you just typed.
 ## The two lines at the bottom
 
 The left one is the queue: **nothing queued**, or **3 changes queued**, and
-**· never applied** if this machine has not run an apply yet.
+**· never applied** if this machine has not run an apply yet. While the queue
+is being read it says **reading queue…**; if it cannot be read it says
+**queue unknown --** and why.
 
 Above it, when there is something to say, is whatever the writer last told
 you. That is where a refusal appears — an unfree package under a policy that

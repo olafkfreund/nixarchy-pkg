@@ -107,8 +107,8 @@ Additional fields appear when set:
 | Field | When present |
 | --- | --- |
 | `reason` | On `verdict: "unknown"`, why the check declined or timed out |
-| `drvPath` | On `verdict: "evaluates"`, the evaluated system `.drv` path |
-| `summary`, `error`, `at` | On `verdict: "fails"`, the one-line summary, the last 200 lines of rewritten error output, and `{file, line}` (or `null`) in `~/.config/nixarchy` |
+| `drvPath` | After a successful evaluation (kept if the verdict then becomes `superseded`), the evaluated system `.drv` path |
+| `summary`, `error`, `at` | On `verdict: "fails"`, when Nix printed them: the one-line summary, the last 200 lines of rewritten error output, and `{file, line}` (or `null`) in `~/.config/nixarchy` |
 | `dryRun`, `dryRunError` | With `--dry-run` after `evaluates`: `{build, fetch, downloadMiB}` (or `null`), and the error string when the dry run failed |
 
 ## `apply [--pin <part>=<sha256>]`

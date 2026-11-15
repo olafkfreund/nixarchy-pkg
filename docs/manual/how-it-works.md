@@ -91,7 +91,9 @@ above. Knowing about it is the mitigation.
 
 ## What applying actually does
 
-`nixarchy-apply` copies the three files into your flake directory — to
+`nixarchy-apply` copies your selection files -- `apps.nix`, `services.nix`,
+`advanced.nix`, `flatsnap.nix` when it exists, and every draft in
+`packages/` -- into your flake directory — to
 `hosts/<hostname>/nixarchy/` if that exists, beside the flake otherwise — and
 rebuilds.
 

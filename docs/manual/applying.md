@@ -87,9 +87,11 @@ The check finishes with one of four verdicts:
   store and copy paths rewritten back to your selection and flake files.
 - `superseded -- press c again` — a selection file changed while the check was
   running or after it finished.
-- `could not check: <reason>` — the check declined to run because a copy
-  would not match the real flake or a write is open. Press `RETURN` to see
-  the reason, or see [Troubleshooting](troubleshooting).
+- `could not check: <reason>` — no verdict. The check declined (a copy
+  would not match the real flake, or a write is open), could not run (no
+  flake, no configuration for this host, another check already running), or
+  timed out. Press `RETURN` to see the reason, or see
+  [Troubleshooting](troubleshooting).
 
 A passing check is **evidence, not a guarantee**: it checks evaluation only,
 not a build or a switch, and `nixarchy-apply` evaluates again for real. If
@@ -131,10 +133,10 @@ window.
 ## What "queued" means
 
 The count in the footer and in [the bar](the-bar) is `total` from `pending`:
-every marked change, plus every changed or new selection file whose diff is
-not already explained by those marked rows. While the queue is being read it
+every marked change, plus every new, changed or no-longer-imported selection
+file whose diff is not already explained by those marked rows. While the queue is being read it
 says `reading queue…`; if the read fails it says `queue unknown -- <error>`
-(and `a` says `queue unknown -- press r`).
+(and `a` says `queue unknown -- open the Queue tab and press r`).
 
 That is asked of the files every time rather than remembered, which is why
 two panels open at once cannot disagree, and why editing

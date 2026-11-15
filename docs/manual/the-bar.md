@@ -34,7 +34,13 @@ would not. One list, two ways in.
 
 ## When it is empty
 
-It shows nothing. An empty queue is not news.
+It shows nothing. An empty queue is not news. It also shows nothing while
+the queue is still being read.
+
+## When the queue cannot be read
+
+It shows **?**, and its tooltip says why. A count nobody can vouch for is
+not shown as 0.
 
 ## "never applied"
 

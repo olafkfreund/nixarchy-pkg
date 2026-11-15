@@ -114,7 +114,7 @@ nixarchy-pkg pending | jq
 ## "queue unknown"
 
 The footer says `queue unknown -- <error>` (and pressing `a` says `queue
-unknown -- press r`) when `pending` failed or could not read a selection or
+unknown -- open the Queue tab and press r`) when `pending` failed or could not read a selection or
 flake file (falling back to `could not read the queue` if the adapter gave no
 error text). Press `r` on the Queue tab to read the queue again, or run:
 
@@ -148,6 +148,14 @@ building and reports:
 
 Open the Queue tab, check what changed, and press `a` again.
 
+With `SHIFT+A` the terminal shows `nixarchy-apply`'s own wording instead:
+`apps.nix is not what you checked`, followed by the two hashes.
+
+An empty part (one that did not exist when you armed) is checked too, but
+only before copying: a file created in that moment can still be copied.
+That gap is in `nixarchy-apply` and tracked in
+[nixarchy#1789](https://github.com/olafkfreund/nixarchy/issues/1789).
+
 ## "superseded -- press c again"
 
 Your selection changed while `c` (`nixarchy-pkg check`) was running, or after
@@ -156,7 +164,7 @@ it finished, so the check verdict no longer matches the files on disk. Press
 
 ## "the check was interrupted"
 
-A running check received a signal (or was cancelled) before it finished and
+A running check received a signal before it finished and
 answered `the check was interrupted (exit <rc>)`. Its temporary directory
 under `~/.local/state/nixarchy` was cleaned up; press `c` to run it again.
 
@@ -200,8 +208,9 @@ first line of stderr follows the colon; press `RETURN` on the row to read it.
 
 ## "could not check: timed out after 15 minutes"
 
-Evaluating the host configuration (or the `--dry-run` step) took longer than
-900 seconds and was stopped.
+Evaluating the host configuration took longer than 900 seconds and was
+stopped. A dry run that times out does not change the verdict: the check
+still says `evaluates`, and the dry-run part reports the error instead.
 
 ## Still wrong
 
