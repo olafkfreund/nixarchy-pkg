@@ -1818,24 +1818,40 @@ cmd_check() {
 # is never taken for the end of the apply.
 cmd_apply() {
   need nixarchy-apply
-  local statuses rc filt
+  local statuses rc filt pin pins=() flag
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --pin)
+        pin=${2-}
+        [[ $pin =~ ^(apps|services|advanced|flatsnap)=([0-9a-f]{64})?$ ]] \
+          || die "--pin takes <apps|services|advanced|flatsnap>=<64 hex digits, or nothing>, not '$pin'"
+        pins+=(--expect-sha256 "$pin"); shift 2 ;;
+      *) die "apply takes only --pin <part>=<sha256>, not '$1'" ;;
+    esac
+  done
+  private_dir APPLYDIR pkg-apply
+  flag=$APPLYDIR/mismatch
   # Off for the pipeline, so both statuses can be read: under `pipefail`,
   # $? is the rightmost failure, which is not necessarily the build's.
   set +e +o pipefail
   NO_COLOR=1 NH_ELEVATION_STRATEGY="${NH_ELEVATION_STRATEGY:-pkexec}" \
-    nixarchy-apply --yes --no-preview </dev/null 2>&1 |
-    awk '{ gsub(/\033\[[0-9;?]*[A-Za-z]/, ""); gsub(/\033[()][A-Za-z0-9]/, "")
+    nixarchy-apply --yes --no-preview "${pins[@]}" </dev/null 2>&1 |
+    awk -v flag="$flag" '/is not what you checked/ { print > flag }
+         { gsub(/\033\[[0-9;?]*[A-Za-z]/, ""); gsub(/\033[()][A-Za-z0-9]/, "")
            sub(/.*\r/, ""); print; fflush() }'
   statuses=("${PIPESTATUS[@]}")
   set -e -o pipefail
   rc=${statuses[0]}; filt=${statuses[1]}
 
-  jq -nc --argjson rc "$rc" --argjson filt "$filt" '
+  local mismatch=false
+  [ -s "$flag" ] && mismatch=true
+  jq -nc --argjson rc "$rc" --argjson filt "$filt" --argjson mismatch "$mismatch" '
     {nixarchyPkgApply: {
       ok: ($rc == 0 and $filt == 0),
       exit: $rc,
       message: (if $filt != 0 then
                   "the log filter failed (exit \($filt)); nixarchy-apply exited \($rc)"
+                elif $mismatch then "a file changed since you reviewed it -- nothing was copied or built; look at the queue again"
                 elif $rc == 0 then "applied"
                 else "nixarchy-apply exited \($rc)" end)}}'
 }

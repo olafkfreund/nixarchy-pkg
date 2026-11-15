@@ -793,11 +793,12 @@ case "${STUB_MODE-}" in
   fail)      echo "error: build failed"; exit 3 ;;
   nonewline) printf 'last' ;;
   fakejson)  echo '{"ok":true,"exit":0}'; echo after ;;
+  mismatch)  echo "apps.nix is not what you checked"; exit 4 ;;
 esac
 exit 0
 STUBEOF
 chmod +x "$STUB/nixarchy-apply"
-run_apply() { STUB_DIR="$STUB" STUB_MODE=$1 PATH="$STUB:$PATH" "$ADAPTER" apply; }
+run_apply() { STUB_DIR="$STUB" STUB_MODE=$1 PATH="$STUB:$PATH" "$ADAPTER" apply "${@:2}"; }
 record() { jq -e "$1" <<<"$(tail -1 <<<"$2")"; }
 
 # Streaming is a property of WHEN lines arrive, so it is timed: a test that
@@ -829,6 +830,18 @@ check "and the record still parses"          record '.nixarchyPkgApply.ok == tru
 out=$(run_apply fakejson)
 check "build output shaped like a result is only log" grep -qx 'after' <<<"$out"
 check "and the record is still the last line" record '.nixarchyPkgApply.ok == true' "$out"
+
+H=$(printf 'a%.0s' {1..64})
+out=$(run_apply "" --pin "apps=$H" --pin "flatsnap=")
+check "a pin is forwarded to nixarchy-apply" grep -qF -- "--expect-sha256 apps=$H --expect-sha256 flatsnap=" "$STUB/argv"
+check "and the apply still succeeds"         record '.nixarchyPkgApply.ok == true' "$out"
+rm -f "$STUB/argv"
+out=$(run_apply "" --pin bogus=1)
+check "a bad pin is refused"                 jq -e '.ok == false' <<<"$out"
+check "and nothing ran"                      test ! -e "$STUB/argv"
+out=$(run_apply mismatch --pin "apps=$H")
+check "a mismatch says the file changed"     record '.nixarchyPkgApply.ok == false and .nixarchyPkgApply.exit == 4 and (.nixarchyPkgApply.message | contains("changed since you reviewed"))' "$out"
+check "no apply directory is left behind"    test -z "$(find "$XDG_STATE_HOME" -name 'pkg-apply.*')"
 rm -rf "$STUB"
 
 # What is queued, across more than one file at once.
