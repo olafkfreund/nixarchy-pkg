@@ -683,3 +683,30 @@ describes.
   no inputs. Case 8's fixture therefore writes a minimal valid lock
   (`{"nodes":{"root":{}},"root":"root","version":7}`) when `nix flake lock`
   left none.
+- **Final review (step 8), fixed by the coordinator.** Codex, a fresh Opus
+  review and agy found plan defects; each fix has a regression test:
+  - `rollback` rewrote files identical to their backup. A refusal therefore
+    truncated an intact file, and a read-only `flake.lock` failed the undo,
+    left `open/` behind and blocked every later write. It now skips files
+    that `cmp` equal, and restores with `cp --preserve=mode`.
+  - `guard` treated a dangling symlink as absent, so the undo deleted it.
+    It now refuses dangling symlinks.
+  - `$(... 9>&-)` closed fd 9 in the child, not in the `$(...)` subshell, so
+    the lock outlived a killed adapter. It is now `$(exec 9>&-; ...)`.
+  - `on_exit`: after the commit `mv`, it says the write was kept, not "put
+    back". A TERM during the lock wait now answers (`WRITING`). A failed
+    `rm -rf open` is reported.
+  - Panel:
+    - `declareAs` no longer overwrites the apply reason;
+    - `reindex` is allowed during an apply (the plan says reindex never
+      locks);
+    - `applyInTerminal` returns whether it started, and the menu closes only
+      then, so a refusal stays visible.
+  - Test case 7 uses `exec sleep`, so it holds the lock without relying on
+    bash's last-command exec.
+- **Left for follow-ups (not fixed here):**
+  - `apply`, `state` and `pending` do not look at an open recovery, so an
+    apply can rebuild from a file truncated by a killed write before any
+    write asks for `recover`.
+  - A killed flake write leaves its `nix flake lock` running, which can race
+    a later write.

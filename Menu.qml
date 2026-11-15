@@ -279,7 +279,7 @@ Item {
           if (!search.activeFocus && event.key === Qt.Key_A
               && (event.modifiers & Qt.ShiftModifier)) {
             if (!event.isAutoRepeat && pkg.armApply("terminal")) {
-              pkg.applyInTerminal(); root.close()
+              if (pkg.applyInTerminal()) root.close()
             }
             event.accepted = true; return
           }

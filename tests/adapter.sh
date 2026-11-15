@@ -756,7 +756,7 @@ check "failed copy restores the file" test "$(md5sum < "$A59")" = "$before"
 rm -f "$W59/stub/cp" "$W59/once"
 left_nothing "failed copy"
 
-reset_apps; before=$(md5sum < "$A59")
+reset_apps; before=$(md5sum < "$A59"); touch -d '2000-01-01' "$A59"; stamp=$(stat -c %Y.%i "$A59")
 cat > "$W59/stub/awk" <<EOF
 #!/usr/bin/env bash
 if [ -n "\${NIXARCHY_PKG_VALUE-}" ]; then exit 1; fi
@@ -767,6 +767,7 @@ out=$(run59 opt set services.x.enable true) || true
 check "failed candidate gives one answer" one_json "$out"
 check "failed candidate reports failure" jq -e '.ok == false' <<<"$out"
 check "failed candidate leaves the file" test "$(md5sum < "$A59")" = "$before"
+check "failed candidate does not rewrite it" test "$(stat -c %Y.%i "$A59")" = "$stamp"
 rm -f "$W59/stub/awk"
 left_nothing "failed candidate"
 
@@ -845,7 +846,7 @@ left_nothing "simultaneous writes"
 
 reset_apps; before=$(md5sum < "$A59")
 mkdir -p "$(st)/applied"
-( flock 9; touch "$W59/held"; sleep 15 ) 9>"$(st)/applied/lock" & lockpid=$!
+( flock 9; touch "$W59/held"; exec sleep 15 ) 9>"$(st)/applied/lock" & lockpid=$!
 i=0
 while [ ! -e "$W59/held" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
 check "apply holds the lock" test -e "$W59/held"
@@ -901,6 +902,47 @@ check "refused remove restores flake.nix" test "$(md5sum < "$W59/fk/flake.nix")"
 check "refused remove restores flake.lock" test "$(md5sum < "$W59/fk/flake.lock")" = "$before_lock"
 rm -f "$W59/stub/nix" "$W59/once"
 left_nothing "refused remove metadata"
+
+# A refusal must not need to write a file it never changed: a read-only
+# flake.lock used to fail the undo and wedge every later write.
+chmod 444 "$W59/fk/flake.lock"; before_lock=$(md5sum < "$W59/fk/flake.lock")
+out=$(NIXARCHY_FLAKE="$W59/fk" run59 flake add dep "path:$W59/dep") || true
+check "read-only lock: one answer" one_json "$out"
+check "read-only lock: refused, no failed undo" jq -e '.ok == false and (.error | contains("undo failed") | not)' <<<"$out"
+check "read-only lock: unchanged" test "$(md5sum < "$W59/fk/flake.lock")" = "$before_lock"
+chmod 644 "$W59/fk/flake.lock"
+left_nothing "read-only lock"
+
+# A dangling symlink is refused, never recorded as absent and deleted.
+reset_apps; mv "$A59" "$W59/real.nix"; ln -s "$W59/gone.nix" "$A59"
+out=$(run59 opt set services.d.enable true) || true
+check "dangling symlink: one answer" one_json "$out"
+check "dangling symlink: refused" jq -e '.ok == false' <<<"$out"
+check "dangling symlink: still a symlink" test -L "$A59"
+rm -f "$A59"; mv "$W59/real.nix" "$A59"
+left_nothing "dangling symlink"
+
+# Killed while an external writer runs: the lock must die with the adapter,
+# not live on in the $(...) subshell that waits for the writer.
+reset_apps
+cat > "$W59/stub/nixarchy-opt-remove" <<EOF
+#!/usr/bin/env bash
+echo \$\$ > "$W59/writer"; exec sleep 20   # exec keeps the pid
+EOF
+chmod +x "$W59/stub/nixarchy-opt-remove"
+# Not through run59: a backgrounded function is a forked subshell, so $!
+# would be that shell and kill -9 would miss the adapter.
+TMPDIR="$ADAPTER_TMP" XDG_CONFIG_HOME="$W59/cfg" PATH="$W59/stub:$PATH" \
+  "$ADAPTER" opt remove services.x.enable > /dev/null 2>&1 & adapter=$!
+i=0; while [ ! -s "$W59/writer" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+kill -9 "$adapter" 2>/dev/null || true; wait "$adapter" 2>/dev/null || true
+check "killed during a writer: lock is free" flock -n "$(st)/applied/lock" true
+kill "$(cat "$W59/writer")" 2>/dev/null || true   # never pkill -f: it can match the caller
+rm -f "$W59/stub/nixarchy-opt-remove" "$W59/writer"
+out=$(run59 recover --discard) || true
+check "recover --discard gives one answer" one_json "$out"
+check "recover --discard keeps the files" jq -e '.ok == true' <<<"$out"
+left_nothing "killed during a writer"
 rm -rf "$W59" "$ADAPTER_TMP"
 
 # A pipeline whose FIRST command exits non-zero on a normal outcome --

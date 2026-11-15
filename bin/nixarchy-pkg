@@ -53,6 +53,7 @@ SELF=$0; case $SELF in /*) ;; *) SELF=$PWD/$SELF ;; esac; readonly SELF
 WORK=""
 GUARDED=false        # true only while pkg-recovery/open belongs to this call
 ROLLBACK_NOTE=""
+WRITING=false        # true from begin_write on, so on_exit can answer for it
 
 readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/nixarchy"
 readonly CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/nixarchy"
@@ -82,9 +83,19 @@ need() {
 on_exit() {
   local rc=$?
   trap '' TERM INT HUP
-  if $GUARDED; then
+  if $GUARDED && [ ! -d "$TXN/open" ]; then
+    # Interrupted between the commit mv and GUARDED=false: the write is final.
+    jq -nc --arg e "the write was interrupted (exit $rc) after it had finished; it was kept." \
+      '{ok: false, error: $e}'
+    rc=0
+  elif $GUARDED; then
     rollback
     jq -nc --arg e "the write was interrupted (exit $rc). ${ROLLBACK_NOTE:-Your files were put back.}" \
+      '{ok: false, error: $e}'
+    rc=0
+  elif $WRITING && [ "$rc" != 0 ]; then
+    # Killed while waiting for the lock or opening the transaction.
+    jq -nc --arg e "the write was interrupted (exit $rc) before anything was changed." \
       '{ok: false, error: $e}'
     rc=0
   fi
@@ -101,6 +112,7 @@ trap 'exit 143' TERM INT HUP
 # begin_write recover  -- the one caller allowed past an interrupted write.
 begin_write() {
   local mode=${1-} d
+  WRITING=true
   mkdir -p "$STATE_DIR/applied" "$TXN" ||
     die "cannot create $STATE_DIR (disk full?). Nothing was changed."
   exec 9>"$LOCK" || die "cannot open $LOCK. Nothing was changed."
@@ -131,6 +143,12 @@ guard() {
   mkdir -p "$TXN/new" || die "cannot create $TXN (disk full?). Nothing was changed."
   for f in "$@"; do
     case $f in /*) ;; *) f=$PWD/$f ;; esac   # recover may run from elsewhere
+    # [ -e ] is false for a dangling symlink, and an undo of "absent" would
+    # delete the link: refuse it instead (#39 keeps symlinks).
+    if [ -L "$f" ] && [ ! -e "$f" ]; then
+      rm -rf "$TXN/new"
+      die "$f is a symlink to something that does not exist. Nothing was changed."
+    fi
     if [ -e "$f" ]; then
       cp -p "$f" "$TXN/new/$i.data" ||
         { rm -rf "$TXN/new"; die "could not back up $f (disk full?). Nothing was changed."; }
@@ -156,15 +174,21 @@ rollback() {
     i=${p%.path}
     f=$(cat "$p") || { failed+=("$p (unreadable)"); continue; }
     if [ -e "$i.absent" ]; then
-      rm -f "$f" || failed+=("$f (it did not exist before; delete it)")
-    else
-      cp "$i.data" "$f" || failed+=("$f (its earlier contents are in $i.data)")
+      { [ ! -e "$f" ] && [ ! -L "$f" ]; } || rm -f "$f" ||
+        failed+=("$f (it did not exist before; delete it)")
+    elif ! cmp -s "$i.data" "$f"; then
+      # Only what changed is rewritten: a refusal before the write must not
+      # truncate an intact file, or fail on one it may not write (a read-only
+      # flake.lock). --preserve=mode: a writer's mv may have reset it.
+      cp --preserve=mode "$i.data" "$f" ||
+        failed+=("$f (its earlier contents are in $i.data)")
     fi
   done
   GUARDED=false
   if [ ${#failed[@]} -eq 0 ]; then
     ROLLBACK_NOTE=""
-    rm -rf "$TXN/open" 2>/dev/null || :
+    rm -rf "$TXN/open" 2>/dev/null ||
+      ROLLBACK_NOTE="Your files were put back, but $TXN/open could not be removed; delete it."
   else
     ROLLBACK_NOTE="Could not put back: ${failed[*]}. Then run: $SELF recover (to try again) or $SELF recover --discard (to keep things as they are)."
   fi
@@ -433,7 +457,7 @@ cmd_search() {
 # refusal is an answer here, not a crash.
 run_writer() {
   local out rc=0
-  out=$("$@" 9>&- 2>&1) || rc=$?
+  out=$(exec 9>&-; "$@" 2>&1) || rc=$?
   WRITER_OUT=$out
   WRITER_RC=$rc
 }
@@ -757,7 +781,7 @@ cmd_opt_set() {
   # "undefined variable 'pkgs'", and "that would have left the file
   # unparseable" sends the reader looking for a typo that is not there.
   local why
-  if ! why=$(nix-instantiate --parse "$tmp" 2>&1 >/dev/null 9>&-); then
+  if ! why=$(exec 9>&-; nix-instantiate --parse "$tmp" 2>&1 >/dev/null); then
     # One awk rather than `grep … | head -1`: grep exits 1 when nothing
     # matches, and under `pipefail` that killed this function before the
     # die() below could report anything -- the fallback on the next line
@@ -841,7 +865,7 @@ cmd_opt_replace() {
   fi
 
   local why
-  if ! why=$(nix-instantiate --parse "$tmp" 2>&1 >/dev/null 9>&-); then
+  if ! why=$(exec 9>&-; nix-instantiate --parse "$tmp" 2>&1 >/dev/null); then
     # One awk rather than `grep … | head -1`: grep exits 1 when nothing
     # matches, and under `pipefail` that killed this function before the
     # die() below could report anything -- the fallback on the next line
