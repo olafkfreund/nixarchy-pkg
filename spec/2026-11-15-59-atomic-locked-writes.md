@@ -14,292 +14,349 @@ recommended):
 1. Writes and applies share one exclusion: `nixarchy-apply`'s existing lock.
    A write waits at most 5 s for it, then refuses.
 2. This lands with the narrower guarantee. A nixarchy issue is filed for the
-   five external writers (take the same lock, drop `mv`).
+   five external writers.
 3. "Recoverable, with a findable backup" is the bar. The in-place `cp` from
    #39 stays.
 4. The QML interlock is part of this task.
-5. Tests: see "Where the tests run" below. This changes one intent outcome
-   and needs approval here.
+5. Tests: see section 6. **This changes one intent outcome and needs approval
+   here.** So does section 5's limit on the external writers.
 
-The design replaces four hand-written backup-and-restore sequences with one
-shared guard, and adds a lock in `main`. Net effect on `bin/nixarchy-pkg`:
-more lines deleted than added.
+Five parts: a lock and a private working directory for writes only; one
+recovery transaction for every write; validation of the candidate *before*
+the live file is touched; the panel interlock; tests. The four hand-written
+backup-and-restore sequences in `bin/nixarchy-pkg` are deleted.
 
-### 1. One private working directory per call, never the system temp dir
+### 1. Writes only: the lock and a private working directory
 
 Top of `bin/nixarchy-pkg`, after `umask 077`:
 
 ```bash
 readonly STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/nixarchy"
-readonly RECOVERY="$STATE_DIR/pkg-recovery"
-readonly LOCK="$STATE_DIR/applied/lock"     # nixarchy-apply's, same expression
+readonly LOCK="$STATE_DIR/applied/lock"   # nixarchy-apply's path, same expression
+readonly TXN="$STATE_DIR/pkg-recovery"    # one transaction at a time; see 2
+WORK=""
+GUARDED=false
 ```
 
-In `main`, before dispatch:
+`STATE_DIR` uses the same default as `nixarchy-apply:246`, so both lock the
+same file.
+
+In `main`, each write verb calls `begin_write` before it dispatches. The verbs
+are `toggle`, `pkg add|remove`, `draft new|undraft`,
+`opt set|replace|remove`, `flake add|remove`, matched in each `cmd_*`
+dispatcher rather than by a pattern over `$*`. Reads (`state`, `search`,
+`pending`, `opt describe`, `flake show|list`), `reindex` and `apply` take no
+lock and get no working directory. `apply` must not lock: `nixarchy-apply`
+takes the lock itself.
 
 ```bash
-mkdir -p "$STATE_DIR/applied" "$RECOVERY"
-# Working copies of the user's config belong with the user, not in /tmp.
-# A call killed outright leaves its dir; the next call clears those older than an hour.
-find "$STATE_DIR" -maxdepth 1 -name 'pkg-work.*' -mmin +60 -exec rm -rf {} + 2>/dev/null || :
-WORK=$(mktemp -d -p "$STATE_DIR" pkg-work.XXXXXX)
-export TMPDIR=$WORK
+begin_write() {
+  mkdir -p "$STATE_DIR/applied" ||
+    die "cannot create $STATE_DIR (disk full?). Nothing was changed."
+  exec 9>"$LOCK" || die "cannot open $LOCK. Nothing was changed."
+  flock -w 5 9 ||
+    die "another write or an apply is running -- try again when it finishes. Nothing was changed."
+  export NIXARCHY_LOCK_HELD=1   # for the nixarchy follow-up: writers we run must not re-take it
+  # We hold the lock, so any other working dir belongs to a write that died.
+  local d
+  for d in "$STATE_DIR"/pkg-work.*; do
+    [ -e "$d" ] && { chmod -R u+w "$d"; rm -rf "$d"; } 2>/dev/null || :
+  done
+  WORK=$(mktemp -d -p "$STATE_DIR" pkg-work.XXXXXX) ||
+    die "cannot create a working directory in $STATE_DIR (disk full?). Nothing was changed."
+  export TMPDIR=$WORK
+  recover_stale   # section 2: refuse, or clear an incomplete record
+}
 ```
 
-Every existing `mktemp` (and every `mktemp` in the external writers, which
-inherit `TMPDIR`) now lands in a `0700` directory under the user's state.
-The `EXIT` trap (section 3) removes `$WORK`. The four `trap ... RETURN` lines
-(`:562`, `:659`, `:930`, `:1061`) are deleted: they never ran on `die` or
-errexit, and `$WORK` covers every file they named.
+- The sweep runs under the lock, so it can only remove the directory of a
+  write that died. It never touches an apply, which has no working directory.
+- Every `mktemp` in a write, and in the writers it runs, which inherit
+  `TMPDIR`, lands in a `0700` directory under the user's state. Nothing goes
+  to `/tmp`. The four `trap ... RETURN` lines (`:562`, `:659`, `:930`,
+  `:1061`) are deleted: they never ran on `die` or errexit, and `$WORK`
+  covers every file they named.
+- Children must not keep the lock after the adapter dies. Every `nix` call
+  and `run_writer` call gets `9>&-`.
+- `flake add`'s and `flake remove`'s Nix calls (`:932`, `:963`, `:968`,
+  `:1011`, `:1077`) get the `timeout 120` that `flake show` already has
+  (`:832`). Otherwise an offline `flake add` holds the lock indefinitely.
 
-`STATE_DIR` follows `XDG_STATE_HOME` with the same default `nixarchy-apply`
-uses (`nixarchy-apply:246`), so both lock the same file.
+### 2. One recovery transaction per write
 
-### 2. The lock, taken in `main` for writes only
+Writes are serialised by the lock, so at most one transaction exists. It is a
+directory. Every step that publishes or commits it is a `mv` of that
+directory, which is atomic. #39's rule against replacing an inode applies to
+the user's files, not to recovery data:
 
-```bash
-case "$cmd $*" in
-  toggle*|pkg*|draft*|"opt set"*|"opt replace"*|"opt remove"*|"flake add"*|"flake remove"*)
-    exec 9>"$LOCK"
-    flock -w 5 9 || die "another write or an apply is running -- try again when it finishes. Nothing was changed." ;;
-esac
-```
+| Path | Meaning |
+|---|---|
+| `$TXN/new/` | being built; the live files are untouched |
+| `$TXN/open/` | complete: the live files may now change |
+| `$TXN/done/` | committed: safe to delete |
 
-- Reads (`state`, `search`, `pending`, `opt describe`, `flake show`,
-  `flake list`) take no lock and are never refused.
-- `apply` takes no lock here. `nixarchy-apply` takes it itself, and the
-  adapter holding it would deadlock that.
-- `reindex` takes no lock: it writes only the cache.
-- The lock is released when the process exits, so a killed call never leaves
-  it held.
-- External writers run under `run_writer` while the adapter holds the lock.
-  That serialises every write that goes through `nixarchy-pkg`, and writes
-  made directly by the external writers remain the nixarchy follow-up (#2).
-
-The `flake add` and `flake remove` Nix calls (`nix flake metadata`,
-`nix flake lock`; `:932`, `:963`, `:968`, `:1011`, `:1077`) get the
-`timeout 120` that `flake show` already uses (`:832`). Without it, an
-offline `flake add` holds the lock indefinitely.
-
-### 3. One guard for every file the adapter itself rewrites
-
-Three functions and two traps:
+Inside a record, for the i-th guarded file: `i.path` holds its full live
+path, and `i.data` holds a copy of it, or `i.absent` marks that it did not
+exist. Keying on the index plus the recorded path means two flakes can never
+share a record.
 
 ```bash
-GUARDED=()   # live paths this call may change
-
-# Copy each file into $RECOVERY before anything touches it. A missing file
-# is recorded as absent, so rolling back removes what the call created.
-guard() {
-  local f b
+guard() {             # guard FILE...   (all files of one write, in one call)
+  local i=0 f
+  rm -rf "$TXN/new"; mkdir -p "$TXN/new" || die "cannot create $TXN (disk full?). Nothing was changed."
   for f in "$@"; do
-    b="$RECOVERY/${f##*/}"
-    [ -e "$b" ] || [ -e "$b.absent" ] && die "an earlier write to $f was interrupted. What it held before is in $b. Copy it back if $f looks wrong, then delete $b. Nothing was changed."
-    if [ -e "$f" ]; then cp -p "$f" "$b" || { rm -f "$b"; die "could not back up $f (disk full?). Nothing was changed."; }
-    else : > "$b.absent"; fi
-    printf '%s\n' "$f" > "$b.path"
-    GUARDED+=("$f")
+    if [ -e "$f" ]; then cp -p "$f" "$TXN/new/$i.data" || { rm -rf "$TXN/new"; die "could not back up $f (disk full?). Nothing was changed."; }
+    else : > "$TXN/new/$i.absent" || { rm -rf "$TXN/new"; die "could not record $f (disk full?). Nothing was changed."; }
+    fi
+    printf '%s\n' "$f" > "$TXN/new/$i.path" || { rm -rf "$TXN/new"; die "could not record $f (disk full?). Nothing was changed."; }
+    i=$((i + 1))
   done
+  mv "$TXN/new" "$TXN/open" || { rm -rf "$TXN/new"; die "could not record the backup (disk full?). Nothing was changed."; }
+  GUARDED=true        # only now: a failed guard never "restores" an untouched file
 }
 
-# Put every guarded file back. Prints the backups it could NOT restore from.
-rollback() {
-  local f b left=()
-  for f in "${GUARDED[@]}"; do
-    b="$RECOVERY/${f##*/}"
-    if [ -e "$b.absent" ]; then rm -f "$f" && rm -f "$b.absent" "$b.path" || left+=("$f")
-    elif cp "$b" "$f"; then rm -f "$b" "$b.path"
-    else left+=("$b"); fi
+ROLLBACK_NOTE=""
+rollback() {          # called directly, never in $(...)
+  local p i f failed=()
+  for p in "$TXN/open"/*.path; do
+    i=${p%.path}; f=$(cat "$p")
+    if [ -e "$i.absent" ]; then rm -f "$f" || failed+=("$f (it did not exist before; delete it)")
+    else cp "$i.data" "$f" || failed+=("$f (its earlier contents are in $i.data)"); fi
   done
-  GUARDED=()
-  [ ${#left[@]} -eq 0 ] || printf ' Could not put it back; what it held before is in %s.' "${left[@]}"
+  GUARDED=false
+  if [ ${#failed[@]} -eq 0 ]; then rm -rf "$TXN/open"
+  else ROLLBACK_NOTE="Could not put back: ${failed[*]}. Then run: rm -rf $TXN/open"; fi
 }
 
-# The write is final: drop the backups.
-committed() {
-  local f
-  for f in "${GUARDED[@]}"; do rm -f "$RECOVERY/${f##*/}"{,.absent,.path}; done
-  GUARDED=()
+committed() {         # the write is final
+  # The commit point. Not `mv && GUARDED=false`: a failed mv there is exempt
+  # from errexit, and the EXIT trap would then undo a write already reported.
+  mv "$TXN/open" "$TXN/done" ||
+    die "could not record that the write finished (disk full?), so it was undone."
+  GUARDED=false
+  rm -rf "$TXN/done" || :                       # cleanup; never undoes anything
 }
 ```
 
-`die` rolls back first, then answers, so a failed restore is named in the
-same answer:
+`committed` is called before `state_with` builds the answer. `state_with`
+runs `cmd_state` in `$(...)`, a subshell that inherits neither the trap nor
+`GUARDED`.
+
+**Answers.** `die` rolls back in the current shell, then answers once:
 
 ```bash
 die() {
   local e=$1
-  [ ${#GUARDED[@]} -eq 0 ] || e+=$(rollback)
+  if $GUARDED; then
+    rollback
+    [ -z "$ROLLBACK_NOTE" ] || e="$1 -- but the undo failed. $ROLLBACK_NOTE"
+  fi
   jq -nc --arg e "$e" '{ok: false, error: $e}'
   exit 0
 }
 ```
 
-The `EXIT` trap catches what `die` does not see: errexit (a failed `cp`, for
-example on a full disk) and caught signals. It runs only while a write is
-unfinished, and only then answers, because nothing has been printed yet:
+`die` is never called inside `$(...)` on a write path. Today none is, and the
+plan's checks include grepping for it.
+
+The `EXIT` trap catches what `die` does not see: errexit (a `cp` that fails
+on a full disk) and caught signals. It ignores further signals, answers only
+while a write is open (nothing has been printed then), and keeps the
+exit-0-with-JSON contract:
 
 ```bash
 on_exit() {
   local rc=$?
-  if [ ${#GUARDED[@]} -gt 0 ]; then
-    jq -nc --arg e "the write was interrupted (exit $rc).$(rollback)" '{ok: false, error: $e}'
+  trap '' TERM INT HUP
+  if $GUARDED; then
+    rollback
+    jq -nc --arg e "the write was interrupted (exit $rc). ${ROLLBACK_NOTE:-Your files were put back.}" '{ok: false, error: $e}'
+    rc=0
   fi
-  rm -rf "$WORK"
+  [ -z "$WORK" ] || { chmod -R u+w "$WORK"; rm -rf "$WORK"; } 2>/dev/null || :
+  exit "$rc"
 }
 trap on_exit EXIT
 trap 'exit 143' TERM INT HUP
 ```
 
-`SIGKILL` runs nothing. The backup then stays at
-`$RECOVERY/<name>` with the original path in `<name>.path`, and the next
-write to that file refuses with the message in `guard`, naming both. That is
-the "fixed, documented path". The manual's troubleshooting page gets the
-same text.
+**After a `SIGKILL`** nothing runs. On the next write, `recover_stale` in
+`begin_write`, under the lock, finds:
 
-**Callers.** Each of the four write functions loses its own backup,
-`restore_flake`, `had_lock` and trap, and gains one `guard` and one
-`committed`:
+- `$TXN/new` or `$TXN/done`: the live files were not changed, or the write
+  was final. It removes them and the write continues.
+- `$TXN/open`: a write was interrupted mid-change. It refuses:
+  *"an earlier write was interrupted. To put back what was there before, run
+  `nixarchy-pkg recover`. If the files look right as they are, run
+  `nixarchy-pkg recover --discard`. Nothing was changed."*
 
-| Function | `guard` before | `committed` after |
-|---|---|---|
-| `cmd_opt_set` | `"$APPS"`, before the awk rewrite | the parse check passes |
-| `cmd_opt_replace` | `"$APPS"` | the parse check passes |
-| `cmd_flake_add` | `"$file" "$lock"`, **before the first `nix flake metadata`** | the final `metadata` passes |
-| `cmd_flake_remove` | `"$file" "$lock"`, **before the first `nix flake metadata`** | the final `metadata` passes |
+`recover` is a new write verb of about ten lines. It takes the lock, then
+calls the same `rollback` (or `rm -rf "$TXN/open"` for `--discard`), and
+answers what it restored. It replaces hand-written `cp` instructions, which
+the reviews showed are easy to get wrong (for example, the "absent" case).
+`docs/manual/troubleshooting.md` gets the same text.
 
-Every existing failure branch in those four keeps its `die` message and
-loses its `cp "$backup" ...` line, because `die` now restores. That fixes
-intent problem 4 at its root: the lock is copied before any Nix call can
-change it, the `|| :` that hid a failed lock backup is gone (`guard` dies
-instead), and the three `flake remove` paths that restored nothing or only
-`flake.nix` now restore both.
+### 3. Validate the candidate, then touch the live file
 
-`cp -p` into `$RECOVERY` keeps the backup's mode no wider than the original.
-The restore is `cp "$b" "$f"` onto the live path, as #39 requires: same
-inode, mode, owner and symlink.
+The live file changes only after the candidate has been built and checked
+inside `$WORK`. This also fixes a pre-existing bug: `awk ... > "$tmp" && cp`
+(`:956`, `:1071`) is exempt from errexit, so a failed write to `$tmp` skipped
+the `cp` and the call answered `ok: true` with nothing written.
+
+| Function | `guard` | build `$tmp`, then check it | `cp "$tmp"` to live | after |
+|---|---|---|---|---|
+| `cmd_opt_set` | `"$APPS"` | awk; marker grep; `nix-instantiate --parse "$tmp"` | yes | `committed` |
+| `cmd_opt_replace` | `"$APPS"` | same | yes | `committed` |
+| `cmd_flake_add` | `"$file" "$lock"`, right after the `-w` check (`:908`), before any Nix call | awk; `--parse "$tmp"` | yes | `nix flake lock`, `metadata`; then `committed` |
+| `cmd_flake_remove` | `"$file" "$lock"`, before the first `metadata` (`:1011`) | sed; `--parse "$tmp"` | yes | `metadata`; then `committed` |
+| `run_writer` callers (`toggle`, `pkg`, `opt remove`, `draft`) | `"$APPS"`, plus `"$SERVICES"` for a service toggle | the writer's own | the writer's own | `committed` if the writer exited 0, else `rollback` |
+
+Each `> "$tmp"` stands on its own line, with no `&&`, so a failed build is
+errexit and the trap handles it. Every existing failure branch keeps its
+message and loses its `cp "$backup" ...` restore, because `die` now restores.
+`restore_flake` and `had_lock` are deleted. Guarding before the first Nix
+call fixes intent problem 4 at its root. It also covers `flake remove`'s
+refusals at `:1038` and `:1054` and its parse branch at `:1073`.
+
+Guarding around `run_writer` gives toggles and package changes the same
+crash recovery. It does not fix the external writers' own `mv` (see 5).
 
 ### 4. The panel
 
-- `PkgModel.write()` (`PkgModel.qml:346`): refuse while `applying`, and say
-  so: `message = "an apply is running — wait for it to finish"`.
-- `PkgModel.applyInTerminal()` (`:637`): refuse while `busy` as well as
-  `applying`.
+- `PkgModel.write()` (`PkgModel.qml:346`): refuse while `applying`, and set
+  `message = "an apply is running — wait for it to finish"`.
+- `PkgModel.applyInTerminal()` (`:637`): refuse while `busy` or `applying`,
+  and set `message` to say which.
 - `OptionForm.commit()` (`OptionForm.qml:278`): refuse while
   `model.applying`, with the same text in `root.error`.
-- Applies the panel did not start (its own terminal, the user's terminal)
-  are caught by the adapter's lock. The refusal comes back as `data.error`,
-  which `_absorb` already shows. No QML tracking of the terminal process is
-  needed.
+- Applies the panel did not start (its terminal, the user's terminal) are
+  refused by the adapter's lock, and the refusal arrives as `data.error`,
+  which `_absorb` already shows.
 
-### 5. Where the tests run (changes one intent outcome)
+### 5. What this does not cover (narrows two intent outcomes; approve here)
 
-The intent says "`nix flake check` runs them". It cannot. `tests/adapter.sh`
-calls `nix flake metadata` and `nix flake lock` on local fixture flakes, and
-the check sandbox has no Nix daemon. The script already runs on every pull
-request (`.github/workflows/ci.yml:28`), which gives what the outcome was
-for: no regression merges untested. So: **CI stays the runner, and
-`nix flake check` is not extended.** Approving this spec approves that
-change.
+- **The external writers' `mv`.** `nixarchy-app-enable` and
+  `nixarchy-service-enable` still replace the inode when the adapter runs
+  them. So a toggle still breaks a symlinked `apps.nix`, and the intent's
+  "after a successful write, #39's guarantees hold" is not met for toggles
+  until the nixarchy issue lands. Crash recovery for toggles is met
+  (section 3).
+- **Direct callers of the external writers** (a terminal running
+  `nixarchy-app-enable`) are not serialised until those writers take the
+  lock when `NIXARCHY_LOCK_HELD` is unset.
 
-New cases in `tests/adapter.sh`, in the stub-based part that runs without a
-nixarchy catalogue. Each builds a minimal `apps.nix` (`{ ... }:\n{\n}\n`)
-or a local fixture flake, with `XDG_STATE_HOME` and `TMPDIR` pointed at
-throwaway directories:
+The nixarchy issue, filed by the plan: take the lock unless
+`NIXARCHY_LOCK_HELD=1`, and replace `mv` with `cp` in `app-enable` and
+`service-enable`.
 
-1. **Full disk mid-write.** A `cp` stub on `PATH` truncates the destination
-   and exits 1 the first time its target is `apps.nix`, then delegates to the
-   real `cp`. `opt set` answers `ok: false`; `apps.nix` is byte-identical;
-   `$RECOVERY` is empty.
-2. **Killed mid-write.** A `nix-instantiate` stub `kill -9`s the adapter
-   (`$PPID`) after the rewrite. The recovery backup equals the original, and
-   `.path` names `apps.nix`. The next `opt set` answers `ok: false` naming
-   the backup and changes nothing.
-3. **Two writes at once.** A `nix-instantiate` stub sleeps 1 s and then runs
+### 6. Tests (changes one intent outcome; approve here)
+
+The intent says "`nix flake check` runs them". This spec keeps CI as the
+runner instead. `tests/adapter.sh` already runs on every pull request
+(`.github/workflows/ci.yml:28`), and its flake cases need a Nix daemon, which
+the check sandbox does not have. Splitting the stub-only cases into a
+sandbox check is possible, and is a follow-up if wanted.
+
+`tests/adapter.sh` first exports `XDG_STATE_HOME` to a throwaway directory,
+so no case ever touches the real lock or recovery directory. New cases, in
+the part that runs without a nixarchy catalogue, using a minimal `apps.nix`
+(`{ ... }:\n{\n}\n`) or a local fixture flake:
+
+1. **Full disk on the live write.** A `cp` stub truncates its destination
+   and exits 1 when the destination is exactly `$APPS`, the first time only,
+   then delegates to the real `cp`. Asserts: one JSON line; `ok: false`;
+   `apps.nix` byte-identical; no `$TXN/open`.
+2. **Full disk on the candidate.** `TMPDIR` cannot be written (a stub `awk`
+   that exits 1). Asserts: one JSON line, `ok: false` (today: `ok: true`),
+   file unchanged.
+3. **Killed mid-write.** The same `cp` stub `kill -9 "$PPID"` after
+   truncating. The `cp` is a direct child of the adapter, so `$PPID` is the
+   adapter. Asserts: `$TXN/open` holds the original. The next `opt set` (a
+   different path) answers `ok: false` naming `nixarchy-pkg recover`.
+   `recover` restores `apps.nix` byte-identical and clears `$TXN`.
+4. **Undo fails too.** The `cp` stub fails both the live write and the
+   restore. Asserts: one JSON line naming the `i.data` file and
+   `rm -rf …/open`.
+5. **Two writes at once.** A `nix-instantiate` stub sleeps 1 s, then runs
    the real one. Two `opt set` calls with different paths start together.
-   Both answer `ok: true` and both lines are in `apps.nix`.
-4. **Lock held by an apply.** A background `flock` holds `$LOCK` for 10 s.
-   `opt set` answers `ok: false` with "another write or an apply" within
-   about 6 s, and `apps.nix` is unchanged.
-5. **`flake add`: the first `metadata` rewrites the lock and fails.** A
-   `nix` stub appends to `flake.lock` and exits 1 on the first
-   `flake metadata`, then delegates. `flake.nix` and `flake.lock` are
-   byte-identical.
-6. **`flake remove` refused after `metadata` rewrote the lock** (the name is
-   still referenced). `flake.lock` is byte-identical.
-7. **No config in the temp directory.** After every case above, `$TMPDIR`
-   is empty and no `pkg-work.*` dir is left in `$XDG_STATE_HOME/nixarchy`
-   (except after case 2, which is cleared by the next call's sweep).
-8. The existing #39 mode, owner and symlink cases pass unchanged.
+   Both answer `ok: true`; both lines are in `apps.nix`.
+6. **Lock held by an apply.** A background `flock` holds `$LOCK` and
+   touches a ready file. Once that exists, `opt set` answers `ok: false`
+   with "another write or an apply" in under 10 s; `apps.nix` unchanged.
+7. **`flake add`: the first `metadata` rewrites the lock and fails.** A `nix`
+   stub appends to `flake.lock` and exits 1 on the first `flake metadata`,
+   then delegates. Asserts: `flake.nix` and `flake.lock` byte-identical, one
+   JSON line.
+8. **`flake remove` refused after `metadata` rewrote the lock** (the name is
+   still referenced). `flake.lock` byte-identical.
+9. **Nothing left behind.** After cases 1, 2, 4–8, the test's `TMPDIR` is
+   empty and `$XDG_STATE_HOME/nixarchy` holds no `pkg-work.*` and no
+   `pkg-recovery/open`. After case 3, the next write removes the dead
+   `pkg-work.*`.
+10. The existing #39 mode, owner and symlink cases pass unchanged.
 
 `tests/qml/tst_pkgmodel.qml`: `write()` while `applying` returns `false`
 and sets `message`; `applyInTerminal()` while `busy` does not start the
-process. `OptionForm` has no harness (`flake.nix` covers `PkgModel` and
-`Card` only); its one-line guard is checked by reading it in review.
-
-### 6. Outside this repo
-
-A nixarchy issue for the five external writers: take
-`${XDG_STATE_HOME:-$HOME/.local/state}/nixarchy/applied/lock` when not
-already inside `nixarchy-pkg` (which holds it), and replace `mv` with `cp`
-in `app-enable` and `service-enable` for #39's reasons. Linked from #59 and
-from the PR.
+process and sets `message`. `OptionForm` has no harness (`flake.nix`
+covers `PkgModel` and `Card` only); its one-line guard is checked in review.
 
 ## Alternatives rejected
 
-- **A separate selection lock.** It would serialise adapter writes, but the
-  panel still could not see an apply started from a terminal (intent problem
-  3), so writes during an apply stay possible. Sharing `nixarchy-apply`'s
-  lock fixes both with one `flock`.
-- **Waiting for the lock without a bound.** `nixarchy-apply` holds it
-  through prompts and a whole build. A panel write would hang for minutes
-  with "working…". 5 s, then a refusal that says why.
-- **`rename(2)` from a temp file beside the target.** Atomic, but breaks
-  #39 (owner, symlink) and fails in a `/etc/nixos` the user cannot write to.
-  Ruled out by the intent.
-- **Keeping the per-function backups and fixing each.** That is four copies
-  of the same logic, which is how three of them came to differ (intent
-  problem 4). One guard is less code and one place to test.
-- **Reporting interrupted-write backups in `state`.** The panel would show
-  the message, but the user could still write over it. Refusing the next
-  write to that file cannot be missed and needs no QML change.
-- **Guarding files the external writers change.** Each already keeps its own
-  backup. Their crash safety belongs in the nixarchy follow-up, not a second
-  copy here.
-- **Extending `nix flake check` to run `tests/adapter.sh`.** No Nix daemon
-  in the sandbox. CI already runs it.
+- **A separate selection lock.** It serialises adapter writes, but the panel
+  still cannot see an apply started from a terminal. Sharing
+  `nixarchy-apply`'s lock fixes both.
+- **Waiting for the lock without a bound.** `nixarchy-apply` holds it through
+  prompts and a whole build.
+- **`rename(2)` from a temp file beside the target.** Breaks #39 (owner,
+  symlink) and fails in a `/etc/nixos` the user cannot write to.
+- **Per-file backups keyed by basename** (the first draft). Two flakes
+  collide, a half-copied backup looks complete, and removing the backups is
+  not one step. One transaction directory, published and committed by
+  `mv`, has none of these problems.
+- **Hand-written restore instructions in the refusal.** The "absent" case
+  and multi-file transactions make them error-prone. `recover` reuses the
+  rollback the adapter already trusts.
+- **An age-based sweep of working directories on every call.** It can
+  delete the directory of a live call. Sweeping under the lock cannot.
+- **Fixing the external writers' `mv` here.** Different repository; done in
+  the nixarchy issue.
 
 ## Risks
 
-- **`TMPDIR` now points under `~/.local/state`.** Nix commands the adapter
-  starts (`nix flake lock`, `nix-instantiate`) put their temp files there too.
-  On a machine whose home is nearly full and `/tmp` is not, a write that
-  worked before may now fail. It then fails cleanly and restores, which is
-  the point, but the cause is new. Mitigation: the message for a failed
-  backup says "disk full?".
-- **A write is refused for the whole of an apply,** including one sitting at
-  a terminal prompt. That is the intent's chosen rule. The refusal says what
-  to do.
-- **`nixarchy-apply --yes` started while a write holds the lock** fails fast
-  with "another apply is running". The panel's own apply already waits for
-  `busy` to clear, so this reaches only scripts. The message is misleading
-  there; fixing its text is in nixarchy.
-- **A leftover recovery backup blocks writes to that file** until the user
-  acts. Intended. The message says exactly what to copy and what to delete.
-- **External writers inherit the held lock fd 9.** None starts a long-lived
-  process, so the lock is released with the adapter. A future writer that
-  daemonises would hold it. Noted in the nixarchy issue.
+- **`TMPDIR` for writes is under `~/.local/state`.** Nix commands started by
+  a write put their temp files there. On a machine whose home is nearly full
+  but `/tmp` is not, a write that worked before may now fail. It fails cleanly
+  and says "disk full?".
+- **An apply refuses while a write holds the lock.** `nixarchy-apply --yes`
+  uses `flock -n` (`nixarchy-apply:252`). So pressing `a` in one panel while
+  a second panel or the CLI is mid-write fails at once with "another apply
+  is running", which is the wrong cause. The write holds the lock only for
+  seconds (`flake add` up to 120 s). Fixing that message is in the nixarchy
+  issue. The panel's own write and apply already exclude each other through
+  `busy`.
+- **Every write is refused for the whole of an apply,** including one
+  waiting at a prompt. This is the intent's chosen rule; the message says
+  what to do.
+- **An interrupted write blocks writes until `recover`.** Intended. The
+  refusal names the command.
+- **Reads are not locked.** `state` or `pending` can see a half-written file
+  during a write's `cp`, or a candidate `flake.nix` during `nix flake lock`,
+  which may then be rolled back. The next refresh is correct. Locking reads
+  would freeze the panel during every apply.
 - Hosts: verification on **razer** only. p620 is not touched.
 
 ## Verification
 
-- `bash tests/adapter.sh` passes on razer and in CI, including cases 1–8.
-- `nix flake check` passes (shellcheck covers the new code; QML tests cover
-  the `PkgModel` guards).
+- `bash tests/adapter.sh` passes on razer and in CI, including cases 1–10.
+- `nix flake check` passes (shellcheck on the new code; QML tests on the
+  `PkgModel` guards).
+- `grep -n 'die' bin/nixarchy-pkg` shows no `die` inside `$(...)` on a write
+  path.
 - Manual, on razer with the panel:
   1. Start an apply, press `ESC`, press `SPACE` on an app: refused with
      "an apply is running".
   2. Run `nixarchy-apply` in a terminal, then toggle in the panel: refused
      with "another write or an apply is running".
-  3. `ls "${XDG_STATE_HOME:-$HOME/.local/state}/nixarchy"` after a few writes:
-     no `pkg-work.*`, empty `pkg-recovery`. No new `/tmp/tmp.*` files.
+  3. After a few writes, `ls "${XDG_STATE_HOME:-$HOME/.local/state}/nixarchy"`
+     shows no `pkg-work.*` and no `pkg-recovery/open`, and there are no new
+     `/tmp/tmp.*` files.
