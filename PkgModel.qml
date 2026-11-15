@@ -344,6 +344,7 @@ QtObject {
 
   // True when the write started; false when one was already running.
   function write(args) {
+    if (applying) { message = "an apply is running — wait for it to finish"; return false }
     if (busy) return false
     busy = true
     message = ""
@@ -635,7 +636,8 @@ QtObject {
   }
 
   function applyInTerminal() {
-    if (applying) return
+    if (applying) { message = "an apply is running — wait for it to finish"; return }
+    if (busy) { message = "still writing \u2014 try again in a moment"; return }
     _applyTerm.running = true
   }
 
