@@ -51,6 +51,11 @@ readonly TXN="$STATE_DIR/pkg-recovery"    # one write at a time, under the lock
 # This script is not on PATH; a hint to run it must name it the way it was run.
 SELF=$0; case $SELF in /*) ;; *) SELF=$PWD/$SELF ;; esac; readonly SELF
 WORK=""
+READDIR=""
+CHECKDIR=""
+APPLYDIR=""
+CHILD=""
+CHECKING=false
 GUARDED=false        # true only while pkg-recovery/open belongs to this call
 ROLLBACK_NOTE=""
 WRITING=false        # true from begin_write on, so on_exit can answer for it
@@ -83,6 +88,11 @@ need() {
 on_exit() {
   local rc=$?
   trap '' TERM INT HUP
+  if [ -n "$CHILD" ]; then
+    kill -TERM -- "-$CHILD" 2>/dev/null || :
+    wait "$CHILD" 2>/dev/null || :
+    CHILD=""
+  fi
   if $GUARDED && [ ! -d "$TXN/open" ]; then
     # Interrupted between the commit mv and GUARDED=false: the write is final.
     jq -nc --arg e "the write was interrupted (exit $rc) after it had finished; it was kept." \
@@ -98,11 +108,16 @@ on_exit() {
     jq -nc --arg e "the write was interrupted (exit $rc) before anything was changed." \
       '{ok: false, error: $e}'
     rc=0
+  elif $CHECKING; then
+    jq -nc --arg e "the check was interrupted (exit $rc)" '{ok:false, error:$e}'
+    rc=0
   fi
-  if [ -n "$WORK" ]; then
-    chmod -R u+w "$WORK" 2>/dev/null || :   # nix leaves read-only dirs behind
-    rm -rf "$WORK" 2>/dev/null || :
-  fi
+  local d
+  for d in "$WORK" "$READDIR" "$CHECKDIR" "$APPLYDIR"; do
+    [ -n "$d" ] || continue
+    chmod -R u+w "$d" 2>/dev/null || :   # nix leaves read-only dirs behind
+    rm -rf "$d" 2>/dev/null || :
+  done
   exit "$rc"
 }
 trap on_exit EXIT
@@ -1257,6 +1272,64 @@ flake_base() {
   base=$flake
   [ -d "$flake/hosts/$(uname -n)" ] && base="$flake/hosts/$(uname -n)"
   printf '%s' "$base"
+}
+
+# shellcheck disable=SC2034  # cmd_check uses this in step 3.
+NIX=(nix --extra-experimental-features 'nix-command flakes')
+
+# base_rel -- "" or "hosts/<host>", matching flake_base.
+base_rel() {
+  local flake=${NIXARCHY_FLAKE:-/etc/nixos}
+  if [ -d "$flake/hosts/$(uname -n)" ]; then printf 'hosts/%s' "$(uname -n)"; fi
+}
+
+# imported PART BASE -- apply's generated import file imports it now.
+imported() { [ -f "$2/nixarchy-apps.nix" ] && grep -qF "./nixarchy/$1.nix" "$2/nixarchy-apps.nix"; }
+
+# record_for DST -- apply's record file for a flake destination.
+record_for() { printf '%s/applied/%s' "$STATE_DIR" "$(printf '%s' "$1" | sha256sum | cut -c1-16)"; }
+
+# edited_in_flake DST -- apply's own test.
+edited_in_flake() { local r; r=$(record_for "$1"); [ -f "$r" ] && ! sha256sum <"$1" | cmp -s - "$r"; }
+
+# private_dir VAR PREFIX -- 0700 dir in STATE_DIR, cleaned by on_exit. Never inside $(...).
+private_dir() {
+  mkdir -p "$STATE_DIR" || die "cannot create $STATE_DIR"
+  local d; d=$(mktemp -d -p "$STATE_DIR" "$2.XXXXXX") || die "cannot create a working directory in $STATE_DIR"
+  printf -v "$1" '%s' "$d"
+}
+
+# snapshot_selection DIR -- cp -L every existing part to DIR/<p>.nix and draft to DIR/packages/.
+snapshot_selection() {
+  local p f
+  mkdir -p "$1/packages" || die "cannot create $1"
+  for p in apps services advanced flatsnap; do
+    f=$CONFIG_DIR/$p.nix
+    [ -e "$f" ] || continue
+    [ -r "$f" ] || die "cannot read $f"
+    cp -L "$f" "$1/$p.nix" || die "could not copy $f"
+  done
+  for f in "$CONFIG_DIR"/packages/*.nix; do
+    [ -e "$f" ] || continue
+    [ -r "$f" ] || die "cannot read $f"
+    cp -L "$f" "$1/packages/" || die "could not copy $f"
+  done
+}
+
+# fingerprint DIR -- one sha256 over every .nix in DIR, names included.
+fingerprint() {
+  ( cd "$1" && find . -type f -name '*.nix' -print0 | sort -z | xargs -0r sha256sum ) |
+    sha256sum | cut -d' ' -f1
+}
+
+# pins_json DIR -- hashes or empty strings for the four parts in a snapshot.
+pins_json() {
+  local p args=()
+  for p in apps services advanced flatsnap; do
+    if [ -f "$1/$p.nix" ]; then args+=(--arg "$p" "$(sha256sum <"$1/$p.nix" | cut -d' ' -f1)")
+    else args+=(--arg "$p" ""); fi
+  done
+  jq -nc "${args[@]}" '{apps:$apps, services:$services, advanced:$advanced, flatsnap:$flatsnap}'
 }
 
 # Which channel this machine follows, so the panel can name the OTHER one
