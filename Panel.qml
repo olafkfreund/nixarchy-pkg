@@ -29,7 +29,9 @@ BarWidget {
 
   moduleName: "nixarchy.pkg"
 
-  property int queued: 0
+  // -1 is "not known"; 0 is the only value that means nothing is queued.
+  property int queued: -1
+  property string queueError: ""
   property bool neverApplied: false
 
   // A drawn mark rather than a font glyph. The snowflake this started with
@@ -49,13 +51,17 @@ BarWidget {
       onStreamFinished: {
         try {
           var data = JSON.parse(text)
-          if (data.ok) {
-            root.queued = data.count || 0
+          if (data.ok === true) {
+            root.queued = (typeof data.total === "number") ? data.total : -1
+            root.queueError = ""
             root.neverApplied = data.neverApplied === true
+          } else {
+            root.queued = -1
+            root.queueError = data.error || "could not read the queue"
           }
         } catch (e) {
-          // A count nobody can read is a count not worth showing.
-          root.queued = 0
+          root.queued = -1
+          root.queueError = "could not read the queue"
         }
       }
     }
@@ -93,7 +99,10 @@ BarWidget {
     // The count rides the mark as a badge, so the button itself carries no
     // text: a glyph and a number side by side would be two widgets wide.
     text: ""
-    tooltipText: root.queued === 0
+    tooltipText: root.queued === -1 && root.queueError
+      ? "nixarchy \u00b7 queue unknown: " + root.queueError
+      : root.queued === -1 ? "nixarchy \u00b7 reading the queue\u2026"
+      : root.queued === 0
       ? "nixarchy \u00b7 nothing queued"
       : root.queued + (root.queued === 1 ? " change" : " changes")
         + " waiting for a rebuild"
@@ -138,7 +147,7 @@ BarWidget {
         // that resizes the bar takes the badge with it.
         Rectangle {
           id: badge
-          visible: root.queued > 0
+          visible: root.queued > 0 || (root.queued === -1 && root.queueError !== "")
           anchors.horizontalCenter: mark.horizontalCenter
           anchors.horizontalCenterOffset: Math.round(Style.bar.iconFont * 0.42)
           anchors.verticalCenter: mark.verticalCenter
@@ -159,7 +168,7 @@ BarWidget {
             // Centring a line box leaves the digit riding high, because it
             // reserves descender room a digit never uses.
             anchors.verticalCenterOffset: Math.round(font.pixelSize * 0.1)
-            text: root.queued
+            text: root.queued === -1 ? "?" : root.queued
             textFormat: Text.PlainText
             font.family: Style.font.family
             font.pixelSize: Math.round((badge.height - 2 * badge.border.width) * 0.88)

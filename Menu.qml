@@ -52,6 +52,7 @@ Item {
     pkg.setQuery("")
     pkg.setTab(0)
     pkg.message = ""
+    pkg.detailText = ""
     root.opened = true
     pkg.refresh()
     Qt.callLater(root.focusList)
@@ -113,6 +114,16 @@ Item {
   function toggle() {
     if (root.opened) root.close()
     else root.open("{}")
+  }
+
+  // A row's file, opened the way the rest of Omarchy opens one.
+  Process { id: editor }
+
+  // The terminal apply closes the menu only once it has really started: it
+  // may be waiting for a running check to stop.
+  Connections {
+    target: pkg
+    function onTerminalStarted() { root.close() }
   }
 
   PkgModel {
@@ -187,6 +198,15 @@ Item {
             event.accepted = true
             return
           }
+          // A row's detail, read-only. ESC or any other key puts it away.
+          if (pkg.detailText !== "") {
+            if (event.key !== Qt.Key_Shift && event.key !== Qt.Key_Control
+                && event.key !== Qt.Key_Alt && event.key !== Qt.Key_Meta
+                && !root.scrollView(detailView, event.key))
+              pkg.detailText = ""
+            event.accepted = true
+            return
+          }
           if (pkg.showingLog) {
             // ESC leaves the build running: it is elevating, downloading
             // and switching a system, and killing it half way through is
@@ -202,7 +222,8 @@ Item {
 
           // An armed apply is cancelled by any other key -- but not by a
           // bare modifier: SHIFT goes down before the A of a second SHIFT+A.
-          if (pkg.armedApply !== "" && event.key !== Qt.Key_A
+          if ((pkg.armedApply !== "" || pkg.armingState === "reading")
+              && event.key !== Qt.Key_A
               && event.key !== Qt.Key_Shift && event.key !== Qt.Key_Control
               && event.key !== Qt.Key_Alt && event.key !== Qt.Key_Meta
               && event.key !== Qt.Key_Super_L && event.key !== Qt.Key_Super_R)
@@ -224,9 +245,10 @@ Item {
 
           switch (event.key) {
             case Qt.Key_Escape:
-              // One step back per press: the inspection, then the field,
-              // then the menu. Clearing all three at once loses a flakeref
-              // somebody typed out by hand.
+              // One step back per press: a running check, the inspection,
+              // then the field, then the menu. Clearing all at once loses a
+              // flakeref somebody typed out by hand.
+              if (pkg.checkRunning) { pkg.cancelCheck(); event.accepted = true; return }
               if (pkg.clearInspection()) { event.accepted = true; return }
               if (search.text.length > 0) {
                 search.text = "" ; pkg.setQuery("")
@@ -279,9 +301,14 @@ Item {
           // be opened at all.
           if (!search.activeFocus && event.key === Qt.Key_A
               && (event.modifiers & Qt.ShiftModifier)) {
-            if (!event.isAutoRepeat && pkg.armApply("terminal")) {
-              if (pkg.applyInTerminal()) root.close()
-            }
+            if (!event.isAutoRepeat && pkg.armApply("terminal"))
+              pkg.applyInTerminal()
+            event.accepted = true; return
+          }
+
+          if (pkg.queueTab && !search.activeFocus && event.key === Qt.Key_C
+              && (event.modifiers & Qt.ShiftModifier)) {
+            if (!event.isAutoRepeat) pkg.check(true)
             event.accepted = true; return
           }
 
@@ -291,7 +318,10 @@ Item {
           if (!search.activeFocus && event.key === Qt.Key_R
               && (event.modifiers === Qt.NoModifier
                   || event.modifiers === Qt.ShiftModifier)) {
-            pkg.reindex(); event.accepted = true; return
+            // On the Queue tab r reads the queue again, not the index.
+            if (pkg.queueTab) pkg.refresh()
+            else pkg.reindex()
+            event.accepted = true; return
           }
 
           if (!search.activeFocus && event.key === Qt.Key_Question) {
@@ -313,6 +343,10 @@ Item {
               case Qt.Key_Slash: search.forceActiveFocus(); event.accepted = true; return
               // Shift+A is handled above: this block only ever sees a key
               // pressed with no modifiers at all.
+              case Qt.Key_C:
+                if (!pkg.queueTab) break
+                if (!event.isAutoRepeat) pkg.check(false)
+                event.accepted = true; return
               case Qt.Key_A:
                 if (!event.isAutoRepeat && pkg.armApply("here")) {
                   logView.followTail = true
@@ -385,7 +419,7 @@ Item {
             top: search.bottom; topMargin: Style.space(12)
             left: parent.left; right: parent.right; bottom: parent.bottom
           }
-          visible: !pkg.showingLog && !root.keysOpen
+          visible: !pkg.showingLog && !root.keysOpen && pkg.detailText === ""
           model: pkg
           maxHeight: surface.height - surface.padding * 2 - search.height
           onRequestActivate: root.activateRow()
@@ -413,6 +447,32 @@ Item {
             width: logView.width
             // A build log is external text. Plain, always.
             text: pkg.applyLog.join("\n")
+            textFormat: Text.PlainText
+            wrapMode: Text.Wrap
+            font.family: Style.font.family
+            font.pixelSize: Style.font.title
+            color: Commons.Color.menu.text
+          }
+        }
+
+        // ---- a queue row's detail ---------------------------------------
+
+        // Plain text, and not the build log: it never touches the apply's
+        // detached state.
+        Flickable {
+          id: detailView
+          anchors {
+            top: search.bottom; topMargin: Style.space(12)
+            left: parent.left; right: parent.right; bottom: parent.bottom
+          }
+          visible: pkg.detailText !== "" && !pkg.showingLog && !root.keysOpen
+          contentHeight: detailLabel.implicitHeight
+          clip: true
+
+          Text {
+            id: detailLabel
+            width: detailView.width
+            text: pkg.detailText
             textFormat: Text.PlainText
             wrapMode: Text.Wrap
             font.family: Style.font.family
@@ -478,6 +538,16 @@ Item {
     if (!row) return
     if (pkg.tab === 3) {
       form.begin(row)
+      return
+    }
+    if (pkg.queueTab) {
+      if (row.path) {
+        editor.command = ["omarchy-launch-editor", String(row.path)]
+        editor.running = true
+      } else if (row.detail) {
+        detailView.contentY = 0
+        pkg.detailText = String(row.detail)
+      }
       return
     }
     pkg.activate()
