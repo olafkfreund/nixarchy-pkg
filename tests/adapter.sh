@@ -7,7 +7,7 @@
 set -euo pipefail
 
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-readonly ADAPTER="$HERE/bin/nixarchy-pkg"
+readonly ADAPTER="${ADAPTER_OVERRIDE:-$HERE/bin/nixarchy-pkg}"
 readonly TEMPLATES=/etc/nixarchy
 
 fails=0
@@ -522,6 +522,39 @@ q_answer marked
 check 'changed marked value is paired and located' jq -e '.changes == [{marker:":x",file:"apps",line:"x = false; #@ x",change:"modified",lineNo:2}] and .files[0].explained' <<<"$QOUT"
 
 q_reset
+sed -i '2i\  dup = true; #@ dup' "$Q/flake/nixarchy/apps.nix"
+sed -i '2i\  dup = true; #@ dup' "$Q/config/nixarchy/apps.nix"
+sed -i '5i\  dup = true; #@ dup' "$Q/config/nixarchy/apps.nix"
+q_answer unchanged_duplicate
+check 'new duplicate points to its new source line' jq -e '[.changes[] | select(.marker == ":dup") | .lineNo] == [5]' <<<"$QOUT"
+
+q_reset
+for i in {1..150}; do printf '  toggle%d = true; #@ toggle%d\n' "$i" "$i" >>"$Q/config/nixarchy/apps.nix"; done
+start=$(date +%s%N)
+q_answer many_toggles
+elapsed_ms=$(( ($(date +%s%N) - start) / 1000000 ))
+check '150 toggles finish pending under one second' test "$elapsed_ms" -lt 1000
+check '150 toggles retain all rows' jq -e '.count == 150' <<<"$QOUT"
+
+q_reset
+printf 'unmarked change\n' >>"$Q/config/nixarchy/apps.nix"
+q_answer hunk_label
+check 'hunk names stable logical files' jq -e '.files[0].hunk | contains("apps.nix (applied)") and contains("apps.nix (yours)")' <<<"$QOUT"
+
+q_reset
+printf 'unmarked change\n' >>"$Q/config/nixarchy/apps.nix"
+mkdir "$Q/stub"
+cat >"$Q/stub/grep" <<'STUBEOF'
+#!/usr/bin/env bash
+if [ "${1-}" = -c ]; then exit 2; fi
+exec "$REAL_GREP" "$@"
+STUBEOF
+chmod +x "$Q/stub/grep"
+REAL_GREP=$(command -v grep)
+QOUT=$(REAL_GREP="$REAL_GREP" PATH="$Q/stub:$PATH" q_pending || :)
+check 'grep count failure gives one queue error' jq -es 'length == 1 and .[0].ok == false' <<<"$QOUT"
+
+q_reset
 rm "$Q/config/nixarchy/apps.nix"
 q_answer dropped
 check 'dropped import is queued' jq -e '.files[0].status == "dropped" and .files[0].path == null' <<<"$QOUT"
@@ -577,6 +610,32 @@ q_reset
 mkdir -p "$Q/state/nixarchy/pkg-recovery/open"
 q_answer writing
 check 'open recovery marks queue as writing' jq -e '.writing == true' <<<"$QOUT"
+
+q_reset
+mkdir -p "$Q/stub"
+cat >"$Q/stub/cp" <<'STUBEOF'
+#!/usr/bin/env bash
+if [[ " $* " == *" $XDG_CONFIG_HOME/"* ]]; then
+  printf '%s\n' "$TMPDIR" >"$XDG_STATE_HOME/cp-tmpdir"
+  printf '%s\n' "$$" >"$XDG_STATE_HOME/cp.pid"
+  exec sleep 30
+fi
+exec "$REAL_CP" "$@"
+STUBEOF
+chmod +x "$Q/stub/cp"
+REAL_CP=$(command -v cp)
+REAL_CP="$REAL_CP" PATH="$Q/stub:$PATH" XDG_CONFIG_HOME="$Q/config" XDG_STATE_HOME="$Q/state" \
+  NIXARCHY_FLAKE="$Q/flake" TMPDIR="$Q/tmp" "$ADAPTER" pending >"$Q/term.out" & adapter=$!
+for i in {1..100}; do [ -s "$Q/state/cp.pid" ] && break; sleep 0.01; done
+check 'pending TERM fixture reached snapshot copy' test -s "$Q/state/cp.pid"
+kill -TERM "$adapter" 2>/dev/null || :
+sleep 0.1
+if kill -0 "$adapter" 2>/dev/null; then kill -TERM "$(cat "$Q/state/cp.pid")" 2>/dev/null || :; fi
+wait "$adapter" 2>/dev/null || :
+QOUT=$(cat "$Q/term.out")
+check 'pending TERM gives one error answer' jq -es 'length == 1 and .[0].ok == false' <<<"$QOUT"
+check 'pending snapshot children inherit private TMPDIR' grep -qF "$Q/state/nixarchy/pkg-read." "$Q/state/cp-tmpdir"
+check 'pending TERM leaves no private directory' test -z "$(find "$Q/state/nixarchy" -maxdepth 1 -name 'pkg-read.*' -print -quit)"
 
 q_reset
 chmod 000 "$Q/flake/nixarchy/apps.nix"
@@ -654,6 +713,14 @@ c_run() {
 }
 
 c_reset
+mkdir "$C/no-nix"
+ln -s "$(command -v bash)" "$C/no-nix/bash"
+ln -s "$(command -v jq)" "$C/no-nix/jq"
+C_OUT=$(PATH="$C/no-nix" XDG_CONFIG_HOME="$C/config" XDG_STATE_HOME="$C/state" \
+  NIXARCHY_FLAKE="$C/flake" "$ADAPTER" check || :)
+check 'missing nix gives one check error' jq -es 'length == 1 and .[0].error == "nix is not on PATH"' <<<"$C_OUT"
+
+c_reset
 touch "$C/flake/untracked"
 c_run untracked
 check 'untracked file is excluded from evaluation' jq -e '.verdict == "evaluates" and (.drvPath | endswith("-ok-1.drv"))' <<<"$C_OUT"
@@ -676,6 +743,17 @@ check 'real flake symlink refuses the check' jq -e '.verdict == "unknown" and (.
 check 'symlink target is byte-identical' test "$(sha256sum <"$C/outside/proof")" = "$outside_hash"
 
 c_reset
+mkdir -p "$C/outside/$(uname -n)"
+printf 'untouched\n' >"$C/outside/$(uname -n)/proof"
+ln -s "$C/outside" "$C/flake/hosts"
+git -C "$C/flake" add hosts
+outside_before=$(find "$C/outside" -type f -print0 | sort -z | xargs -0 sha256sum)
+c_run ancestor_symlink
+check 'host ancestor symlink refuses the check' jq -e '.verdict == "unknown" and (.reason | contains("symlink"))' <<<"$C_OUT"
+check 'host ancestor target stays byte-identical' test "$(find "$C/outside" -type f -print0 | sort -z | xargs -0 sha256sum)" = "$outside_before"
+check 'host ancestor target has no nixarchy directory' test ! -e "$C/outside/$(uname -n)/nixarchy"
+
+c_reset
 git -C "$C/flake" update-index --add --cacheinfo "160000,$(printf '1%.0s' {1..40}),sub"
 c_run gitlink
 check 'git submodule refuses the check' jq -e '.verdict == "unknown" and (.reason | contains("submodules"))' <<<"$C_OUT"
@@ -691,6 +769,27 @@ c_reset
 printf '# self.rev\n' >>"$C/flake/flake.nix"
 c_run self_rev
 check 'self.rev refuses the copied check' jq -e '.verdict == "unknown" and (.reason | contains("own git revision"))' <<<"$C_OUT"
+
+c_reset
+for tool in git tar cp; do
+  cat >"$C/stub/$tool" <<'STUBEOF'
+#!/usr/bin/env bash
+printf '%s\n' "${0##*/}" >>"$FD_CALLS"
+if [ -e /proc/self/fd/8 ]; then printf '%s\n' "${0##*/}" >>"$FD_LEAKS"; fi
+case ${0##*/} in
+  git) exec "$REAL_GIT" "$@" ;;
+  tar) exec "$REAL_TAR" "$@" ;;
+  cp) exec "$REAL_CP" "$@" ;;
+esac
+STUBEOF
+  chmod +x "$C/stub/$tool"
+done
+REAL_GIT=$(command -v git); REAL_TAR=$(command -v tar); REAL_CP=$(command -v cp)
+export REAL_GIT REAL_TAR REAL_CP
+export FD_CALLS="$C/fd.calls" FD_LEAKS="$C/fd.leaks"
+c_run child_fds
+check 'check invokes git tar and cp stubs' test "$(sort -u "$FD_CALLS" | tr '\n' ' ')" = 'cp git tar '
+check 'check closes lock fd in git tar and cp' test ! -s "$FD_LEAKS"
 
 c_reset
 cat >"$C/stub/nix" <<'STUBEOF'
@@ -774,6 +873,38 @@ C_OUT=$(cat "$C/term.out")
 c_after term
 check 'TERM gives one interruption answer' jq -e '.ok == false and (.error | contains("the check was interrupted"))' <<<"$C_OUT"
 check 'TERM stops the evaluation child' not kill -0 "$(cat "$C/stub.pid")"
+
+c_reset
+cat >"$C/stub/nix" <<'STUBEOF'
+#!/usr/bin/env bash
+if [ "$3" = flake ] && [ "$4" = metadata ]; then
+  printf '%s\n' "$$" >"$STUB_PID_FILE"
+  printf '%s\n' "$TMPDIR" >"$STUB_TMPDIR_FILE"
+  exec sleep 30
+fi
+exec "$REAL_NIX" "$@"
+STUBEOF
+chmod +x "$C/stub/nix"
+c_before
+REAL_NIX="$REAL_NIX" STUB_PID_FILE="$C/stub.pid" STUB_TMPDIR_FILE="$C/stub.tmpdir" \
+  PATH="$C/stub:$PATH" XDG_CONFIG_HOME="$C/config" XDG_STATE_HOME="$C/state" \
+  NIXARCHY_FLAKE="$C/flake" "$ADAPTER" check >"$C/term.out" & adapter=$!
+for i in {1..100}; do [ -s "$C/stub.pid" ] && break; sleep 0.01; done
+check 'metadata TERM fixture reached metadata' test -s "$C/stub.pid"
+kill -TERM "$adapter" 2>/dev/null || :
+for i in {1..50}; do kill -0 "$adapter" 2>/dev/null || break; sleep 0.01; done
+if kill -0 "$adapter" 2>/dev/null; then
+  fail 'metadata TERM returns without waiting for nix'
+  kill -TERM "$(cat "$C/stub.pid")" 2>/dev/null || :
+else
+  pass 'metadata TERM returns without waiting for nix'
+fi
+wait "$adapter" 2>/dev/null || :
+C_OUT=$(cat "$C/term.out")
+c_after metadata_term
+check 'metadata TERM gives one error answer' jq -es 'length == 1 and .[0].ok == false' <<<"$C_OUT"
+check 'metadata TERM stops nix child' not kill -0 "$(cat "$C/stub.pid")"
+check 'check children inherit private TMPDIR' grep -qF "$C/state/nixarchy/pkg-check." "$C/stub.tmpdir"
 rm -rf "$C"
 
 echo "apply"
@@ -785,6 +916,7 @@ STUB=$(mktemp -d)
 cat > "$STUB/nixarchy-apply" <<'STUBEOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" > "$STUB_DIR/argv"
+printf '%s\n' "$TMPDIR" > "$STUB_DIR/tmpdir"
 cat > "$STUB_DIR/stdin"
 echo "elevation=${NH_ELEVATION_STRATEGY:-unset}"
 case "${STUB_MODE-}" in
@@ -798,7 +930,7 @@ esac
 exit 0
 STUBEOF
 chmod +x "$STUB/nixarchy-apply"
-run_apply() { STUB_DIR="$STUB" STUB_MODE=$1 PATH="$STUB:$PATH" "$ADAPTER" apply "${@:2}"; }
+run_apply() { STUB_DIR="$STUB" STUB_MODE=$1 PATH="$STUB:$PATH" env -u TMPDIR "$ADAPTER" apply "${@:2}"; }
 record() { jq -e "$1" <<<"$(tail -1 <<<"$2")"; }
 
 # Streaming is a property of WHEN lines arrive, so it is timed: a test that
@@ -814,6 +946,7 @@ check "apply asks for pkexec elevation"      grep -q 'elevation=pkexec' <<<"$out
 check "apply passes --yes --no-preview"      test "$(cat "$STUB/argv")" = "--yes --no-preview"
 check "and sends nothing on stdin"           test ! -s "$STUB/stdin"
 check "the last line is the apply record"    record '.nixarchyPkgApply.ok == true and .nixarchyPkgApply.exit == 0' "$out"
+check 'apply children inherit private TMPDIR' grep -qF "$XDG_STATE_HOME/nixarchy/pkg-apply." "$STUB/tmpdir"
 
 out=$(run_apply escapes)
 check "colour escapes are stripped"          not grep -q $'\033' <<<"$out"

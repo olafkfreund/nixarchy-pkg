@@ -57,6 +57,7 @@ CHECKDIR=""
 APPLYDIR=""
 CHILD=""
 CHECKING=false
+PENDING=false
 GUARDED=false        # true only while pkg-recovery/open belongs to this call
 ROLLBACK_NOTE=""
 WRITING=false        # true from begin_write on, so on_exit can answer for it
@@ -80,6 +81,7 @@ die() {
     rollback
     [ -z "$ROLLBACK_NOTE" ] || e="$1 -- but the undo failed. $ROLLBACK_NOTE"
   fi
+  PENDING=false
   jq -nc --arg e "$e" '{ok: false, error: $e}'
   exit 0
 }
@@ -115,6 +117,9 @@ on_exit() {
     rc=0
   elif $CHECKING; then
     jq -nc --arg e "the check was interrupted (exit $rc)" '{ok:false, error:$e}'
+    rc=0
+  elif $PENDING; then
+    jq -nc --arg e "could not read the queue (exit $rc)" '{ok:false, error:$e}'
     rc=0
   fi
   local d
@@ -1311,12 +1316,12 @@ snapshot_selection() {
     f=$CONFIG_DIR/$p.nix
     [ -e "$f" ] || continue
     [ -r "$f" ] || die "cannot read $f"
-    cp -L "$f" "$1/$p.nix" || die "could not copy $f"
+    cp -L "$f" "$1/$p.nix" 9>&- 8>&- || die "could not copy $f"
   done
   for f in "$CONFIG_DIR"/packages/*.nix; do
     [ -e "$f" ] || continue
     [ -r "$f" ] || die "cannot read $f"
-    cp -L "$f" "$1/packages/" || die "could not copy $f"
+    cp -L "$f" "$1/packages/" 9>&- 8>&- || die "could not copy $f"
   done
 }
 
@@ -1406,7 +1411,8 @@ pending_file() {
   grep -v '#@' "$a" >"$READDIR/src.u" || :
   twoway "$READDIR/dst.u" "$READDIR/src.u" "$READDIR/ud"
   unmarked=$(grep -c '^[<>]' "$READDIR/ud" || :)
-  twoway "$dst" "$src" "$READDIR/hunk" -u
+  [ -n "$unmarked" ] || die "could not count changes in $file"
+  twoway "$dst" "$src" "$READDIR/hunk" -u --label "$label (applied)" --label "$label (yours)"
   hunk=$(sed -n '1,200p' "$READDIR/hunk")
   jq -nc --arg file "$file" --arg label "$label" --arg path "$live" \
     --arg status "$status" --arg conflict "$conflict" --argjson unmarked "$unmarked" \
@@ -1417,16 +1423,19 @@ pending_file() {
 }
 
 cmd_pending() {
-  local base p src dst live status conflict rc never=true writing=false f label line n entry
+  local base p src dst live status conflict rc never=true writing=false f label marked_src
+  PENDING=true
   base=$(flake_base)
   [ -d "$base/nixarchy" ] && never=false
   private_dir READDIR pkg-read
+  export TMPDIR=$READDIR
   [ -e "$TXN/open" ] && writing=true
   snapshot_selection "$READDIR"
   [ -e "$TXN/open" ] && writing=true
   : >"$READDIR/files.jsonl"
   : >"$READDIR/marked.jsonl"
   : >"$READDIR/changes.jsonl"
+  : >"$READDIR/lines.jsonl"
 
   for p in apps services advanced flatsnap; do
     src=$READDIR/$p.nix
@@ -1451,12 +1460,17 @@ cmd_pending() {
     pending_file "$p" "$p.nix" "$src" "$dst" "$status" "$conflict" "$live"
     marked "$dst" >"$READDIR/dst.marked"
     marked "$src" >"$READDIR/src.marked"
-    twoway "$READDIR/dst.marked" "$READDIR/src.marked" "$READDIR/marked.diff"
+    marked_src=$src; [ -f "$src" ] || marked_src=/dev/null
+    awk -v file="$p" '/^[[:space:]]*[^#[:space:]].*#@/ && !/#@pkgs-(begin|end)/ {
+      printf "{\"file\":\"%s\",\"index\":%d,\"lineNo\":%d}\n", file, ++n, NR
+    }' "$marked_src" >>"$READDIR/lines.jsonl"
+    twoway "$READDIR/dst.marked" "$READDIR/src.marked" "$READDIR/marked.diff" \
+      --old-line-format=$'%dn\t-%L' --new-line-format=$'%dn\t+%L' --unchanged-line-format=''
     jq -Rsc --arg file "$p" '
       def marker: capture("#@(?<t>[a-z-]*)[ \t]+(?<n>[^ \t]+)") | (.t + ":" + .n);
-      split("\n") | map(select(test("^[<>] "))) | .[] |
-      {file:$file, sign:(if .[0:1] == "<" then "-" else "+" end),
-       line:.[2:]} | . + {marker:(try (.line | marker) catch .line)}
+      split("\n") | map(select(length > 0)) | .[] | split("\t") |
+      {file:$file, index:(.[0] | tonumber), sign:.[1][0:1], line:.[1][1:] | rtrimstr("\n")} |
+      . + {marker:(try (.line | marker) catch .line)}
     ' "$READDIR/marked.diff" >>"$READDIR/marked.jsonl"
   done
 
@@ -1477,7 +1491,7 @@ cmd_pending() {
     pending_file "$label" "$label" "$f" "$dst" "$status" "$conflict" "$live"
   done
 
-  jq -sc '
+  jq -sc --slurpfile lines "$READDIR/lines.jsonl" '
     group_by([.file, .marker]) | map(
       (map(select(.sign == "-"))) as $minus |
       (map(select(.sign == "+"))) as $plus |
@@ -1485,29 +1499,21 @@ cmd_pending() {
         if $i < ($plus|length) then
           $plus[$i] as $row |
           $row + {change:(if $i < ($minus|length) then "modified"
-                          elif ($row.marker | startswith(":")) then "on" else "added" end),
-                  occurrence:([$plus[:$i+1][] | select(.line == $row.line)] | length)}
+                          elif ($row.marker | startswith(":")) then "on" else "added" end)}
         else $minus[$i] + {change:(if ($minus[$i].marker | startswith(":")) then "off" else "removed" end)} end
-      ]) | add // [] | .[]
-  ' "$READDIR/marked.jsonl" >"$READDIR/paired.jsonl"
-
-  while IFS= read -r entry; do
-    n=null
-    if [ "$(jq -r '.sign' <<<"$entry")" = + ]; then
-      p=$(jq -r '.file' <<<"$entry")
-      line=$(jq -r '.line' <<<"$entry")
-      n=$(LINE_TEXT="$line" LINE_ORDINAL="$(jq -r '.occurrence' <<<"$entry")" \
-        awk '{sub(/^[[:space:]]*/, ""); if ($0 == ENVIRON["LINE_TEXT"] && ++seen == ENVIRON["LINE_ORDINAL"]) {print NR; exit}}' "$READDIR/$p.nix")
-      [ -n "$n" ] || n=null
-    fi
-    jq -nc --argjson row "$entry" --argjson no "$n" \
-      '$row | {marker, file, line, change, lineNo:$no}' >>"$READDIR/changes.jsonl"
-  done <"$READDIR/paired.jsonl"
+      ]) | add // [] | .[] |
+      {marker, file, line, change,
+       lineNo:(if .sign == "+" then
+         (.["file"] as $file | .index as $index |
+          [$lines[] | select(.file == $file and .index == $index) | .lineNo] | first // null)
+         else null end)}
+  ' "$READDIR/marked.jsonl" >"$READDIR/changes.jsonl"
 
   local fingerprint pins drafts
   fingerprint=$(fingerprint "$READDIR")
   pins=$(pins_json "$READDIR")
   drafts=$(find "$READDIR/packages" -maxdepth 1 -type f -name '*.nix' -printf 'packages/%f\n' | sort | jq -Rsc 'split("\n") | map(select(length > 0))')
+  PENDING=false
   jq -n --slurpfile files "$READDIR/files.jsonl" --slurpfile changes "$READDIR/changes.jsonl" \
     --argjson never "$never" --argjson writing "$writing" --arg base "$base" \
     --arg fingerprint "$fingerprint" --argjson pins "$pins" --argjson drafts "$drafts" \
@@ -1647,6 +1653,26 @@ check_dry_run() {
   fi
 }
 
+# Guard every directory check may write beneath, including absent components.
+check_symlinks() {
+  local dir=$1 rel=$2 f
+  if [ -n "$rel" ]; then
+    for f in hosts "$rel" "$rel/nixarchy" "$rel/nixarchy/packages"; do
+      if [ -L "$dir/$f" ]; then
+        reason="the flake's nixarchy directory is a symlink -- the check will not write through it"
+        check_answer
+      fi
+    done
+  else
+    for f in nixarchy nixarchy/packages; do
+      if [ -L "$dir/$f" ]; then
+        reason="the flake's nixarchy directory is a symlink -- the check will not write through it"
+        check_answer
+      fi
+    done
+  fi
+}
+
 cmd_check() {
   local flake=${NIXARCHY_FLAKE:-/etc/nixos} host base br copy cb root="" p f name imports rc=0 \
     verdict=unknown reason="" drvPath="" summary="" error="" at=null dry_run="" dry_error="" \
@@ -1657,6 +1683,7 @@ cmd_check() {
     --dry-run) [ "$#" = 1 ] || die "check takes only --dry-run"; dry_requested=true ;;
     *) die "check takes only --dry-run" ;;
   esac
+  need nix
   host=$(uname -n)
   [ -f "$flake/flake.nix" ] || die "no flake at $flake"
   mkdir -p "$STATE_DIR" || die "cannot create $STATE_DIR"
@@ -1673,12 +1700,14 @@ cmd_check() {
     check_answer
   fi
   private_dir CHECKDIR pkg-check
+  export TMPDIR=$CHECKDIR
   snapshot_selection "$CHECKDIR/snap"
   fingerprint=$(fingerprint "$CHECKDIR/snap")
   pins=$(pins_json "$CHECKDIR/snap")
   unpinned=$(find "$CHECKDIR/snap/packages" -maxdepth 1 -type f -name '*.nix' -printf 'packages/%f\n' |
     sort | jq -Rsc '{drafts:(split("\n") | map(select(length > 0))), flake:true}')
   base=$(flake_base); br=$(base_rel)
+  check_symlinks "$flake" "$br"
   : >"$CHECKDIR/blocked.jsonl"
   for f in "$CHECKDIR/snap/packages"/*.nix; do
     [ -f "$f" ] || continue
@@ -1691,14 +1720,10 @@ cmd_check() {
     fi
   done
   blocked=$(jq -s . "$CHECKDIR/blocked.jsonl")
-  if [ -L "$base" ] || [ -L "$base/nixarchy" ] || [ -L "$base/nixarchy/packages" ]; then
-    reason="the flake's nixarchy directory is a symlink -- the check will not write through it"
-    check_answer
-  fi
   if [ -e "$flake/.git" ]; then
     rc=0
     git -C "$flake" grep -lE 'self\.(rev|shortRev|dirtyRev|dirtyShortRev|lastModified|lastModifiedDate)\b' -- '*.nix' \
-      >"$CHECKDIR/git.out" 2>"$CHECKDIR/git.err" || rc=$?
+      >"$CHECKDIR/git.out" 2>"$CHECKDIR/git.err" 9>&- 8>&- || rc=$?
     if [ "$rc" = 0 ]; then reason='this flake reads its own git revision; a copy would evaluate differently'; check_answer; fi
     if [ "$rc" -gt 1 ]; then reason="git failed: $(sed -n '1p' "$CHECKDIR/git.err")"; check_answer; fi
   fi
@@ -1709,7 +1734,7 @@ cmd_check() {
     check_answer
   fi
   if [ -e "$flake/.git" ]; then
-    git -C "$flake" ls-files -s >"$CHECKDIR/git.index" 2>"$CHECKDIR/git.err" ||
+    git -C "$flake" ls-files -s >"$CHECKDIR/git.index" 2>"$CHECKDIR/git.err" 9>&- 8>&- ||
       { reason="git failed: $(sed -n '1p' "$CHECKDIR/git.err")"; check_answer; }
     if grep -q '^160000' "$CHECKDIR/git.index"; then
       reason='this flake has git submodules; the check does not copy them'
@@ -1719,52 +1744,53 @@ cmd_check() {
   copy=$CHECKDIR/flake; cb=$copy${br:+/$br}
   mkdir -p "$copy" || { reason="could not copy the flake: cannot create $copy"; check_answer; }
   if [ -e "$flake/.git" ]; then
-    if { git -C "$flake" ls-files -z |
+    if { git -C "$flake" ls-files -z 9>&- 8>&- |
        while IFS= read -r -d '' f; do
          if [ -e "$flake/$f" ] || [ -L "$flake/$f" ]; then printf '%s\0' "$f"; fi
-       done | tar -C "$flake" --null --no-recursion -T - -cf - | tar -C "$copy" -xf -; } \
+       done | tar -C "$flake" --null --no-recursion -T - -cf - 9>&- 8>&- | tar -C "$copy" -xf - 9>&- 8>&-; } \
        2>"$CHECKDIR/cp.err"; then :
     else reason="could not copy the flake: $(sed -n '1p' "$CHECKDIR/cp.err")"; check_answer; fi
-    if [ -L "$cb" ] || [ -L "$cb/nixarchy" ] || [ -L "$cb/nixarchy/packages" ]; then
-      reason="the flake's nixarchy directory is a symlink -- the check will not write through it"
-      check_answer
-    fi
+    check_symlinks "$copy" "$br"
     if [ -d "$base/nixarchy" ]; then
       mkdir -p "$cb/nixarchy" || { reason="could not copy the flake: cannot create $cb/nixarchy"; check_answer; }
-      if cp -a "$base/nixarchy/." "$cb/nixarchy/" 2>"$CHECKDIR/cp.err"; then :
+      if cp -a "$base/nixarchy/." "$cb/nixarchy/" 2>"$CHECKDIR/cp.err" 9>&- 8>&-; then :
       else reason="could not copy the flake: $(sed -n '1p' "$CHECKDIR/cp.err")"; check_answer; fi
     fi
-  elif cp -a "$flake/." "$copy/" 2>"$CHECKDIR/cp.err"; then :
+  elif cp -a "$flake/." "$copy/" 2>"$CHECKDIR/cp.err" 9>&- 8>&-; then :
   else reason="could not copy the flake: $(sed -n '1p' "$CHECKDIR/cp.err")"; check_answer; fi
-  if [ -L "$cb" ] || [ -L "$cb/nixarchy" ] || [ -L "$cb/nixarchy/packages" ]; then
-    reason="the flake's nixarchy directory is a symlink -- the check will not write through it"
-    check_answer
-  fi
+  check_symlinks "$copy" "$br"
   mkdir -p "$cb/nixarchy/packages" || die "cannot create $cb/nixarchy/packages"
   imports=""
   for p in apps services advanced flatsnap; do
     f=$CHECKDIR/snap/$p.nix
     [ -f "$f" ] || continue
     rm -f "$cb/nixarchy/$p.nix" || die "cannot replace $cb/nixarchy/$p.nix"
-    cp "$f" "$cb/nixarchy/$p.nix" || die "cannot copy $f"
+    cp "$f" "$cb/nixarchy/$p.nix" 9>&- 8>&- || die "cannot copy $f"
     imports="$imports ./nixarchy/$p.nix"
   done
   for f in "$CHECKDIR/snap/packages"/*.nix; do
     [ -f "$f" ] || continue
     rm -f "$cb/nixarchy/packages/${f##*/}" || die "cannot replace ${f##*/}"
-    cp "$f" "$cb/nixarchy/packages/${f##*/}" || die "cannot copy $f"
+    cp "$f" "$cb/nixarchy/packages/${f##*/}" 9>&- 8>&- || die "cannot copy $f"
   done
   rm -f "$cb/nixarchy-apps.nix" || die "cannot replace $cb/nixarchy-apps.nix"
   printf '# Generated by nixarchy-apply. Do not edit -- your files\n# are ~/.config/nixarchy/{apps,services,advanced,flatsnap}.nix and\n# this is regenerated from them on every apply.\n{\n  imports = [%s ];\n}\n' \
     "$imports" >"$cb/nixarchy-apps.nix" || die "cannot write $cb/nixarchy-apps.nix"
 
   rc=0
-  "${NIX[@]}" flake metadata --json "path:$copy" >"$CHECKDIR/meta" 2>"$CHECKDIR/err" 9>&- 8>&- || rc=$?
+  setsid timeout 300 "${NIX[@]}" flake metadata --json "path:$copy" \
+    >"$CHECKDIR/meta" 2>"$CHECKDIR/err" 9>&- 8>&- &
+  CHILD=$!
+  wait "$CHILD" || rc=$?
+  CHILD=""
   if [ "$rc" != 0 ]; then check_failure; check_answer; fi
   root=$(jq -r .path "$CHECKDIR/meta")
   rc=0
-  "${NIX[@]}" eval --json "path:$copy#nixosConfigurations" --apply "c: builtins.hasAttr \"$host\" c" \
-    >"$CHECKDIR/out" 2>"$CHECKDIR/err" 9>&- 8>&- || rc=$?
+  setsid timeout 300 "${NIX[@]}" eval --json "path:$copy#nixosConfigurations" --apply "c: builtins.hasAttr \"$host\" c" \
+    >"$CHECKDIR/out" 2>"$CHECKDIR/err" 9>&- 8>&- &
+  CHILD=$!
+  wait "$CHILD" || rc=$?
+  CHILD=""
   if [ "$rc" != 0 ]; then
     if grep -q 'does not provide attribute' "$CHECKDIR/err"; then die 'this flake has no nixosConfigurations'; fi
     check_failure; check_answer
@@ -1830,6 +1856,7 @@ cmd_apply() {
     esac
   done
   private_dir APPLYDIR pkg-apply
+  export TMPDIR=$APPLYDIR
   flag=$APPLYDIR/mismatch
   # Off for the pipeline, so both statuses can be read: under `pipefail`,
   # $? is the rightmost failure, which is not necessarily the build's.
