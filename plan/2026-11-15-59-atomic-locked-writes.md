@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 59
 spec: spec/2026-11-15-59-atomic-locked-writes.md
 coders:
