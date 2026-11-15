@@ -100,6 +100,12 @@ Comparing your files against that copy is what produces the queued count, and
 it is an honest answer to "what would apply change?" rather than something
 this tool remembers.
 
+Checking (`c` on the Queue tab, or `nixarchy-pkg check`) copies the flake's
+tracked files plus your selection into a private directory under
+`~/.local/state/nixarchy` and evaluates this machine's configuration. That
+puts them in the world-readable Nix store, as apply does; it never builds the
+system, never switches, and never needs root.
+
 ## Writing safely
 
 A write waits up to 5 seconds for another write or an apply, then refuses and
