@@ -431,7 +431,7 @@ cmd_search() {
 # refusal is an answer here, not a crash.
 run_writer() {
   local out rc=0
-  out=$("$@" 2>&1) || rc=$?
+  out=$("$@" 9>&- 2>&1) || rc=$?
   WRITER_OUT=$out
   WRITER_RC=$rc
 }
@@ -468,6 +468,7 @@ cmd_toggle() {
   case "$id" in
     *[!a-zA-Z0-9._-]* | "" ) die "'$id' is not a valid $kind id" ;;
   esac
+  begin_write
 
   # Asked of the file rather than remembered, so two panels open at once
   # cannot disagree about which way the toggle goes.
@@ -488,8 +489,9 @@ cmd_toggle() {
 
   if [ "$enabled" = true ]; then verb=disable; else verb=enable; fi
   need "nixarchy-$kind-$verb"
+  if [ "$kind" = service ]; then guard "$SERVICES" "$APPS"; else guard "$APPS"; fi
   run_writer "nixarchy-$kind-$verb" "$id"
-  emit_state
+  writer_finished
 }
 
 cmd_pkg() {
@@ -506,16 +508,21 @@ cmd_pkg() {
       done
       [ ${#attrs[@]} -gt 0 ] || die "usage: nixarchy-pkg pkg add <attr> [--stable|--unstable]"
       need nixarchy-pkg-add
+      begin_write
+      guard "$APPS"
       run_writer nixarchy-pkg-add "${channel[@]}" "${attrs[@]}"
+      writer_finished
       ;;
     remove)
       [ $# -gt 0 ] || die "usage: nixarchy-pkg pkg remove <attr>"
       need nixarchy-pkg-remove
+      begin_write
+      guard "$APPS"
       run_writer nixarchy-pkg-remove "$@"
+      writer_finished
       ;;
     *) die "pkg takes add or remove, not '${action:-nothing}'" ;;
   esac
-  emit_state
 }
 
 cmd_draft() {
@@ -524,16 +531,21 @@ cmd_draft() {
     new)
       [ $# -gt 0 ] || die "usage: nixarchy-pkg draft new <url>"
       need nixarchy-pkg-new
+      begin_write
+      guard "$APPS"
       run_writer nixarchy-pkg-new "$@"
+      writer_finished
       ;;
     undraft)
       [ $# -gt 0 ] || die "usage: nixarchy-pkg draft undraft <name>"
       need nixarchy-pkg-undraft
+      begin_write
+      guard "$APPS"
       run_writer nixarchy-pkg-undraft "$@"
+      writer_finished
       ;;
     *) die "draft takes new or undraft, not '${action:-nothing}'" ;;
   esac
-  emit_state
 }
 
 # An option's declared type, documentation, default and example, straight
@@ -854,8 +866,10 @@ cmd_opt() {
     remove)
       [ $# -gt 0 ] || die "usage: nixarchy-pkg opt remove <path>"
       need nixarchy-opt-remove
+      begin_write
+      guard "$APPS"
       run_writer nixarchy-opt-remove "$@"
-      emit_state
+      writer_finished
       ;;
     *) die "opt takes describe, set, replace or remove, not '${action:-nothing}'" ;;
   esac
