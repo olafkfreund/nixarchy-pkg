@@ -28,6 +28,7 @@ declining to do something is an answer.
 | `opt describe <path>` | An option's type, default, example and docs |
 | `opt set <path> <value>` / `opt remove <path>` | |
 | `draft new <url>` / `draft undraft <name>` | See [Drafts](drafts) |
+| `recover [--discard]` | Put back what an interrupted write changed, or keep the files as they are. See [Troubleshooting](troubleshooting) |
 | `pending` | What would change on the next apply |
 | `apply` | The rebuild. Streams a log, then one JSON object |
 | `reindex` | Rebuild the search index. About a minute |

@@ -100,6 +100,13 @@ Comparing your files against that copy is what produces the queued count, and
 it is an honest answer to "what would apply change?" rather than something
 this tool remembers.
 
+## Writing safely
+
+A write waits up to 5 seconds for another write or an apply, then refuses and
+says why. While it writes, it keeps a backup it can always restore from, and
+it puts nothing in `/tmp`. If it is cut off, the next write says how to
+run `recover` (see [Troubleshooting](troubleshooting)).
+
 ## Where the writing happens
 
 Nowhere in this plugin, with one exception.

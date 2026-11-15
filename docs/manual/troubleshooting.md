@@ -56,6 +56,31 @@ show the prompt, or for an answer to a question the panel cannot draw.
 Press `SHIFT+A` instead — the same apply, in a real terminal, where you can
 see and answer whatever it wants.
 
+## "An earlier write was interrupted"
+
+A write — a toggle, a package, an option, a draft or an input — was cut off
+before it finished, and the next one says so:
+
+> an earlier write was interrupted. To put back what was there before, run:
+> …/nixarchy-pkg recover. If the files look right as they are, run:
+> …/nixarchy-pkg recover --discard. Nothing was changed.
+
+The message names the script's full path. It is the plugin's own script, not
+a command on your `PATH`:
+
+```bash
+~/.config/omarchy/plugins/nixarchy.pkg/bin/nixarchy-pkg recover            # put back what was there before
+~/.config/omarchy/plugins/nixarchy.pkg/bin/nixarchy-pkg recover --discard  # keep the files as they are
+```
+
+If the message is instead "another write or an apply is running -- try again
+when it finishes", something else holds the lock. Wait for it and try again.
+
+The backup is in `~/.local/state/nixarchy/pkg-recovery/open/` (or under
+`XDG_STATE_HOME`). Each file has an `N.path` naming its live file, and an
+`N.data` holding its earlier contents (or `N.absent` if it did not exist), for
+restoring by hand.
+
 ## "I pressed ESCAPE during a build and it kept going"
 
 Correct. `ESCAPE` stops you watching the log; it does not stop the build. See
