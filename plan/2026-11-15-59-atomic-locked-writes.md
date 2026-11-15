@@ -262,10 +262,18 @@ and `recover [--discard]`.
 
    ```bash
    renames_onto_a_config() {
-     code | grep -E '\bmv[[:space:]]+"' |
-       grep -qvE '\bmv[[:space:]]+"\$TXN/(new|open)"[[:space:]]+"\$TXN/(open|done)"'
+     local n
+     n=$(code | grep -E '\bmv[[:space:]]+"' |
+           grep -cvE '\bmv[[:space:]]+"\$TXN/(new|open)"[[:space:]]+"\$TXN/(open|done)"' || true)
+     [ "$n" -gt 0 ]
    }
    ```
+
+   *Deviation (step 1):* the plan first had `grep -qvE` here. With `-q`, or
+   with `>/dev/null`, which GNU grep treats the same, the last grep stops at
+   its first match. That SIGPIPEs the grep before it, and under `pipefail`
+   the bad `mv` is missed. This was verified against a copy of the adapter
+   with an `mv "$tmp" "$APPS"` added. A count reads all of the input.
 
    Update its comment: recovery data is the adapter's own, while #39 is about
    the user's files.

@@ -14,8 +14,11 @@
 #                                a raw nixpkgs attribute
 #   opt describe <path>          an option's type, default and example
 #   opt set <path> <nix-value>   write a value for it
+#   opt replace <path> <nix-value>  replace a value
 #   opt remove <path>            take it out again
 #   draft new <url> | draft undraft <name>
+#   flake show|add|remove|list    inspect or edit flake inputs
+#   recover [--discard]          restore or keep an interrupted write
 #   pending                      what is queued but not yet applied
 #   apply                        copy into the flake and rebuild; the output
 #                                is the build log as it happens, without
@@ -42,6 +45,13 @@
 set -euo pipefail
 umask 077
 
+readonly STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/nixarchy"
+readonly LOCK="$STATE_DIR/applied/lock"   # nixarchy-apply's lock, same expression
+readonly TXN="$STATE_DIR/pkg-recovery"    # one write at a time, under the lock
+WORK=""
+GUARDED=false        # true only while pkg-recovery/open belongs to this call
+ROLLBACK_NOTE=""
+
 readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/nixarchy"
 readonly CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/nixarchy"
 readonly APPS="$CONFIG_DIR/apps.nix"
@@ -49,15 +59,155 @@ readonly SERVICES="$CONFIG_DIR/services.nix"
 readonly INDEX="$CACHE_DIR/index.tsv"
 readonly STAMP="$CACHE_DIR/stamp"
 
-# Anything this prints is the panel's only account of what happened, so a
-# failure is a value rather than an exit code.
+# A write that is still open is undone first, so the one answer says what is
+# true afterwards.
 die() {
-  jq -nc --arg e "$1" '{ok: false, error: $e}'
+  local e=$1
+  if $GUARDED; then
+    rollback
+    [ -z "$ROLLBACK_NOTE" ] || e="$1 -- but the undo failed. $ROLLBACK_NOTE"
+  fi
+  jq -nc --arg e "$e" '{ok: false, error: $e}'
   exit 0
 }
 
 need() {
   command -v "$1" >/dev/null 2>&1 || die "$1 is not on PATH"
+}
+
+# errexit and signals bypass die. Undo an open write and still answer once,
+# with exit 0 like every other answer.
+on_exit() {
+  local rc=$?
+  trap '' TERM INT HUP
+  if $GUARDED; then
+    rollback
+    jq -nc --arg e "the write was interrupted (exit $rc). ${ROLLBACK_NOTE:-Your files were put back.}" \
+      '{ok: false, error: $e}'
+    rc=0
+  fi
+  if [ -n "$WORK" ]; then
+    chmod -R u+w "$WORK" 2>/dev/null || :   # nix leaves read-only dirs behind
+    rm -rf "$WORK" 2>/dev/null || :
+  fi
+  exit "$rc"
+}
+trap on_exit EXIT
+trap 'exit 143' TERM INT HUP
+
+# Every write starts here, after its argument-only checks.
+# begin_write recover  -- the one caller allowed past an interrupted write.
+begin_write() {
+  local mode=${1-} d
+  mkdir -p "$STATE_DIR/applied" "$TXN" ||
+    die "cannot create $STATE_DIR (disk full?). Nothing was changed."
+  exec 9>"$LOCK" || die "cannot open $LOCK. Nothing was changed."
+  flock -w 5 9 ||
+    die "another write or an apply is running -- try again when it finishes. Nothing was changed."
+  export NIXARCHY_LOCK_HELD=1
+  # We hold the lock: any other working dir is from a write that died.
+  for d in "$STATE_DIR"/pkg-work.*; do
+    [ -e "$d" ] || continue
+    chmod -R u+w "$d" 2>/dev/null || :
+    rm -rf "$d" 2>/dev/null || :
+  done
+  WORK=$(mktemp -d -p "$STATE_DIR" pkg-work.XXXXXX) ||
+    die "cannot create a working directory in $STATE_DIR (disk full?). Nothing was changed."
+  export TMPDIR=$WORK
+  # new/: died before the live files were touched. done/: died after the
+  # write was final. Neither needs anything from the user.
+  rm -rf "$TXN/new" "$TXN/done" 2>/dev/null || :
+  if [ -e "$TXN/open" ] && [ "$mode" != recover ]; then
+    die "an earlier write was interrupted. To put back what was there before, run: nixarchy-pkg recover. If the files look right as they are, run: nixarchy-pkg recover --discard. Nothing was changed."
+  fi
+}
+
+# guard FILE...  -- every file one write may change, in one call.
+guard() {
+  local i=0 f
+  rm -rf "$TXN/new" 2>/dev/null || :
+  mkdir -p "$TXN/new" || die "cannot create $TXN (disk full?). Nothing was changed."
+  for f in "$@"; do
+    case $f in /*) ;; *) f=$PWD/$f ;; esac   # recover may run from elsewhere
+    if [ -e "$f" ]; then
+      cp -p "$f" "$TXN/new/$i.data" ||
+        { rm -rf "$TXN/new"; die "could not back up $f (disk full?). Nothing was changed."; }
+    else
+      : > "$TXN/new/$i.absent" ||
+        { rm -rf "$TXN/new"; die "could not record $f (disk full?). Nothing was changed."; }
+    fi
+    printf '%s\n' "$f" > "$TXN/new/$i.path" ||
+      { rm -rf "$TXN/new"; die "could not record $f (disk full?). Nothing was changed."; }
+    i=$((i + 1))
+  done
+  mv "$TXN/new" "$TXN/open" ||
+    { rm -rf "$TXN/new"; die "could not record the backup (disk full?). Nothing was changed."; }
+  GUARDED=true   # only now: a guard that failed never "restores" an untouched file
+}
+
+# Put every guarded file back. Called directly, never inside $(...), so that
+# GUARDED changes in this shell.
+rollback() {
+  local p i f failed=()
+  for p in "$TXN/open"/*.path; do
+    [ -e "$p" ] || continue
+    i=${p%.path}
+    f=$(cat "$p") || { failed+=("$p (unreadable)"); continue; }
+    if [ -e "$i.absent" ]; then
+      rm -f "$f" || failed+=("$f (it did not exist before; delete it)")
+    else
+      cp "$i.data" "$f" || failed+=("$f (its earlier contents are in $i.data)")
+    fi
+  done
+  GUARDED=false
+  if [ ${#failed[@]} -eq 0 ]; then
+    ROLLBACK_NOTE=""
+    rm -rf "$TXN/open" 2>/dev/null || :
+  else
+    ROLLBACK_NOTE="Could not put back: ${failed[*]}. Then run: nixarchy-pkg recover (to try again) or nixarchy-pkg recover --discard (to keep things as they are)."
+  fi
+}
+
+# The write is final. The mv is the commit point; it is not `mv && GUARDED=false`,
+# because a failed mv in an && list is exempt from errexit and the EXIT trap
+# would then undo a write already reported as done.
+committed() {
+  mv "$TXN/open" "$TXN/done" ||
+    die "could not record that the write finished (disk full?), so it was undone."
+  GUARDED=false
+  rm -rf "$TXN/done" 2>/dev/null || :
+}
+
+# After run_writer: keep the writer's change, or undo it, and answer.
+writer_finished() {
+  if [ "$WRITER_RC" = 0 ]; then
+    committed
+  else
+    rollback
+    [ -z "$ROLLBACK_NOTE" ] || WRITER_OUT="$WRITER_OUT -- but the undo failed. $ROLLBACK_NOTE"
+  fi
+  emit_state
+}
+
+cmd_recover() {
+  local discard=false p paths=()
+  case "${1-}" in
+    "") ;;
+    --discard) discard=true ;;
+    *) die "recover takes nothing or --discard, not '$1'" ;;
+  esac
+  begin_write recover
+  [ -d "$TXN/open" ] || { state_with true "nothing to recover"; return 0; }
+  for p in "$TXN/open"/*.path; do [ -e "$p" ] && paths+=("$(cat "$p")"); done
+  if $discard; then
+    rm -rf "$TXN/open" || die "could not remove $TXN/open"
+    state_with true "kept ${paths[*]} as they are and dropped the backup"
+    return 0
+  fi
+  GUARDED=true
+  rollback
+  if [ -z "$ROLLBACK_NOTE" ]; then state_with true "put back ${paths[*]}"
+  else state_with false "$ROLLBACK_NOTE"; fi
 }
 
 # The paths nixarchy-search bakes in at build time: options.json and the
@@ -1396,7 +1546,7 @@ cmd_flake() {
 main() {
   need jq
   local cmd=${1-}
-  [ -n "$cmd" ] || die "usage: nixarchy-pkg <state|search|toggle|pkg|opt|draft|flake|pending|apply|reindex>"
+  [ -n "$cmd" ] || die "usage: nixarchy-pkg <state|search|toggle|pkg|opt|draft|flake|recover|pending|apply|reindex>"
   shift
   case "$cmd" in
     state) cmd_state "$@" ;;
@@ -1409,6 +1559,7 @@ main() {
     apply)   cmd_apply "$@" ;;
     reindex) cmd_reindex "$@" ;;
     flake)   cmd_flake "$@" ;;
+    recover) cmd_recover "$@" ;;
     *) die "no such command: $cmd" ;;
   esac
 }

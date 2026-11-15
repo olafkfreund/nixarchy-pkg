@@ -24,6 +24,10 @@ check() {
 # one rather than every negative assertion silently failing.
 not() { ! "$@"; }
 
+# The adapter keeps its lock and recovery data under XDG_STATE_HOME. Never
+# the real one.
+XDG_STATE_HOME=$(mktemp -d); export XDG_STATE_HOME
+
 # A selection of this machine's own catalogue, in a directory that is thrown
 # away afterwards.
 fresh_config() {
@@ -735,11 +739,19 @@ pipes_into_head() { code | grep -qE '(grep|diff|comm|cmp)[[:space:]][^|]*\|[[:sp
 check "no diff, comm or cmp at the head of a pipeline" not heads_a_pipeline
 check "nothing is piped into head"                     not pipes_into_head
 
-# And the shape that caused #39: mv onto a config path replaces the inode,
-# taking the mode, the owner and any symlink with it. sed -i does the same
-# by way of its own temp file. Every writer here copies onto the live path
-# instead, the way the restores always have.
-renames_onto_a_config() { code | grep -qE '\bmv[[:space:]]+"'; }
+# And the shape that caused #39: mv onto a user's file replaces the inode,
+# taking the mode, the owner and any symlink with it. Recovery data is the
+# adapter's own, so its stage changes are allowed.
+renames_onto_a_config() {
+  # Counted, not -q (or >/dev/null, which GNU grep treats the same): stopping
+  # at the first match SIGPIPEs the grep before it, and under pipefail that
+  # hides the very mv this looks for.
+  local n
+  # shellcheck disable=SC2016  # match literal $TXN text in source
+  n=$(code | grep -E '\bmv[[:space:]]+"' |
+        grep -cvE '\bmv[[:space:]]+"\$TXN/(new|open)"[[:space:]]+"\$TXN/(open|done)"' || true)
+  [ "$n" -gt 0 ]
+}
 edits_in_place() { code | grep -qE '\bsed[[:space:]]+-i\b'; }
 check "no mv onto a file the adapter owns" not renames_onto_a_config
 check "no sed -i"                          not edits_in_place
@@ -750,5 +762,6 @@ check "exits 0 on an unknown command" test "$rc" = 0
 check "says so in the object"         jq -e '.ok == false and (.error | length > 0)' <<<"$out"
 
 echo
+rm -rf "$XDG_STATE_HOME"
 if [ "$fails" -gt 0 ]; then echo "$fails failed"; exit 1; fi
 echo "all passed"
