@@ -598,6 +598,184 @@ q_answer never_applied
 check 'never-applied machine queues every part as new' jq -e '.neverApplied and ([.files[] | select(.status == "new")] | length) == 4' <<<"$QOUT"
 rm -rf "$Q"
 
+echo "the queued flake evaluates as checked (#60)"
+REAL_NIX=$(command -v nix)
+C=""
+c_reset() {
+  [ -z "$C" ] || rm -rf "$C"
+  C=$(mktemp -d)
+  mkdir -p "$C/flake/nixarchy" "$C/config/nixarchy" "$C/state" "$C/tmp" "$C/stub"
+  local host; host=$(uname -n)
+  cat >"$C/flake/flake.nix" <<EOF
+{
+  outputs = { self }: {
+    nixosConfigurations."$host" = {
+      config.system.build.toplevel =
+        let mods = map (f: import f) (import ./nixarchy-apps.nix).imports;
+        in builtins.deepSeq mods (derivation {
+          name = if builtins.pathExists ./untracked then "leak"
+                 else "ok-\${toString (builtins.length mods)}";
+          system = "x86_64-linux"; builder = "/bin/sh";
+        });
+    };
+  };
+}
+EOF
+  printf '{ imports = [ ./nixarchy/apps.nix ]; }\n' >"$C/flake/nixarchy-apps.nix"
+  printf '{ a = 1; }\n' >"$C/flake/nixarchy/apps.nix"
+  printf '{ a = 1; }\n' >"$C/config/nixarchy/apps.nix"
+  git -C "$C/flake" init -q
+  git -C "$C/flake" add -A
+}
+c_hashes() {
+  find "$C/flake" "$C/config" -type f ! -path '*/.git/*' -print0 |
+    sort -z | xargs -0r sha256sum
+}
+c_before() {
+  C_STATUS=$(git -C "$C/flake" status --porcelain)
+  C_HASHES=$(c_hashes)
+}
+c_after() {
+  local name=$1
+  check "$name: one JSON answer" jq -es 'length == 1' <<<"$C_OUT"
+  check "$name: one output line" test "$(printf '%s\n' "$C_OUT" | wc -l)" = 1
+  check "$name: private check cleaned" test -z "$(find "$C/state" -maxdepth 2 -type d -name 'pkg-check.*' -print -quit)"
+  check "$name: TMPDIR empty" test -z "$(find "$C/tmp" -mindepth 1 -print -quit)"
+  check "$name: git status unchanged" test "$(git -C "$C/flake" status --porcelain)" = "$C_STATUS"
+  check "$name: file hashes unchanged" test "$(c_hashes)" = "$C_HASHES"
+}
+c_run() {
+  local name=$1; shift
+  c_before
+  C_OUT=$(REAL_NIX="$REAL_NIX" STUB_MODE="${C_MODE-}" STUB_PID_FILE="$C/stub.pid" \
+    PATH="$C/stub:$PATH" XDG_CONFIG_HOME="$C/config" XDG_STATE_HOME="$C/state" \
+    NIXARCHY_FLAKE="$C/flake" TMPDIR="$C/tmp" "$ADAPTER" check "$@")
+  c_after "$name"
+}
+
+c_reset
+touch "$C/flake/untracked"
+c_run untracked
+check 'untracked file is excluded from evaluation' jq -e '.verdict == "evaluates" and (.drvPath | endswith("-ok-1.drv"))' <<<"$C_OUT"
+
+c_reset
+printf '{ a = throw "boom"; }\n' >"$C/config/nixarchy/apps.nix"
+c_run throw
+check 'throw reports its summary and checked source line' jq -e \
+  '.verdict == "fails" and (.summary | contains("boom")) and .at == {file:"apps.nix",line:1}' <<<"$C_OUT"
+
+c_reset
+mkdir "$C/outside"
+printf 'untouched\n' >"$C/outside/proof"
+outside_hash=$(sha256sum <"$C/outside/proof")
+rm "$C/flake/nixarchy/apps.nix"
+rmdir "$C/flake/nixarchy"
+ln -s "$C/outside" "$C/flake/nixarchy"
+c_run symlink
+check 'real flake symlink refuses the check' jq -e '.verdict == "unknown" and (.reason | contains("symlink"))' <<<"$C_OUT"
+check 'symlink target is byte-identical' test "$(sha256sum <"$C/outside/proof")" = "$outside_hash"
+
+c_reset
+git -C "$C/flake" update-index --add --cacheinfo "160000,$(printf '1%.0s' {1..40}),sub"
+c_run gitlink
+check 'git submodule refuses the check' jq -e '.verdict == "unknown" and (.reason | contains("submodules"))' <<<"$C_OUT"
+
+c_reset
+printf '{}\n' >"$C/flake/extra.nix"
+git -C "$C/flake" add -A
+rm "$C/flake/extra.nix"
+c_run deleted_tracked
+check 'deleted tracked file is skipped' jq -e '.verdict == "evaluates"' <<<"$C_OUT"
+
+c_reset
+printf '# self.rev\n' >>"$C/flake/flake.nix"
+c_run self_rev
+check 'self.rev refuses the copied check' jq -e '.verdict == "unknown" and (.reason | contains("own git revision"))' <<<"$C_OUT"
+
+c_reset
+cat >"$C/stub/nix" <<'STUBEOF'
+#!/usr/bin/env bash
+if [ "$3" = eval ] && [ "$4" = --raw ]; then
+  printf '# changed during check\n' >>"$XDG_CONFIG_HOME/nixarchy/apps.nix"
+fi
+exec "$REAL_NIX" "$@"
+STUBEOF
+chmod +x "$C/stub/nix"
+c_before
+C_OUT=$(REAL_NIX="$REAL_NIX" PATH="$C/stub:$PATH" XDG_CONFIG_HOME="$C/config" \
+  XDG_STATE_HOME="$C/state" NIXARCHY_FLAKE="$C/flake" TMPDIR="$C/tmp" "$ADAPTER" check)
+printf '{ a = 1; }\n' >"$C/config/nixarchy/apps.nix"
+c_after superseded
+check 'changed source supersedes the verdict' jq -e '.verdict == "superseded"' <<<"$C_OUT"
+
+c_reset
+mkdir -p "$C/state/nixarchy/pkg-recovery/open"
+c_run open_write
+check 'open recovery refuses the check' jq -e '.verdict == "unknown" and (.reason | contains("write is in progress"))' <<<"$C_OUT"
+
+c_reset
+mkdir -p "$C/state/nixarchy"
+( flock 8; touch "$C/ready"; exec sleep 20 ) 8>"$C/state/nixarchy/pkg-check.lock" & holder=$!
+for i in {1..100}; do [ -e "$C/ready" ] && break; sleep 0.1; done
+check 'check lock holder started' test -e "$C/ready"
+c_run locked
+check 'busy check lock is one error' jq -e '.ok == false and (.error | contains("already running"))' <<<"$C_OUT"
+kill "$holder" 2>/dev/null || :
+wait "$holder" 2>/dev/null || :
+
+c_reset
+sed -i "s/nixosConfigurations.\"$(uname -n)\"/nixosConfigurations.\"other-host\"/" "$C/flake/flake.nix"
+c_run wrong_host
+check 'missing host is one error' jq -e '.ok == false and (.error | contains("no nixosConfigurations"))' <<<"$C_OUT"
+
+for C_MODE in plural singular garbage; do
+  c_reset
+  cat >"$C/stub/nix" <<'STUBEOF'
+#!/usr/bin/env bash
+if [ "$3" = build ] && [ "$4" = --dry-run ]; then
+  case "$STUB_MODE" in
+    plural) printf 'these 2 derivations will be built\nthese 3 paths will be fetched (1.5 GiB download, unknown unpacked)\n' >&2 ;;
+    singular) printf 'this derivation will be built\nthis path will be fetched (512 KiB download, unknown unpacked)\n' >&2 ;;
+    garbage) printf 'garbage\n' >&2 ;;
+  esac
+  exit 0
+fi
+exec "$REAL_NIX" "$@"
+STUBEOF
+  chmod +x "$C/stub/nix"
+  c_run "dry_run_$C_MODE" --dry-run
+  case "$C_MODE" in
+    plural) check 'plural dry run counts and converts GiB' jq -e '.dryRun == {build:2,fetch:3,downloadMiB:1536}' <<<"$C_OUT" ;;
+    singular) check 'singular dry run counts and converts KiB' jq -e '.dryRun == {build:1,fetch:1,downloadMiB:0.5}' <<<"$C_OUT" ;;
+    garbage) check 'unparsed dry run is unknown' jq -e '.dryRun == null and (.dryRunError | contains("garbage"))' <<<"$C_OUT" ;;
+  esac
+done
+unset C_MODE
+
+c_reset
+cat >"$C/stub/nix" <<'STUBEOF'
+#!/usr/bin/env bash
+if [ "$3" = eval ] && [ "$4" = --raw ]; then
+  printf '%s\n' "$$" >"$STUB_PID_FILE"
+  exec sleep 30
+fi
+exec "$REAL_NIX" "$@"
+STUBEOF
+chmod +x "$C/stub/nix"
+c_before
+REAL_NIX="$REAL_NIX" STUB_PID_FILE="$C/stub.pid" PATH="$C/stub:$PATH" \
+  XDG_CONFIG_HOME="$C/config" XDG_STATE_HOME="$C/state" NIXARCHY_FLAKE="$C/flake" \
+  TMPDIR="$C/tmp" "$ADAPTER" check >"$C/term.out" & adapter=$!
+for i in {1..100}; do [ -s "$C/stub.pid" ] && break; sleep 0.1; done
+check 'TERM fixture reached evaluation' test -s "$C/stub.pid"
+kill -TERM "$adapter" 2>/dev/null || :
+wait "$adapter" 2>/dev/null || :
+C_OUT=$(cat "$C/term.out")
+c_after term
+check 'TERM gives one interruption answer' jq -e '.ok == false and (.error | contains("the check was interrupted"))' <<<"$C_OUT"
+check 'TERM stops the evaluation child' not kill -0 "$(cat "$C/stub.pid")"
+rm -rf "$C"
+
 echo "apply"
 # Driven against a STUB of nixarchy-apply, never the real one: the real one
 # elevates and rebuilds a machine, so a test that invoked it would be a test
