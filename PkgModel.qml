@@ -441,10 +441,9 @@ QtObject {
     }
     // A state object, from `state` or from any writer -- recognised by
     // carrying the catalogue rather than by which command was run. reindex
-    // answers {ok, indexStale, message} and nothing else, and absorbing
+    // answers {ok, indexStale, index, message} (and detail on failure), and absorbing
     // that as state emptied every tab until the menu was reopened.
     if (data.apps === undefined) {
-      if (data.indexStale !== undefined) root.indexStale = data.indexStale
       if (data.message) root.message = String(data.message)
       if (isWrite) root.refresh()
       return

@@ -1381,6 +1381,9 @@ OSTUB=$(mktemp -d); stub_search_vars "$OSTUB" /nix/store/n1-n1-source
 sed -i 's|^optionsjson=.*|optionsjson=|' "$OSTUB/nixarchy-search"
 icase; stamp_of /nix/store/n1-n1-source | sed '3s|.*||' > "$IC/nixarchy/stamp"; out=$(istate "$OSTUB")
 check "an empty options line is fresh when it matches" jq -e '.index.status == "fresh"' <<<"$out"
+stamp_of /nix/store/n0-n0-source | sed '3s|.*||' > "$IC/nixarchy/stamp"; out=$(istate "$OSTUB")
+check "an empty options line still names a changed nixpkgs" \
+  jq -e '.index.status == "stale" and .index.changed == ["nixpkgs"]' <<<"$out"
 rm -rf "$IC" "$OSTUB"
 
 icase; stamp_of /nix/store/n0-n0-source > "$IC/nixarchy/stamp"; out=$(istate_ns)
@@ -1426,6 +1429,16 @@ evaluation warning: x
 evaluation warning: x' 1; out=$(rre)
 check "evaluation warnings are dropped" \
   jq -e '.detail == ["indexing nixpkgs failed; the end of /x/index-errors.log:"] and (.error | contains("gave no reason"))' <<<"$out"
+cat > "$DSTUB/nixarchy-search" <<'SEOF'
+#!/usr/bin/env bash
+head -c 200000 /dev/zero | tr '\0' x >&2
+printf '\nfinal failure\n' >&2
+exit 1
+SEOF
+chmod +x "$DSTUB/nixarchy-search"
+out=$(rre)
+check "oversized stderr still produces a JSON answer" \
+  jq -e '.ok == false and (.error | contains("final failure")) and .detail[-1] == "final failure"' <<<"$out"
 rm -rf "$NOSEARCH"
 rm -rf "$DSTUB" "$DCFG" "$RCACHE"
 

@@ -2015,6 +2015,7 @@ cmd_reindex() {
       '{ok: true, indexStale: false, index: $index, message: "index rebuilt"}'
     return 0
   fi
+  err=$(tail -n 20 <<<"$err" | tail -c 65536)
   jq -nc --arg err "$err" --argjson index "$facts" \
     --arg log "$CACHE_DIR/index-errors.log" '
     ($err | split("\n")
