@@ -127,6 +127,39 @@
                 touch "$out"
               '';
 
+          # The adapter suite skips network and writable-store cases in the sandbox
+          # (NIXARCHY_PKG_TEST_OFFLINE). Catalogue sections need /etc/nixarchy;
+          # they and the live search-index section run only on a nixarchy machine.
+          adapter =
+            pkgs.runCommand "nixarchy-pkg-adapter-tests"
+              {
+                nativeBuildInputs = with pkgs; [
+                  bash
+                  jq
+                  nix
+                  git
+                  util-linux
+                  gawk
+                  gnused
+                  gnugrep
+                  coreutils
+                  diffutils
+                  findutils
+                  gnutar
+                  procps
+                  which
+                ];
+              }
+              ''
+                export HOME=$TMPDIR NIX_STATE_DIR=$TMPDIR/nix-state NIXARCHY_PKG_TEST_OFFLINE=1
+                cp -r ${./.} repo; chmod -R u+w repo; cd repo
+                patchShebangs bin tests >/dev/null
+                # Stubs written at run time start #!/usr/bin/env, which the sandbox lacks.
+                sed -i "s|#!/usr/bin/env bash|#!$(command -v bash)|g" tests/adapter.sh
+                bash tests/adapter.sh
+                touch "$out"
+              '';
+
           # ~2300 lines of QML and nothing parsed them: a syntax error
           # shipped and failed at runtime in the shell, where the symptom is
           # a plugin that silently never draws (#44).
