@@ -57,9 +57,11 @@ exception because they are warnings.
 ### 4. Icons on Apps and Services rows
 
 On tabs 0 and 1 the state glyph column gets an `Image` beside it, with
-`source: "image://icon/" + modelData.id`. That's Quickshell's icon
-provider, the same thing `Quickshell.iconPath()` returns, so `Card.qml`
-needs no new import and the test needs no new stub. The image is
+`source: Quickshell.iconPath(modelData.id, true)` (amended 2026-11-16,
+owner-approved: `image://icon/<id>` answers a missing icon with a
+checkerboard that reports itself Ready, so `Card.qml` imports
+`Quickshell`, whose `iconPath(id, true)` returns `""` for a missing icon,
+and the tests stub it; `.settings` rows never look one up). The image is
 `Style.font.heading` square and only visible at `status === Image.Ready`.
 Its column is always reserved on those two tabs, so rows stay aligned
 whether or not the theme has the icon. Selection, Options, Drafts and
