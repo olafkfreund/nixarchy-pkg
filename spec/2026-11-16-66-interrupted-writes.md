@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 66
 also: 67
 intent: intent/2026-11-16-66-interrupted-writes.md
