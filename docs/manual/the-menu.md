@@ -24,10 +24,14 @@ manual happens on this surface, so it is worth thirty seconds.
 | **Flakes** | What a flakeref of its own carries — type one, `RETURN` lists it |
 | **Queue** | What the next apply will copy, and whether it evaluates — see [Applying](applying) |
 
+**Selection** shows how many packages are in your selection, whatever the
+search shows; **Queue** shows how many changes are queued, and `?` when the
+queue could not be read.
+
 ## The list
 
 `j`/`k` or `↑`/`↓`. `PAGE UP`/`PAGE DOWN` for ten at a time, `HOME` for the
-top.
+top. Pointing at a row or a tab highlights it; it never moves the cursor.
 
 The box at the left of each row is the state, and it has three values rather
 than two:
@@ -72,6 +76,10 @@ you. That is where a refusal appears — an unfree package under a policy that
 forbids it, a name nixpkgs does not carry, a licence comment that was
 scaffolded for you. It is worth reading; it is the only place the machine
 answers back.
+
+While the panel is working (a write, inspecting a flake, a check), a short
+line moves along the rule above the footer; with animations off
+(`omarchy toggle animations`), the rule lights up instead.
 
 ## The keys
 
