@@ -503,15 +503,15 @@ extras_tsv() {
 # default package facts. Absent or stale labels leave the id on its own.
 labels_tsv() {
   [ -s "$INDEX" ] || return 0
-  awk -F'\t' -v want="${1-}" '
-    BEGIN { n = split(want, a, " "); for (i = 1; i <= n; i++) w[a[i]] = 1 }
+  awk -F'\t' '
+    FNR == NR { if ($1 != "") { w[$1] = 1; n++ }; next }
     $1 == "app" { print "app\t" $2 "\t" $3; next }
     n && $1 == "pkg" && ($2 in w) {
       v = ""; i = index($5, "\\nversion:  ")
       if (i) { v = substr($5, i + 12); j = index(v, "\\n"); if (j) v = substr(v, 1, j - 1) }
       print "pkg\t" $2 "\t" $3 "\t" $4 "\t" v
     }
-  ' "$INDEX"
+  ' <(printf '%s\n' "${1-}") "$INDEX"
 }
 
 # The index, searched. 137k rows is too many to hand a QML list model, so
@@ -2290,7 +2290,7 @@ cmd_state() {
 
   local want=""
   if ! $stale; then
-    want=$(extras_tsv | awk -F'\t' '$1 == "pkg" && $3 == "default" { printf "%s ", $2 }') || want=""
+    want=$(extras_tsv | awk -F'\t' '$1 == "pkg" && $3 == "default" { print $2 }') || want=""
   fi
 
   jq -n \

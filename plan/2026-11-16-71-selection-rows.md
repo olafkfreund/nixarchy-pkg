@@ -69,6 +69,14 @@ up, so the panel cannot draw a borrowed fact.
 13. **One PR**, with commits in step order (tests before the change they
     test). Companion issues are filed by the lead (below).
 
+Deviation: `UNTAG_JQ` now trims every search summary, not only flagged ones;
+accepted, since no consumer depends on the old spacing.
+
+(Review fixes: pass selected attrs to `awk` as a stream to avoid the argv
+limit; keep the unreadable-apps exit-code check reachable under `set -e`;
+assert the selected short name keeps its own facts instead of the longer
+index name's facts.)
+
 ## Repo traps (apply to every step that touches them)
 
 - **One JSON answer on every path.** `state` always prints one object and

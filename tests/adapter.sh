@@ -456,8 +456,10 @@ check "package order and attr channel survive" jq -e \
   '.packages | map([.attr, .channel]) == [["ripgrep","default"],["foo","default"],["novers","default"],["nolineversion","default"],["qmark","default"],["nosummary","default"],["vlc","other"],["nerd-fonts.blex-mono","default"],["nosuchpkg","default"]]' <<<"$out"
 check "Apps and Services still take labels from the index" jq -e \
   '.apps[0].label == "Demo (Utility)" and .services[0].label == "Demo (Utility)"' <<<"$out"
-check "near package names are not selected" jq -e \
-  '([.packages[].attr] | index("nerd-fonts.blex") == null and index("ripgrep-all") == null)' <<<"$out"
+check "near package names do not lend their facts" jq -e \
+  '.packages[] | select(.attr == "ripgrep") |
+   .summary == "Utility that combines usability" and .version == "15.2.0" and
+   .summary != "Different package" and .version != "0.1"' <<<"$out"
 
 cp "$S/config/nixarchy/apps.nix" "$S/apps.base"
 sed -i '/vlcOther =/a\  vlc = true; #@pkg vlc' "$S/config/nixarchy/apps.nix"
@@ -483,7 +485,7 @@ if [ "$(id -u)" = 0 ]; then
   echo "  skip: unreadable apps.nix requires non-root"
 else
   chmod 000 "$S/config/nixarchy/apps.nix"
-  out=$(selection_state); rc=$?
+  rc=0; out=$(selection_state) || rc=$?
   # shellcheck disable=SC2016  # $path is jq's variable, bound by --arg.
   check "unreadable apps.nix answers with its name" jq -e --arg path "$S/config/nixarchy/apps.nix" \
     '.ok == true and (.message | contains($path))' <<<"$out"
@@ -498,6 +500,16 @@ fi
 many_options=$(selection_state)
 check "2200 option rows still answer" jq -e \
   '.ok == true and (.options | length == 2200)' <<<"$many_options"
+{
+  printf '{ ... }:\n{\n  demo.enable = true; #@ demo\n  ripgrep = true; #@pkg ripgrep\n'
+  for i in {1..5000}; do printf '  selection-package-%05d-padding-padding = true; #@pkg selection-package-%05d-padding-padding\n' "$i" "$i"; done
+  printf '}\n'
+} >"$S/config/nixarchy/apps.nix"
+many_packages=$(selection_state)
+check "5000 selected packages still enrich and resolve app labels" jq -e \
+  '.ok == true and (.packages | length == 5001) and
+   (.packages | any(.attr == "ripgrep" and .summary == "Utility that combines usability" and .version == "15.2.0")) and
+   .apps[0].label == "Demo (Utility)" and .services[0].label == "Demo (Utility)"' <<<"$many_packages"
 rm -rf "$S"
 
 if $HAVE_CATALOGUE; then
