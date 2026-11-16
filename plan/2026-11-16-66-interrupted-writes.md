@@ -435,6 +435,10 @@ helper: `mkdir -p "$S/state/nixarchy/applied" "$S/state/nixarchy/pkg-recovery/op
 
 → **Verify:** the three commands.
 
+(Deviation, step 4: `run_apply`'s stub directory is gone by the time this
+section runs, so the section has its own `nixarchy-apply` stub that records
+its argv; "was not run" checks that file is absent.)
+
 ### 5. Panel (`PkgModel.qml`, `tests/qml/tst_pkgmodel.qml`)
 
 1. **`armApply`** (~line 286): delete the line

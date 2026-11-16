@@ -671,7 +671,12 @@ check 'draft changes fingerprint but not part pins' jq -e --arg old "$old_finger
 
 q_reset
 mkdir -p "$Q/state/nixarchy/pkg-recovery/open"
+# A live writer holds the lock; without one this is an interrupted write (#66).
+: >"$Q/state/nixarchy/applied/lock"
+( flock 9; touch "$Q/ready"; exec sleep 20 ) 9>"$Q/state/nixarchy/applied/lock" & qholder=$!
+for ((i = 0; i < 100; i++)); do [ -e "$Q/ready" ] && break; sleep 0.05; done
 q_answer writing
+kill "$qholder" 2>/dev/null || :; wait "$qholder" 2>/dev/null || :
 check 'open recovery marks queue as writing' jq -e '.writing == true' <<<"$QOUT"
 
 q_reset
@@ -1650,6 +1655,78 @@ check "long grandchild recovery restores apps.nix" test "$(md5sum < "$A67")" = "
 check "timeout -k covers five write-time calls" test "$(grep -c 'timeout -k 10 120 nix flake' "$ADAPTER")" = 5
 check "no write-time call has the old timeout" test "$(grep -c 'timeout 120 nix flake \(metadata\|lock\)' "$ADAPTER" || :)" = 0
 rm -rf "$W67"
+
+echo "an interrupted write stops apply (#66)"
+rm -rf "$XDG_STATE_HOME"
+XDG_STATE_HOME=$(mktemp -d); export XDG_STATE_HOME
+W66=$(mktemp -d)
+mkdir -p "$W66/cfg/nixarchy" "$W66/stub" "$W66/tmp"
+A66="$W66/cfg/nixarchy/apps.nix"
+printf '{ ... }:\n{\n  # foo.enable = true;  #@ foo\n}\n' > "$A66"
+printf '{ ... }:\n{\n}\n' > "$W66/cfg/nixarchy/services.nix"
+# shellcheck disable=SC2016  # the stub expands STUB_DIR itself.
+printf '#!/usr/bin/env bash\necho ran > "$STUB_DIR/argv"\n' >"$W66/stub/nixarchy-apply"; chmod +x "$W66/stub/nixarchy-apply"
+run66() { XDG_CONFIG_HOME="$W66/cfg" NIXARCHY_FLAKE="$W66/fk" TMPDIR="$W66/tmp" PATH="$W66/stub:$PATH" STUB_DIR="$W66/stub" STUB_MODE="" "$ADAPTER" "$@"; }
+# A killed write: open/ with a guarded path, and a lock nobody holds.
+fixture66() {
+  rm -rf "$XDG_STATE_HOME/nixarchy" "$W66/stub/argv"
+  mkdir -p "$XDG_STATE_HOME/nixarchy/applied" "$XDG_STATE_HOME/nixarchy/pkg-recovery/open"
+  : >"$XDG_STATE_HOME/nixarchy/applied/lock"
+  printf '%s' "$A66" >"$XDG_STATE_HOME/nixarchy/pkg-recovery/open/0.path"
+  printf 'old\n' >"$XDG_STATE_HOME/nixarchy/pkg-recovery/open/0.data"
+}
+holder66=""
+hold66() {   # hold66 [-s]: hold the apply lock from a background process
+  rm -f "$W66/ready"
+  ( flock "$@" 9; touch "$W66/ready"; exec sleep 20 ) 9>"$XDG_STATE_HOME/nixarchy/applied/lock" & holder66=$!
+  wait67_file "$W66/ready" || :
+}
+release66() { kill "$holder66" 2>/dev/null || :; wait "$holder66" 2>/dev/null || :; holder66=""; }
+
+fixture66
+out=$(run66 pending)
+# shellcheck disable=SC2016  # jq variables are literal in its filter.
+check "interrupted: pending is an error naming recover and the file" jq -e --arg p "$A66" '.ok == false and (.error | contains("recover") and contains($p))' <<<"$out"
+out=$(run66 state)
+# shellcheck disable=SC2016  # jq variables are literal in its filter.
+check "interrupted: state keeps ok and lists the files" jq -e --arg p "$A66" '.ok == true and .recovery.files == [$p] and (.message | contains("recover"))' <<<"$out"
+out=$(run66 apply)
+check "interrupted: apply is one refusal record" jq -e '.nixarchyPkgApply | .ok == false and .exit == null and (.message | contains("recover"))' <<<"$out"
+check "interrupted: apply is the only line" test "$(wc -l <<<"$out")" = 1
+check "interrupted: nixarchy-apply was not run" not test -e "$W66/stub/argv"
+
+fixture66
+hold66
+out=$(run66 pending)
+check "running: pending says writing" jq -e '.ok == true and .writing == true' <<<"$out"
+out=$(run66 state)
+check "running: state has no recovery key" jq -e 'has("recovery") | not' <<<"$out"
+out=$(run66 apply)
+check "running: apply says in progress" jq -e '.nixarchyPkgApply | .ok == false and (.message | contains("in progress"))' <<<"$out"
+check "running: nixarchy-apply was not run" not test -e "$W66/stub/argv"
+release66
+
+fixture66
+hold66 -s
+out=$(run66 apply)
+check "a shared holder does not hide the interruption" jq -e '.nixarchyPkgApply | .ok == false and (.message | contains("an earlier write was interrupted"))' <<<"$out"
+check "shared holder: nixarchy-apply was not run" not test -e "$W66/stub/argv"
+release66
+
+fixture66
+rm -f "$XDG_STATE_HOME/nixarchy/applied/lock"
+out=$(run66 pending)
+check "missing lock: pending says writing" jq -e '.writing == true and .ok != false' <<<"$out"
+check "missing lock: the probe did not create it" not test -e "$XDG_STATE_HOME/nixarchy/applied/lock"
+
+fixture66
+tout=$(run66 toggle app foo)
+pout=$(run66 pending)
+# shellcheck disable=SC2016  # jq variables are literal in its filter.
+check "toggle refuses with the one message" jq -e --arg p "$A66" '.ok == false and (.error | contains("an earlier write was interrupted (" + $p))' <<<"$tout"
+# shellcheck disable=SC2016  # jq variables are literal in its filter.
+check "pending uses the same message" jq -e --arg p "$A66" '.ok == false and (.error | contains("an earlier write was interrupted (" + $p))' <<<"$pout"
+rm -rf "$W66"
 
 # A pipeline whose FIRST command exits non-zero on a normal outcome --
 # `diff` finding differences, `grep` finding nothing, `head` closing the pipe
