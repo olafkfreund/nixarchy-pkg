@@ -2512,8 +2512,12 @@ cat >"$O62/bin/nixarchy-apply" <<'EOF'
 for part in apps services advanced flatsnap home; do :; done
 EOF
 chmod +x "$O62/bin/nixarchy-apply"
+cache62=$(readlink -f "$OC/options")
+jq --arg u "$(id -un)" '.homeManager = true | .users = [$u]' "$cache62/meta.json" >"$O62/meta.json"
+mv "$O62/meta.json" "$cache62/meta.json"
+check "the user cache has no user.json" test ! -e "$cache62/user.json"
 check "describe --scope user with no user.json refuses, saying why" \
-  jq -e '.ok == false and (.error | contains("this host has no Home Manager (home-manager.users)"))' <<<"$(FLAKE62=$O62/fl3 opt62 opt describe --scope user programs.git.enable)"
+  jq -e '.ok == false and (.error | contains("no Home Manager options for")) and (.error | contains("no Home Manager options were read for"))' <<<"$(FLAKE62=$O62/fl3 opt62 opt describe --scope user programs.git.enable)"
 check "and still describes the system scope from that cache" \
   jq -e '.ok and .source == "flake"' <<<"$(FLAKE62=$O62/fl3 opt62 opt describe programs.git.enable)"
 
