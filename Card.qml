@@ -512,10 +512,15 @@ Item {
       height: Style.font.title + Style.space(10)
 
       Text {
+        objectName: "queueStatus"
         anchors {
           left: parent.left; leftMargin: Style.space(10)
+          right: hints.left; rightMargin: Style.space(14)
           verticalCenter: parent.verticalCenter
         }
+        // A long reason (an interrupted write names its files and both
+        // commands) is shown in full above; here it must not run under the hints.
+        elide: Text.ElideRight
         text: {
           if (!root.model) return ""
           if (root.model.queued === -1)
@@ -546,6 +551,8 @@ Item {
       }
 
       Text {
+        id: hints
+        objectName: "hints"
         anchors {
           right: parent.right; rightMargin: Style.space(10)
           verticalCenter: parent.verticalCenter

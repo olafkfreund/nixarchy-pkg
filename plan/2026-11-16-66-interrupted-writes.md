@@ -571,6 +571,11 @@ not fixed: a detached descendant (for example git's background gc) that keeps
 fd 7 makes later writes refuse until it exits; `fuser -v` on the lock names
 it.)
 
+(Deviation, found in the live microVM check: the footer's queue status line
+had no width limit, so "queue unknown -- <interrupted-write reason>" ran under
+the key hints. It now ends where the hints begin and elides; the full reason
+is in the message area above. `tst_card` checks it.)
+
 ## Tests
 
 ```bash
