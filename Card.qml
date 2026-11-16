@@ -21,7 +21,7 @@ Item {
   readonly property color dim: Qt.rgba(fg.r, fg.g, fg.b, 0.6)
   readonly property string fontFamily: Style.font.family
   // Through a typed property first, as `fg`/`dim` do: the test stub's
-  // `Color.menu` holds plain strings, and a string has no .r/.g/.b/.a.
+  // the test stub's menu colours are plain strings, and a string has no .r/.g/.b/.a.
   readonly property color selectedBg: Commons.Color.menu.selectedBackground
   readonly property color hoverBackground: Qt.rgba(selectedBg.r, selectedBg.g, selectedBg.b, selectedBg.a * 0.5)
   // Alpha 0 of the same colour, not "transparent": a fade to #00000000 passes through grey.
