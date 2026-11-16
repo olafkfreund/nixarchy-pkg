@@ -4,13 +4,15 @@ title: NixOS options
 
 # NixOS options
 
-This tab lists options discovered from your host's flake, including NixOS
-options and, when available, Home Manager options for your user. This is how
-you reach a service the curated catalogue does not carry.
+Every NixOS option there is — about 25,500 of them, including over 2,000
+`services.*.enable`. This is how you reach a service the curated catalogue
+does not carry, which is most of them.
 
 ![Searching options](../img/07-options-search.png)
 
-`/` searches. Each row shows the option's path and its declared type.
+`/` searches. Each row shows the option's path and its declared type. Until
+the first options refresh, the list comes from the system manual's
+`options.json`, rather than a guessed set of option names.
 
 ## Where the options come from
 

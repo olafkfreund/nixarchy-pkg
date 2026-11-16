@@ -257,4 +257,19 @@ TestCase {
     keyClick(Qt.Key_U)
     compare(pkg._writer.command.slice(1), ["flake", "update", "tool"])
   }
+  function test_w_ctrl_return_adds_user_package_only_in_search() {
+    fresh()
+    pkg.setTab(2)
+    pkg.query = "git"; pkg.results = [{kind:"pkg", name:"git", scope:"system"}]
+    pkg.userScope = {available:true, reason:""}
+    keys.forceActiveFocus()
+    keyClick(Qt.Key_Return, Qt.ControlModifier)
+    compare(pkg._writer.command.slice(1), ["pkg", "add", "--scope", "user", "git"])
+  }
+  function test_x_ctrl_return_acts_as_return_elsewhere() {
+    fresh()
+    keyClick(Qt.Key_Return, Qt.ControlModifier)
+    compare(pkg._writer.running, true)
+    compare(pkg._writer.command.slice(1), ["toggle", "app", "a"])
+  }
 }

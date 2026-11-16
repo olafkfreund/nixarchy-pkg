@@ -355,11 +355,16 @@ searched() {
   sed -n "s/^${var}=\\(.*\\)$/\\1/p" "$path" | head -1
 }
 
+apply_has_home() {
+  local apply
+  apply=$(command -v nixarchy-apply 2>/dev/null) || return 1
+  grep -qE '^for part in .*\bhome\b' "$apply"
+}
+
 # Empty means the installed apply and this host can handle home.nix.
 user_scope() {
-  local apply meta user
-  apply=$(command -v nixarchy-apply 2>/dev/null) || :
-  if [ -z "$apply" ] || ! grep -qE '^for part in .*\bhome\b' "$apply"; then
+  local meta user
+  if ! apply_has_home; then
     printf '%s' 'this nixarchy has no Home Manager part; update nixarchy first'
     return
   fi
@@ -540,7 +545,7 @@ extras_tsv() {
       print "opt\t" path "\t" set "\t" body "\t" scope; next
     }
     match($0, /#@draft [^ \t]+/) {
-      print "draft\t" substr($0, RSTART + 8, RLENGTH - 8) "\t"; next
+      print "draft\t" substr($0, RSTART + 8, RLENGTH - 8) "\t" scope; next
     }
   ' "$file"
   done
@@ -1769,6 +1774,7 @@ snapshot_selection() {
   local p f
   mkdir -p "$1/packages" || die "cannot create $1"
   for p in apps services advanced flatsnap home; do
+    [ "$p" != home ] || apply_has_home || continue
     f=$CONFIG_DIR/$p.nix
     [ -e "$f" ] || continue
     [ -r "$f" ] || die "cannot read $f"
@@ -1907,6 +1913,7 @@ cmd_pending() {
   : >"$READDIR/lines.jsonl"
 
   for p in apps services advanced flatsnap home; do
+    [ "$p" != home ] || apply_has_home || continue
     src=$READDIR/$p.nix
     dst=$base/nixarchy/$p.nix
     live=""; [ -e "$CONFIG_DIR/$p.nix" ] && live=$CONFIG_DIR/$p.nix
@@ -2571,7 +2578,7 @@ cmd_state() {
 
   local want=""
   if ! $stale; then
-    want=$(extras_tsv | awk -F'\t' '$1 == "pkg" && $3 == "default" && $4 == "system" { print $2 }') || want=""
+    want=$(extras_tsv | awk -F'\t' '$1 == "pkg" && $3 == "default" { print $2 }') || want=""
   fi
 
   jq -n \
@@ -2585,6 +2592,7 @@ cmd_state() {
     --argjson userAvailable "$user_available" --arg userReason "$user_reason" \
     --arg appsFile "$APPS" \
     --arg servicesFile "$SERVICES" \
+    --arg homeFile "$HOME_NIX" \
     --arg unreadable "$unread_msg" \
     --argjson rfiles "$rfiles" \
     --arg channel "$(machine_channel)" \
@@ -2613,7 +2621,7 @@ cmd_state() {
       # list came from is optionsInfo.
       optionsInfo: $options,
       userScope: {available:$userAvailable, reason:$userReason},
-      files: { apps: $appsFile, services: $servicesFile },
+      files: { apps: $appsFile, services: $servicesFile, home: $homeFile },
       channel: $channel,
       flakeDir: $flakeDir,
       flakeFound: $flakeFound,
@@ -2647,7 +2655,7 @@ cmd_state() {
       options: ($extras | cols | map(select(.[0] == "opt") | {
         path: .[1], set: (.[2] == "true"), line: (.[3] // ""), scope:(.[4] // "system")
       })),
-      drafts: ($extras | cols | map(select(.[0] == "draft") | { name: .[1], scope:"system" }))
+      drafts: ($extras | cols | map(select(.[0] == "draft") | { name: .[1], scope:(.[2] // "system") }))
     }'
 }
 
