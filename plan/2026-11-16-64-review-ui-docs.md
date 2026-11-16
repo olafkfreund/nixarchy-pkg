@@ -557,3 +557,5 @@ PR 3 is test-only.
 
 None. #71 (selection rows) carries the nixarchy dependency it needs:
 "pkg-index: carry meta.insecure / knownVulnerabilities as an index flag".
+
+(Workflow run 2026-11-16: the steps of this PR were implemented in one parallel workflow pass and committed together as one commit, because agent-run codex will not start on a worktree with uncommitted changes and the implementing agents may not commit. The PR names which steps Codex wrote and which the coordinating agent wrote; each agent verified every step with the adapter suite, shellcheck, the QML suites and nix flake check, and the lead re-ran the adapter suite and nix flake check before committing.)
