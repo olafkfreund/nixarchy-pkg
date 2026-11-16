@@ -284,6 +284,13 @@ at a pipeline head.
 
 → **Verify:** the three commands.
 
+(Deviation, step 2: the TERM fixture's grandchild sleeps 12 s, not 7, because
+bash runs the TERM trap only after `settle`'s 5-second `flock` wait returns;
+the short-lived grandchild sleeps 2 s so its marker cannot race the check. The
+killed-child cases test fd 7 acquisition in `begin_write`, so they pass even
+with `settle` disabled; the rollback, commit, TERM and long-grandchild cases
+fail without it.)
+
 ### 3. `interrupted()` and the three readers (`bin/nixarchy-pkg`)
 
 **Helpers**, beside `begin_write`:

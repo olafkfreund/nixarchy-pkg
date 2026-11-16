@@ -1502,6 +1502,155 @@ check "recover --discard keeps the files" jq -e '.ok == true' <<<"$out"
 left_nothing "killed during a writer"
 rm -rf "$W59" "$ADAPTER_TMP"
 
+echo "a killed write leaves nothing to race the next one (#67)"
+rm -rf "$XDG_STATE_HOME"
+XDG_STATE_HOME=$(mktemp -d); export XDG_STATE_HOME
+W67=$(mktemp -d)
+mkdir -p "$W67/cfg/nixarchy" "$W67/stub" "$W67/fk"
+A67="$W67/cfg/nixarchy/apps.nix"
+printf '{ ... }:\n{\n  # foo.enable = true;  #@ foo\n}\n' > "$A67"
+printf '{ ... }:\n{\n}\n' > "$W67/cfg/nixarchy/services.nix"
+run67() { XDG_CONFIG_HOME="$W67/cfg" PATH="$W67/stub:$PATH" "$ADAPTER" "$@"; }
+wait67_file() {
+  local i
+  for ((i = 0; i < 100; i++)); do
+    [ -s "$1" ] && break
+    sleep 0.01
+  done
+  test -s "$1"
+}
+wait67_done() {
+  local i
+  for ((i = 0; i < 300; i++)); do
+    [ -s "$1" ] && break
+    sleep 0.05
+  done
+  test -s "$1"
+}
+wait67_child() {
+  local pid=$1 i
+  kill "$pid" 2>/dev/null || :
+  for ((i = 0; i < 100; i++)); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.05
+  done
+  for ((i = 0; i < 100; i++)); do
+    flock -n "$(st)/pkg-children.lock" true && return 0
+    sleep 0.05
+  done
+  return 1
+}
+
+# A killed adapter must leave its Nix child holding fd 7 until it exits.
+printf '{\n  outputs = { self }: { };\n}\n' > "$W67/fk/flake.nix"
+git -C "$W67/fk" init -q .
+git -C "$W67/fk" add flake.nix
+printf '{"nodes":{"root":{}},"root":"root","version":7}\n' > "$W67/fk/flake.lock"
+before_nix=$(md5sum < "$W67/fk/flake.nix"); before_lock=$(md5sum < "$W67/fk/flake.lock")
+cat > "$W67/stub/nix" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1 $2" = 'flake lock' ]; then
+  echo $$ > "$STUB67/nix.pid"
+  exec sleep 30
+fi
+exit 0
+EOF
+chmod +x "$W67/stub/nix"
+STUB67="$W67" NIXARCHY_FLAKE="$W67/fk" XDG_CONFIG_HOME="$W67/cfg" PATH="$W67/stub:$PATH" \
+  "$ADAPTER" flake add foo github:a/b > "$W67/add.out" 2>&1 & adapter=$!
+check "killed flake add reaches nix" wait67_file "$W67/nix.pid"
+kill -9 "$adapter" 2>/dev/null || :; wait "$adapter" 2>/dev/null || :
+out=$(run67 toggle app foo)
+check "nix child blocks the next write" jq -e '.ok == false and (.error | contains("still running"))' <<<"$out"
+check "nix child keeps its working directory" compgen -G "$(st)/pkg-work.*"
+out=$(run67 recover)
+check "nix child blocks recovery" jq -e '.ok == false and (.error | contains("still running"))' <<<"$out"
+check "killed nix child releases its lock" wait67_child "$(cat "$W67/nix.pid")"
+out=$(run67 recover)
+check "nix child recovery succeeds" jq -e '.ok == true' <<<"$out"
+check "nix child recovery restores flake.nix" test "$(md5sum < "$W67/fk/flake.nix")" = "$before_nix"
+check "nix child recovery restores flake.lock" test "$(md5sum < "$W67/fk/flake.lock")" = "$before_lock"
+rm -f "$W67/stub/nix"
+
+# The external writers inherit the same lock.
+cat > "$W67/stub/nixarchy-app-enable" <<'EOF'
+#!/usr/bin/env bash
+echo $$ > "$STUB67/writer.pid"
+exec sleep 30
+EOF
+chmod +x "$W67/stub/nixarchy-app-enable"
+STUB67="$W67" XDG_CONFIG_HOME="$W67/cfg" PATH="$W67/stub:$PATH" \
+  "$ADAPTER" toggle app foo > "$W67/toggle.out" 2>&1 & adapter=$!
+check "killed writer starts" wait67_file "$W67/writer.pid"
+kill -9 "$adapter" 2>/dev/null || :; wait "$adapter" 2>/dev/null || :
+out=$(run67 toggle app foo)
+check "writer child blocks the next write" jq -e '.ok == false and (.error | contains("still running"))' <<<"$out"
+check "killed writer releases its lock" wait67_child "$(cat "$W67/writer.pid")"
+out=$(run67 recover)
+check "writer child recovery succeeds" jq -e '.ok == true' <<<"$out"
+rm -f "$W67/stub/nixarchy-app-enable"
+
+# The writer exits first; its background child keeps fd 7 and edits later.
+before=$(md5sum < "$A67")
+STUB67=$W67; APPS67=$A67; export STUB67 APPS67
+GC_DELAY67=2; export GC_DELAY67
+cat > "$W67/stub/nixarchy-app-enable" <<'EOF'
+#!/usr/bin/env bash
+( printf 'started\n' > "$STUB67/gc.started"; sleep "${GC_DELAY67:-1}"; printf 'x\n' >> "$APPS67"; printf 'done\n' > "$STUB67/gc.done" ) >/dev/null 2>&1 &
+exit "${WRITER_RC67:-1}"
+EOF
+chmod +x "$W67/stub/nixarchy-app-enable"
+out=$(run67 toggle app foo)
+check "rollback waits for a grandchild" test -e "$W67/gc.done"
+check "failed writer reports failure" jq -e '.ok == false' <<<"$out"
+check "rollback follows the grandchild edit" test "$(md5sum < "$A67")" = "$before"
+check "rollback closes recovery" not test -e "$(st)/pkg-recovery/open"
+check "rollback grandchild finishes" wait67_done "$W67/gc.done"
+check "rollback leaves original bytes" test "$(md5sum < "$A67")" = "$before"
+rm -f "$W67/gc.done" "$W67/gc.started"
+
+WRITER_RC67=0; export WRITER_RC67
+out=$(run67 toggle app foo)
+check "commit waits for a grandchild" test -e "$W67/gc.done"
+check "successful writer reports success" jq -e '.ok == true' <<<"$out"
+check "commit keeps the grandchild edit" grep -qx 'x' "$A67"
+check "commit closes recovery" not test -e "$(st)/pkg-recovery/open"
+check "commit grandchild finishes" wait67_done "$W67/gc.done"
+rm -f "$W67/gc.done" "$W67/gc.started"
+
+# TERM during settle must answer once and keep both the backup and WORK.
+# Bash handles TERM after flock's wait; the child must outlast both waits.
+GC_DELAY67=12; export GC_DELAY67
+XDG_CONFIG_HOME="$W67/cfg" PATH="$W67/stub:$PATH" \
+  "$ADAPTER" toggle app foo > "$W67/term.out" 2>&1 & adapter=$!
+check "TERM fixture starts grandchild" wait67_file "$W67/gc.started"
+sleep 1
+kill -TERM "$adapter" 2>/dev/null || :; wait "$adapter" 2>/dev/null || :
+out=$(cat "$W67/term.out")
+check "TERM while settling gives one answer" one_json "$out"
+check "TERM while settling reports the child" jq -e '.ok == false and (.error | contains("still running"))' <<<"$out"
+check "TERM keeps recovery open" test -e "$(st)/pkg-recovery/open"
+check "TERM keeps its working directory" compgen -G "$(st)/pkg-work.*"
+check "TERM grandchild finishes" wait67_done "$W67/gc.done"
+out=$(run67 recover)
+check "TERM recovery succeeds" jq -e '.ok == true' <<<"$out"
+rm -f "$W67/gc.done" "$W67/gc.started"
+
+# A child that runs beyond settle's five seconds must keep the backup.
+before=$(md5sum < "$A67")
+WRITER_RC67=1
+GC_DELAY67=7
+out=$(run67 toggle app foo)
+check "long grandchild reports an unfinished write" jq -e '.ok == false and (.message | contains("still running") and contains("recover"))' <<<"$out"
+check "long grandchild keeps recovery open" test -e "$(st)/pkg-recovery/open"
+check "long grandchild finishes" wait67_done "$W67/gc.done"
+out=$(run67 recover)
+check "long grandchild recovery succeeds" jq -e '.ok == true' <<<"$out"
+check "long grandchild recovery restores apps.nix" test "$(md5sum < "$A67")" = "$before"
+check "timeout -k covers five write-time calls" test "$(grep -c 'timeout -k 10 120 nix flake' "$ADAPTER")" = 5
+check "no write-time call has the old timeout" test "$(grep -c 'timeout 120 nix flake \(metadata\|lock\)' "$ADAPTER" || :)" = 0
+rm -rf "$W67"
+
 # A pipeline whose FIRST command exits non-zero on a normal outcome --
 # `diff` finding differences, `grep` finding nothing, `head` closing the pipe
 # under it -- is a failure under `set -euo pipefail` (bin/nixarchy-pkg:39).
