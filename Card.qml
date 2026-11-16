@@ -1,4 +1,5 @@
 import QtQuick
+import Quickshell
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
@@ -16,8 +17,11 @@ Item {
   property real maxHeight: 0
 
   readonly property color fg: Commons.Color.menu.text
-  readonly property color dim: Qt.darker(fg, 1.6)
+  // Alpha, not darkening: darkening inverts the hierarchy on light themes.
+  readonly property color dim: Qt.rgba(fg.r, fg.g, fg.b, 0.6)
   readonly property string fontFamily: Style.font.family
+  // Apps and Services rows carry an icon; the other tabs don't.
+  readonly property bool showIcons: root.model && root.model.tab <= 1
 
   // Queue rows say how much they matter: a conflict or a failed check is
   // urgent, other check results stand out, notes recede.
@@ -29,6 +33,29 @@ Item {
     if (row.kind === "note" || row.kind === "writing") return dim
     return fg
   }
+
+  // The row under the cursor, and what the pane beside the list says about
+  // it. A search row brings its own preview, minus the key hints, which
+  // belong to the footer. Apps and Services rows have none, so the pane
+  // composes one from what the row already knows.
+  readonly property var currentRow: list.currentItem ? list.currentItem.modelData : null
+  readonly property string previewText: {
+    const r = currentRow
+    if (!r) return ""
+    if (typeof r.preview === "string")
+      return r.preview.split("\n")
+              .filter(l => !l.trim().startsWith("ctrl-")).join("\n")
+    if (root.model && root.model.tab <= 1) {
+      // Groups, blank line between: a missing field must not leave a gap.
+      // The catalogue's label already ends "(Category)"; don't say it twice.
+      const cat = r.category && (r.label || "").indexOf("(" + r.category + ")") < 0 ? r.category : ""
+      return [[r.label, cat], [r.note], [r.line]]
+             .map(g => g.filter(x => x).join("\n"))
+             .filter(x => x).join("\n\n")
+    }
+    return ""
+  }
+  readonly property bool showPreview: previewText.length > 0 && width >= Style.space(760)
 
   readonly property real rowHeight: Math.round(Style.font.heading * 2.2)
   // Deliberately NOT derived from the list's contentHeight: the surface
@@ -79,7 +106,8 @@ Item {
         }
 
         // The current tab is named by a rule under it rather than by a
-        // filled pill: a pill is a second surface, and this is one.
+        // filled pill: a pill is a second surface, and this is one. Flag pills
+        // are the exception, because they are warnings.
         Rectangle {
           anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
           height: Math.max(1, Style.space(2))
@@ -117,7 +145,9 @@ Item {
     id: list
     anchors {
       top: scope.bottom; topMargin: Style.space(10)
-      left: parent.left; right: parent.right; bottom: footer.top
+      left: parent.left; right: root.showPreview ? preview.left : parent.right
+      rightMargin: root.showPreview ? Style.space(14) : 0
+      bottom: footer.top
       bottomMargin: Style.space(8)
     }
     clip: true
@@ -174,6 +204,24 @@ Item {
           color: modelData.enabled ? Commons.Color.menu.selectedText : root.dim
         }
 
+        // The column is reserved while the picture loads or is missing, so
+        // rows don't shift as icons arrive.
+        Image {
+          id: icon
+          visible: root.showIcons
+          anchors.verticalCenter: parent.verticalCenter
+          width: Style.font.heading
+          height: Style.font.heading
+          sourceSize: Qt.size(width, height)
+          // iconPath(_, true) is "" for a missing icon. image://icon/ draws a
+          // checkerboard instead, reports it Ready, and logs a warning per row.
+          // A .settings row is not an app, so it never has one.
+          source: root.showIcons && modelData.id && !modelData.settings
+                  ? Quickshell.iconPath(modelData.id, true) : ""
+          opacity: status === Image.Ready ? 1 : 0
+          asynchronous: true
+        }
+
         Text {
           id: name
           anchors.verticalCenter: parent.verticalCenter
@@ -191,6 +239,7 @@ Item {
           textFormat: Text.PlainText
           font.family: root.fontFamily
           font.pixelSize: Style.font.heading
+          font.weight: Font.Medium
           color: current ? Commons.Color.menu.selectedText : root.rowColor(modelData)
         }
 
@@ -214,16 +263,26 @@ Item {
 
           Repeater {
             model: modelData.flags || []
-            Text {
+            Rectangle {
               required property string modelData
+              readonly property color tone: modelData === "broken" ? Commons.Color.urgent
+                                          : modelData === "unfree" ? Commons.Color.accent
+                                          : root.dim
               anchors.verticalCenter: parent.verticalCenter
-              text: modelData
-              textFormat: Text.PlainText
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.title
-              color: modelData === "broken" ? Commons.Color.urgent
-                   : modelData === "unfree" ? Commons.Color.accent
-                   : root.dim
+              color: Qt.rgba(tone.r, tone.g, tone.b, 0.15)
+              radius: Style.cornerRadius
+              width: tag.implicitWidth + Style.space(12)
+              height: tag.implicitHeight + Style.space(4)
+
+              Text {
+                id: tag
+                anchors.centerIn: parent
+                text: parent.modelData
+                textFormat: Text.PlainText
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.title
+                color: parent.tone
+              }
             }
           }
         }
@@ -235,10 +294,13 @@ Item {
           // Style.space(40) was right for no arrangement of this row -- 20px
           // too generous with no flags and too mean with any -- because the
           // Row's anchors already exclude its margins, so subtracting them
-          // again double-counted (#45).
+          // again double-counted (#45). The icon is a term too, and an
+          // invisible one takes no width and no gap.
           width: Math.max(0, parent.width - name.width - Style.font.heading
+                             - (icon.visible ? icon.width : 0)
                              - flags.width
-                             - Style.space(10) * (flags.visible ? 3 : 2))
+                             - Style.space(10) * ((flags.visible ? 3 : 2)
+                                                  + (icon.visible ? 1 : 0)))
           elide: Text.ElideRight
           text: modelData.summary || modelData.note || modelData.type
                 || modelData.line || modelData.category || ""
@@ -281,6 +343,51 @@ Item {
       font.family: root.fontFamily
       font.pixelSize: Style.font.heading
       color: root.dim
+    }
+  }
+
+  // Wheel-scrolled only and never focused, so the keyboard stays on the list.
+  Item {
+    id: preview
+    objectName: "preview"
+    anchors {
+      top: scope.bottom; topMargin: Style.space(10)
+      bottom: footer.top; bottomMargin: Style.space(8)
+      right: parent.right
+    }
+    width: Math.round(parent.width * 0.38)
+    visible: root.showPreview
+
+    Rectangle {
+      width: 1
+      anchors { top: parent.top; bottom: parent.bottom; left: parent.left }
+      color: root.dim
+      opacity: 0.25
+    }
+
+    Flickable {
+      id: flick
+      anchors {
+        top: parent.top; bottom: parent.bottom
+        left: parent.left; leftMargin: Style.space(14)
+        right: parent.right
+      }
+      clip: true
+      contentHeight: body.implicitHeight
+      boundsBehavior: Flickable.StopAtBounds
+
+      Text {
+        id: body
+        width: flick.width
+        wrapMode: Text.Wrap
+        textFormat: Text.PlainText
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.title
+        color: root.fg
+        text: root.previewText
+        // A new row opens at its top, not where the last one was scrolled to.
+        onTextChanged: flick.contentY = 0
+      }
     }
   }
 

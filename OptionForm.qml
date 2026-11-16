@@ -51,6 +51,8 @@ FocusScope {
   // one closed and another opened meanwhile -- is not this form's (#28).
   property string writingPath: ""
   readonly property string fontFamily: Style.font.family
+  // Alpha, not darkening: darkening inverts the hierarchy on light themes.
+  readonly property color dim: Qt.rgba(Commons.Color.menu.text.r, Commons.Color.menu.text.g, Commons.Color.menu.text.b, 0.6)
 
 
   // nixpkgs documentation is hard-wrapped prose -- real newlines at about
@@ -358,7 +360,7 @@ FocusScope {
         wrapMode: Text.Wrap
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
-        color: Qt.darker(Commons.Color.menu.text, 1.5)
+        color: root.dim
       }
 
       // The option's own documentation. Markdown out of nixpkgs, shown as
@@ -385,7 +387,7 @@ FocusScope {
         elide: Text.ElideRight
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
-        color: Qt.darker(Commons.Color.menu.text, 1.5)
+        color: root.dim
       }
 
       // What is there now, labelled as what it is: the expression written in
@@ -411,7 +413,7 @@ FocusScope {
         wrapMode: Text.Wrap
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
-        color: Qt.darker(Commons.Color.menu.text, 1.4)
+        color: root.dim
       }
 
       // ---- the widget ---------------------------------------------------
@@ -476,7 +478,7 @@ FocusScope {
           wrapMode: Text.Wrap
           font.family: root.fontFamily
           font.pixelSize: Style.font.title
-          color: Qt.darker(Commons.Color.menu.text, 1.4)
+          color: root.dim
         }
 
         BorderSurface {
@@ -559,7 +561,7 @@ FocusScope {
         textFormat: Text.PlainText
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
-        color: Qt.darker(Commons.Color.menu.text, 1.6)
+        color: root.dim
       }
     }
   }

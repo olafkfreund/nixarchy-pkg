@@ -17,16 +17,31 @@ TestCase {
 
   property var theRows: [
     { id: "two",  label: "steam", summary: "Digital distribution platform",
-      flags: ["unfree", "curated:steam"] },
-    { id: "one",  label: "one",   summary: "one flag here", flags: ["unfree"] },
-    { id: "none", label: "plain", summary: "no flags here", flags: [] }
+      flags: ["unfree", "curated:steam"],
+      preview: "steam  1.0\nctrl-t tries it now\nversion:  1.0" },
+    { id: "one",  label: "one (Terminal)", category: "Terminal",
+      summary: "one flag here", flags: ["unfree"], note: "a note" },
+    { id: "none", label: "Gamescope", category: "Game", summary: "no flags here", flags: [] }
   ]
-  property var fakeModel: ({
-    tabs: ["S"], tab: 0, cursor: 0, count: 3,
-    rows: function () { return theRows },
-    busy: false, message: "", queued: 0, queueError: "", queueTab: false, indexStale: false, neverApplied: false,
-    showingLog: false, applyLog: "", applying: false
-  })
+  // A QtObject, so a test can set tab and cursor and Card sees it change.
+  QtObject {
+    id: fakeModel
+    property var tabs: ["S"]
+    property int tab: 0
+    property int cursor: 0
+    property int count: 3
+    function rows() { return theRows }
+    property bool busy: false
+    property string message: ""
+    property int queued: 0
+    property string queueError: ""
+    property bool queueTab: false
+    property bool indexStale: false
+    property bool neverApplied: false
+    property bool showingLog: false
+    property string applyLog: ""
+    property bool applying: false
+  }
 
   Window {
     id: win
@@ -43,11 +58,48 @@ TestCase {
     }
     return null
   }
+  function byName(item, name) {
+    if (!item) return null
+    if (item.objectName === name) return item
+    for (var i = 0; i < item.children.length; i++) {
+      var r = byName(item.children[i], name); if (r) return r
+    }
+    return null
+  }
+  function textOf(item) {
+    var ts = elidables(item, [])
+    return ts.length ? ts[0].text : ""
+  }
   function elidables(item, out) {
     if (!item) return out
     if (item.hasOwnProperty("elide") && item.hasOwnProperty("text")) out.push(item)
     for (var i = 0; i < item.children.length; i++) elidables(item.children[i], out)
     return out
+  }
+
+  function init() {
+    fakeModel.tab = 0
+    fakeModel.cursor = 0
+    win.width = 800
+  }
+
+  // Every row is checked at both layouts: with the icon column and without.
+  function checkSummaries() {
+    var lv = find(card, "QQuickListView")
+    verify(lv !== null, "the card must have a list")
+    tryCompare(lv, "count", 3)
+    wait(150)
+    for (var n = 0; n < 3; n++) {
+      var d = lv.itemAtIndex(n)
+      verify(d !== null, "delegate " + n + " must be realised")
+      var row = find(d, "QQuickRow")
+      var ts = elidables(d, [])
+      var summary = ts[ts.length - 1]
+      var overflow = summary.x + summary.width - row.width
+      verify(overflow <= 0.5,
+             "tab " + fakeModel.tab + ", row " + n + ": the summary must fit"
+             + " its row -- overflows by " + overflow.toFixed(1))
+    }
   }
 
   // The property, not the formula. Reproducing the width expression would
@@ -96,5 +148,71 @@ TestCase {
     fakeModel.queued = 0
     card.model = null; card.model = fakeModel
     verify(footerText().indexOf("nothing queued") >= 0, footerText())
+  }
+
+  function test_dim_is_fg_at_lower_alpha() {
+    compare(card.dim.r, card.fg.r)
+    compare(card.dim.g, card.fg.g)
+    compare(card.dim.b, card.fg.b)
+    verify(card.dim.a < 1, "dim must be translucent, not darker")
+  }
+
+  function test_summary_fits_with_and_without_icons() {
+    var lv = find(card, "QQuickListView")
+    fakeModel.tab = 0
+    checkSummaries()
+    var img = find(lv.itemAtIndex(0), "QQuickImage")
+    verify(img.visible, "tab 0 must reserve the icon column")
+    verify(img.source.toString() !== "", "a found icon is drawn")
+    // A missing icon must not be requested at all: image://icon/ answers
+    // with a checkerboard that reports itself Ready.
+    compare(find(lv.itemAtIndex(1), "QQuickImage").source.toString(), "")
+    fakeModel.tab = 2
+    checkSummaries()
+    verify(!find(lv.itemAtIndex(0), "QQuickImage").visible,
+           "tab 2 must not reserve the icon column")
+  }
+
+  // Apps and Services rows carry no preview; the pane composes one, with
+  // a blank line between groups and none for a missing field.
+  function test_preview_composed_for_app_rows() {
+    var pane = byName(card, "preview")
+    fakeModel.cursor = 1
+    tryCompare(pane, "visible", true)
+    compare(textOf(pane), "one (Terminal)\n\na note", "a category the label shows is not repeated")
+    fakeModel.cursor = 2
+    tryCompare(pane, "visible", true)
+    compare(textOf(pane), "Gamescope\nGame", "a category that is only a substring is kept")
+  }
+
+  function test_preview_shows_and_filters() {
+    var pane = byName(card, "preview")
+    verify(pane !== null, "the card must have a preview pane")
+    tryCompare(pane, "visible", true)
+    var t = textOf(pane)
+    verify(t.indexOf("version:") >= 0, "the preview text must be drawn")
+    verify(t.indexOf("ctrl-") < 0, "key hints must be filtered out")
+  }
+
+  function test_preview_sits_beside_the_list() {
+    var pane = byName(card, "preview")
+    var lv = find(card, "QQuickListView")
+    tryCompare(pane, "visible", true)
+    verify(pane.x >= lv.x + lv.width, "the pane must not overlap the list")
+    verify(pane.x + pane.width <= card.width + 0.5, "the pane must fit the card")
+  }
+
+  function test_preview_hidden_when_narrow() {
+    var pane = byName(card, "preview")
+    tryCompare(pane, "visible", true)
+    win.width = 700
+    tryCompare(pane, "visible", false)
+  }
+
+  function test_preview_hidden_without_text() {
+    var pane = byName(card, "preview")
+    fakeModel.tab = 2
+    fakeModel.cursor = 2
+    tryCompare(pane, "visible", false)
   }
 }
