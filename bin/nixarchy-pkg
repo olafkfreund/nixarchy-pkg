@@ -740,40 +740,70 @@ cmd_opt_describe() {
       end' "$oj"
 }
 
-# One physical line, whatever the editor allowed.
-#
-# nixarchy-opt-remove deletes the single line carrying the marker. A value
-# written across several lines leaves the earlier ones orphaned, so the
-# removal makes the file unparseable, its guard reverts, and the option can
-# never be taken out again except by hand. The multiline editor exists
-# because an example like services.postgresql.package's default is nine
-# lines, so newlines become spaces: Nix does not care about them, and the
-# remover does.
-#
-# Nothing else changes. This used to squeeze every run of spaces too, which
-# rewrote "a  b" as "a b" -- a value that parses and is not the one asked
-# for (#28). And where a newline DOES mean something -- inside a '' string,
-# or ending a # comment that would otherwise swallow the rest of the line --
-# the value is refused rather than quietly changed. A raw newline inside a
-# "..." string still becomes a space; telling that apart needs a Nix lexer.
-#
-# Returns 1 instead of dying: it runs inside $(...), where die's object
-# would become the value.
-# Two refusals, because the callers below must not tell someone who forged a
-# marker to put their value on one line (#41).
+# nixarchy-opt-remove needs each marked value on one physical line. Preserve
+# its meaning by re-emitting a string literal or comparing Nix parse trees.
 readonly MARKER_REFUSAL="a value cannot contain '#@' -- that is how this tool marks the options it wrote, and a value carrying one would make the panel name a different option than the one it changes. Nothing was changed."
-readonly FLAT_REFUSAL="a multi-line value with '' or # cannot be written on one line without changing its meaning -- put it on one line yourself. Nothing was changed."
+readonly FLAT_REFUSAL="that value changes meaning when written on one line -- a newline inside a string or after a # matters. Write it on one line, or as one string. Nothing was changed."
 flat_value() {
-  local v=$1
   # `#@` is this tool's marker and a value must not be able to forge one:
   # extras_tsv reads the FIRST marker on a line and nixarchy-opt-remove the
-  # LAST, so a forged one makes the panel name one option and delete
-  # another. 2, not 1, so the caller can say WHICH refusal this is (#41).
-  [[ $v == *'#@'* ]] && return 2
-  if [[ $v == *$'\n'* ]] && [[ $v == *"''"* || $v == *'#'* ]]; then
-    return 1
+  # LAST, so a forged one makes the panel name one option and delete another.
+  [[ $1 == *'#@'* ]] && die "$MARKER_REFUSAL"
+  return 0
+}
+
+# Use the same insertion point as cmd_opt_set, with no marker in the probe.
+same_tree() {
+  local v file why
+  local -a values=("$1" "$2")
+  local i=0
+  for v in "${values[@]}"; do
+    file="$WORK/probe-$i.nix"
+    if ! NIXARCHY_PKG_VALUE="$v" awk '
+      !ins && /^}[[:space:]]*$/ {
+        printf "\n  __nixarchy_probe = %s;\n", ENVIRON["NIXARCHY_PKG_VALUE"]
+        ins = 1
+      }
+      { print }
+      END { if (!ins) exit 1 }
+    ' "$APPS" > "$file"; then
+      die "$FLAT_REFUSAL"
+    fi
+    if ! nix-instantiate --parse "$file" > "$WORK/probe-$i.tree" 2> "$WORK/probe-$i.err" 9>&- 8>&-; then
+      if [ "$i" -eq 0 ]; then
+        why=$(awk '/^error:/ { print; exit }' "$WORK/probe-$i.err")
+        die "that value was refused, so nothing was changed. ${why:-nix could not parse the result}"
+      fi
+      return 1
+    fi
+    i=$((i + 1))
+  done
+  cmp -s "$WORK/probe-0.tree" "$WORK/probe-1.tree"
+}
+
+# Kept in a variable: an inline =~ pattern with quotes and spaces is misparsed by bash.
+readonly LITERAL_RE='^\(?"([^"\\]|\\.)*"( \+ "([^"\\]|\\.)*")*\)?$'
+
+# Rewrite the named value to one line without changing its meaning, or die.
+one_line() {
+  local v=${!1} p lit out
+  [[ $v == *$'\n'* ]] || return 0
+  p=$(nix-instantiate --parse -E "($v)" 2>/dev/null 9>&- 8>&-) || p=""
+  if [[ $p =~ $LITERAL_RE ]]; then
+    lit=$(nix-instantiate --eval --strict --json --readonly-mode \
+          --option pure-eval true --option restrict-eval true -E "$v" 2>/dev/null 9>&- 8>&-) ||
+      die "$FLAT_REFUSAL"
+    out=$(jq -r 'if type != "string" then error("not a string") else . end
+      | if test("[\u0000-\u0008\u000b\u000c\u000e-\u001f]") then error("control") else . end
+      | gsub("\\\\"; "\\\\") | gsub("\""; "\\\"") | gsub("\n"; "\\n")
+      | gsub("\t"; "\\t") | gsub("\r"; "\\r") | gsub("\\$\\{"; "\\${")
+      | "\"" + . + "\""' <<<"$lit" 2>/dev/null) || die "$FLAT_REFUSAL"
+    [[ $out == *'#@'* ]] && die "$MARKER_REFUSAL"
+  else
+    out=${v//$'\n'/ }
+    same_tree "$v" "$out" || die "$FLAT_REFUSAL"
   fi
-  printf '%s' "${v//$'\n'/ }"
+  printf -v "$1" '%s' "$out"
 }
 
 # Write a value for an option.
@@ -800,10 +830,7 @@ cmd_opt_set() {
     *[!a-zA-Z0-9._-]* | "" ) die "'$path' is not an option path" ;;
   esac
 
-  value=$(flat_value "$value") || case $? in
-    2) die "$MARKER_REFUSAL" ;;
-    *) die "$FLAT_REFUSAL" ;;
-  esac
+  flat_value "$value"
 
   if [ -z "${value//[[:space:]]/}" ]; then
     state_with true "kept the default for $path -- nothing written"
@@ -812,6 +839,7 @@ cmd_opt_set() {
 
   begin_write
   [ -f "$APPS" ] || die "no $APPS -- log in again to have it created"
+  one_line value
   if grep -q "#@opt ${path//./\\.}\$" "$APPS"; then
     die "$path is already in $APPS -- remove it first"
   fi
@@ -898,13 +926,11 @@ cmd_opt_replace() {
     *[!a-zA-Z0-9._-]* | "" ) die "'$path' is not an option path" ;;
   esac
 
-  value=$(flat_value "$value") || case $? in
-    2) die "$MARKER_REFUSAL" ;;
-    *) die "$FLAT_REFUSAL" ;;
-  esac
+  flat_value "$value"
 
   begin_write
   [ -f "$APPS" ] || die "no $APPS -- log in again to have it created"
+  one_line value
   grep -q "#@opt ${path//./\\.}\$" "$APPS" ||
     die "$path is not in $APPS -- use 'opt set' to add it"
 
