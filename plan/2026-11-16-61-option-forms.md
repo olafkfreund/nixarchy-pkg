@@ -346,6 +346,8 @@ another describe.
 `4294967295` on `t.u32` writes; `-10` on `t.neg` refuses and `-9` writes; `007`
 refuses; `lib.mkForce 80` on `t.port` writes.
 
+(Deviation, the installed `apps-template.nix` starts with `{ ... }:` and does not bind `lib`, so its Nix parser refuses `lib.mkForce 80`; the fixture verifies the same expression bypass with `builtins.toString 80`.)
+
 **Traps.** Bash arithmetic overflows past int64 and is signed: compare as
 strings, never `(( ))`. `opt_meta` runs in `$(...)`: it must not `die`.
 

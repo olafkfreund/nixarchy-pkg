@@ -6,7 +6,7 @@ import qs.Ui
 
 // One NixOS option, with a widget chosen from its declared type.
 //
-// The widgets are the shell's own -- Toggle, TextField, NumberField,
+// The widgets are the shell's own -- Toggle, TextField,
 // Dropdown -- so an option here looks like every other control on this
 // desktop and follows the theme without being told to.
 //
@@ -35,6 +35,7 @@ FocusScope {
   property var option: ({})
   property string path: ""
   property string error: ""
+  property bool armedRemove: false
 
   signal closed()
 
@@ -156,6 +157,7 @@ FocusScope {
     if (!p) return
     root.path = p
     root.forceScaffold = false
+    root.armedRemove = false
     root.error = ""
     root.option = ({})
     root.open = true
@@ -179,6 +181,7 @@ FocusScope {
     // Let go of the keyboard. A hidden Item keeps focus and still gets keys,
     // so a form closed while focused went on eating ESC (#27).
     textField.focus = false
+    integerField.focus = false
     scaffoldField.focus = false
     root.focus = false
     root.closed()
@@ -189,7 +192,7 @@ FocusScope {
   // the default is the honest opening position.
   function seed() {
     boolValue = option.default === "true"
-    numberField.value = parseInt(option.default, 10) || 0
+    integerField.text = /^-?(0|[1-9][0-9]*)$/.test(String(option.default || "")) ? String(option.default) : ""
     textField.text = ""
     scaffoldField.text = option.example && option.example.length > 0
       ? option.example : (option.default || "")
@@ -212,7 +215,7 @@ FocusScope {
           if (v === "true" || v === "false") { boolValue = v === "true"; held = true }
           break
         case "integer":
-          if (/^-?[0-9]+$/.test(v)) { numberField.value = parseInt(v, 10); held = true }
+          if (/^-?(0|[1-9][0-9]*)$/.test(v)) { integerField.text = v; held = true }
           break
         case "enum":
           for (var j = 0; j < (option.choices || []).length; j++)
@@ -224,6 +227,9 @@ FocusScope {
           break
       }
       if (!held) { forceScaffold = true; scaffoldField.text = v }
+    } else if (option.widget === "integer" && option.default &&
+               !/^-?(0|[1-9][0-9]*)$/.test(String(option.default))) {
+      forceScaffold = true
     }
     touched = false
     // Whatever they are about to type into, focused -- otherwise the
@@ -235,6 +241,7 @@ FocusScope {
       // from the list the form was closed back to.
       if (!root.open) return
       if (root.widget === "string")        textField.forceActiveFocus()
+      else if (root.widget === "integer") integerField.forceActiveFocus()
       else if (root.widget === "scaffold") scaffoldField.forceActiveFocus()
       else                                 root.forceActiveFocus()
     })
@@ -260,7 +267,7 @@ FocusScope {
     switch (widget) {
       case "boolean": return boolValue ? "true" : "false"
       case "enum":    return choices.length > 0 ? String(choices[enumIndex]) : ""
-      case "integer": return String(numberField.value)
+      case "integer": return integerField.text
       case "string":
         if (textField.text.length === 0) return ""
         // A string or a path needs Nix quotes, and typing them is the sort
@@ -288,7 +295,18 @@ FocusScope {
       return
     }
     var value = nixValue()
-    if (value.length === 0) { root.finish(); return }
+    if (value.length === 0) {
+      if (touched && current.state === "set" &&
+          (widget === "string" || widget === "integer" || widget === "scaffold")) armRemove()
+      else root.finish()
+      return
+    }
+    if (widget === "integer" && /^-?(0|[1-9][0-9]*)$/.test(value) &&
+        ((option.min != null && decimalLess(value, option.min)) ||
+         (option.max != null && decimalLess(option.max, value)))) {
+      root.error = path + " takes " + option.min + " to " + option.max + "; " + value + " is outside that. Nothing was changed."
+      return
+    }
     // One write at a time, and none while an apply could start: this used
     // to run beside the model's guard, so `a` could apply mid-write (#28).
     if (root.model.applying) { root.error = "an apply is running \u2014 wait for it to finish"; return }
@@ -302,6 +320,56 @@ FocusScope {
     writeProc.running = true
   }
 
+  function decimalLess(a, b) {
+    a = String(a); b = String(b)
+    if (a === "-0") a = "0"
+    if (b === "-0") b = "0"
+    if (a.charAt(0) === "-" && b.charAt(0) !== "-") return true
+    if (a.charAt(0) !== "-" && b.charAt(0) === "-") return false
+    if (a.charAt(0) === "-") {
+      a = a.slice(1); b = b.slice(1)
+      return a.length !== b.length ? a.length > b.length : a > b
+    }
+    return a.length !== b.length ? a.length < b.length : a < b
+  }
+
+  function stepDecimal(value, direction) {
+    if (!/^-?(0|[1-9][0-9]*)$/.test(value)) return value
+    var negative = value.charAt(0) === "-"
+    var digits = negative ? value.slice(1) : value
+    var add = negative ? direction < 0 : direction > 0
+    if (digits === "0" && !add) return direction < 0 ? "-1" : "1"
+    var carry = 1, out = ""
+    for (var i = digits.length - 1; i >= 0; i--) {
+      var n = digits.charCodeAt(i) - 48 + (add ? carry : -carry)
+      if (n === 10) { n = 0; carry = 1 }
+      else if (n === -1) { n = 9; carry = 1 }
+      else carry = 0
+      out = String.fromCharCode(48 + n) + out
+    }
+    if (add && carry) out = "1" + out
+    out = out.replace(/^0+(?=\d)/, "")
+    return (negative && out !== "0" ? "-" : "") + out
+  }
+
+  function armRemove() {
+    root.armedRemove = true
+    root.error = "DEL again removes " + path + " from apps.nix; ESC keeps it"
+  }
+
+  function removeKey(event) {
+    if (event.key !== Qt.Key_Delete || current.state !== "set") return false
+    event.accepted = true
+    if (!armedRemove) { armRemove(); return true }
+    if (root.model.applying) { root.error = "an apply is running \u2014 wait for it to finish"; return true }
+    if (root.model.busy) { root.error = "still writing \u2014 try again in a moment"; return true }
+    root.model.busy = true
+    root.writingPath = root.path
+    writeProc.command = [root.model.script, "opt", "remove", root.path]
+    writeProc.running = true
+    return true
+  }
+
   Rectangle {
     anchors.fill: parent
     color: Commons.Color.menu.background
@@ -310,6 +378,8 @@ FocusScope {
   Keys.onPressed: function (event) {
     // A closed form handles nothing: every key belongs to the list.
     if (!root.open) return
+    if (root.removeKey(event)) return
+    root.armedRemove = false
     switch (event.key) {
       case Qt.Key_Escape:
         root.finish(); event.accepted = true; return
@@ -452,23 +522,41 @@ FocusScope {
         }
       }
 
-      NumberField {
-        id: numberField
+      TextField {
+        id: integerField
+        objectName: "integerField"
         visible: root.widget === "integer"
-        label: "value"
-        from: -2147483647
-        to: 2147483647
-        onModified: root.touched = true
+        width: parent.width
+        validator: RegularExpressionValidator { regularExpression: /-?(0|[1-9][0-9]*)?/ }
+        foreground: Commons.Color.menu.text
+        onTextChanged: { root.touched = true; root.armedRemove = false }
+        Keys.onPressed: function (event) {
+          if (root.removeKey(event)) return
+          root.armedRemove = false
+          if (event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
+            var next = root.stepDecimal(text, event.key === Qt.Key_Up ? 1 : -1)
+            if ((root.option.min == null || !root.decimalLess(next, root.option.min)) &&
+                (root.option.max == null || !root.decimalLess(root.option.max, next))) text = next
+            event.accepted = true
+          } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+            root.commit(); event.accepted = true
+          } else if (event.key === Qt.Key_Escape) {
+            root.finish(); event.accepted = true
+          }
+        }
       }
 
       TextField {
         id: textField
+        objectName: "textField"
         visible: root.widget === "string"
         width: parent.width
-        placeholderText: "leave empty to keep the default"
+        placeholderText: root.current.state === "set" ? "empty keeps the current value" : "leave empty to keep the default"
         foreground: Commons.Color.menu.text
-        onTextChanged: root.touched = true
+        onTextChanged: { root.touched = true; root.armedRemove = false }
         Keys.onPressed: function (event) {
+          if (root.removeKey(event)) return
+          root.armedRemove = false
           if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
             root.commit(); event.accepted = true
           } else if (event.key === Qt.Key_Escape) {
@@ -528,6 +616,8 @@ FocusScope {
               // itself never counts as an edit.
               onTextChanged: root.touched = true
               Keys.onPressed: function (event) {
+                if (root.removeKey(event)) return
+                root.armedRemove = false
                 if (event.key === Qt.Key_Escape) { root.finish(); event.accepted = true }
                 // RETURN is a newline here, because the value may be several
                 // lines. Ctrl+RETURN writes, the way any multiline editor
@@ -566,11 +656,12 @@ FocusScope {
 
       Text {
         width: parent.width
-        text: root.widget === "boolean" ? "SPACE toggles   RETURN writes   ESC cancels"
+        text: (root.widget === "boolean" ? "SPACE toggles   RETURN writes   ESC cancels"
             : root.widget === "enum"    ? "j / k choose    RETURN writes   ESC cancels"
             : root.widget === "scaffold"
-              ? "CTRL+RETURN writes   ESC cancels   \u2014 RETURN is a newline, empty keeps the default"
-              : "RETURN writes   ESC cancels   \u2014 empty keeps the default"
+              ? "CTRL+RETURN writes   ESC cancels   \u2014 RETURN is a newline, empty keeps the " + (root.current.state === "set" ? "current value" : "default")
+              : "RETURN writes   ESC cancels   \u2014 empty keeps the " + (root.current.state === "set" ? "current value" : "default"))
+              + (root.current.state === "set" ? "   DEL removes" : "")
         textFormat: Text.PlainText
         font.family: root.fontFamily
         font.pixelSize: Style.font.title

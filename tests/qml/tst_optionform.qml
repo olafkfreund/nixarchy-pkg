@@ -124,4 +124,56 @@ TestCase {
     form.begin({ path: "programs.git.enable" })
     compare(describeProc().command.join(" "), "nixarchy-pkg opt describe --scope system programs.git.enable")
   }
+
+  function test_integer_focus_steps_and_bounds() {
+    form.begin({ path: "t.port" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.port", widget: "integer",
+      default: "22", min: "0", max: "65535", current: { state: "absent" } }))
+    var field = findChild(form, "integerField")
+    verify(field !== null)
+    tryCompare(field, "activeFocus", true)
+    field.text = "65535"
+    keyClick(Qt.Key_Up)
+    compare(field.text, "65535")
+    field.text = "70000"
+    form.commit()
+    verify(form.error.indexOf("outside") >= 0)
+    compare(writeProcess().command.length, 0)
+    form.option = { widget: "integer", min: "-9223372036854775808", max: "9223372036854775807", current: { state: "absent" } }
+    field.text = "9007199254740993"
+    keyClick(Qt.Key_Up)
+    compare(field.text, "9007199254740994")
+    field.text = "0"
+    keyClick(Qt.Key_Down)
+    compare(field.text, "-1")
+  }
+
+  function test_delete_twice_removes_and_empty_string_arms() {
+    form.begin({ path: "t.str" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.str", widget: "string",
+      current: { state: "set", value: "\"old\"" } }))
+    var field = findChild(form, "textField")
+    tryCompare(field, "activeFocus", true)
+    var writer = writeProcess()
+    keyClick(Qt.Key_Delete)
+    verify(form.armedRemove)
+    compare(writer.command.length, 0)
+    keyClick(Qt.Key_Delete)
+    compare(writer.command.slice(1, 3).join(" "), "opt remove")
+    writer.deliver(JSON.stringify({ ok: true }))
+    form.begin({ path: "t.str" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.str", widget: "string",
+      current: { state: "set", value: "\"old\"" } }))
+    field.text = ""
+    keyClick(Qt.Key_Return)
+    verify(form.armedRemove)
+    form.finish()
+    form.begin({ path: "t.str" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.str", widget: "string",
+      current: { state: "set", value: "\"old\"" } }))
+    writer.command = []
+    keyClick(Qt.Key_Return)
+    verify(!form.armedRemove)
+    compare(writer.command.length, 0)
+  }
 }
