@@ -95,26 +95,30 @@ checks its own expectation:
    then deliver `st(6, 2)`. The selection is 4.
 4. `test_real_queue_check_row_goes`: `setTab(6)`. Deliver a pending answer
    through `realModel._pending.deliver(...)` with a few rows, in the shape
-   `tst_pkgmodel`'s `pend()` helper builds (copy that helper). Set
-   `realModel.checkRunning = true` and `realModel.checkResult = { verdict:
-   "evaluates", fingerprint: "f1" }` so `queueRows()` has the check row first.
-   Put `cursor` on the last row, then `cancelCheck()` **and**
+   `tst_pkgmodel`'s `pend()` helper builds (copy that helper). Two
+   separate setups, each with `cursor = realModel.count - 1`.
+   *Cancel:* `checkResult = null`, `checkRunning = true` (the running row),
+   then `cancelCheck()` **and**
    `realModel._check.finish(143)`. Only the check's exit clears `checkRunning`
    (`PkgModel.qml:495`), and the stub emits `exited` only from `finish()`, so
    without it the row never goes. `cursor` is less than `count`, and the list
-   and preview agree. Then the same with the result
-   invalidated: deliver a pending answer with `fingerprint: "f2"`
+   and preview agree. *Invalidate:*
+   `checkRunning = false`, `checkResult = { verdict: "evaluates",
+   fingerprint: "f1" }` (the result row), then deliver a pending answer with
+   `fingerprint: "f2"`
    (`PkgModel.qml`, `checkResult.fingerprint !== data.fingerprint`).
 5. `test_real_naming_shrinks_flakes`: `setTab(5)`, set
    `realModel.inspected` to an object with `ok: true`, a `ref` and enough
    outputs for 3 or more rows. Read `flakeRows()` for the shape it needs, and
-   take the fields from `tst_pkgmodel`'s inspection tests. Set `cursor = 2`,
-   then `beginNaming()`. `cursor` is 0, and the list and preview agree.
+   take the fields from `tst_pkgmodel`'s inspection tests. Set
+   `cursor = realModel.count - 1` (the "declare" row) and
+   `verify(realModel.cursor >= 2)`, then `beginNaming()`. `cursor` is 0, and the list and preview agree.
 6. `test_real_preview_scrolled_out`: deliver `st(200, -1)`, set
    `cursor = 199`, `realList().positionViewAtBeginning()`, `wait(50)`.
    **First** assert `realList().currentItem === null`. If that does not hold
    on main, Qt kept the delegate, so delete this test and report it (spec:
-   do not keep a test that cannot fail). Then `currentRow.id === "a199"`.
+   do not keep a test that cannot fail). Then fix 2 has no automated test.
+   The PR says so, and the live check covers it. Then `currentRow.id === "a199"`.
 
 Regression tests (they pass on main and must keep passing):
 7. `test_real_shrink_below_cursor`: `cursor = 5`, write, deliver `st(4, -1)`.
@@ -137,9 +141,10 @@ Regression tests (they pass on main and must keep passing):
 
 ```bash
 QT=$(nix eval --raw nixpkgs#qt6.qtdeclarative.outPath)
-d=$(mktemp -d) && cp *.qml tests/qml/tst_*.qml "$d" && cp -r tests/qml/imports "$d" && cd "$d"
-QT_QPA_PLATFORM=offscreen HOME=$PWD "$QT/bin/qmltestrunner" -input tst_card.qml -import imports -import "$QT/lib/qt-6/qml"
-QT_QPA_PLATFORM=offscreen HOME=$PWD "$QT/bin/qmltestrunner" -input tst_pkgmodel.qml -import imports -import "$QT/lib/qt-6/qml"
+d=$(mktemp -d) && cp *.qml tests/qml/tst_*.qml "$d" && cp -r tests/qml/imports "$d"
+( cd "$d" && for t in tst_card tst_pkgmodel; do
+    QT_QPA_PLATFORM=offscreen HOME=$PWD "$QT/bin/qmltestrunner" -input $t.qml -import imports -import "$QT/lib/qt-6/qml"; done )
+rm -rf "$d"   # the subshell keeps you in the worktree
 ```
 
 → **Verify:** on this branch (no fix yet), tests 1-6 and the two
@@ -154,6 +159,12 @@ Traps:
 - `tst_card` runs with `failOnWarning` on binding loops in some tests. Do
   not suppress warnings.
 - Nothing written to `/tmp` except through `mktemp`.
+- Test 8: never assert `currentIndex === cursor` while the list is empty
+  (`ListView` holds -1 there and the model 0); assert only after the refill.
+
+**Coordinator after step 1:** review the diff, run the commands, and commit
+the tests (`test(card): …`) before step 2 starts, so step 3 can revert each
+fix against committed tests.
 
 ### 2. The fix (`Card.qml`, `PkgModel.qml`) -- codex
 
@@ -180,6 +191,9 @@ Traps:
 
 → **Verify:** the step 1 commands. All tests pass, with no QWARN. Then
 `nix flake check` passes.
+
+**Coordinator after step 2:** review the diff, run the commands, and commit
+the fix (`fix(card): …`).
 
 Traps:
 - `rows()` must not read `cursor`, or fix 3 loops. Check that it does not.
