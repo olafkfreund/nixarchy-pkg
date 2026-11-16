@@ -20,6 +20,12 @@ Item {
   // Alpha, not darkening: darkening inverts the hierarchy on light themes.
   readonly property color dim: Qt.rgba(fg.r, fg.g, fg.b, 0.6)
   readonly property string fontFamily: Style.font.family
+  // Through a typed property first, as `fg`/`dim` do: the test stub's
+  // `Color.menu` holds plain strings, and a string has no .r/.g/.b/.a.
+  readonly property color selectedBg: Commons.Color.menu.selectedBackground
+  readonly property color hoverBackground: Qt.rgba(selectedBg.r, selectedBg.g, selectedBg.b, selectedBg.a * 0.5)
+  // Alpha 0 of the same colour, not "transparent": a fade to #00000000 passes through grey.
+  readonly property color restBackground: Qt.rgba(selectedBg.r, selectedBg.g, selectedBg.b, 0)
   // Apps and Services rows carry an icon; the other tabs don't.
   readonly property bool showIcons: root.model && root.model.tab <= 1
 
@@ -91,7 +97,9 @@ Item {
         // Rows take a click; so do the tabs above them (#30). setTab moves
         // the keyboard the way a key would.
         MouseArea {
+          id: tabMouse
           anchors.fill: parent
+          hoverEnabled: true
           onClicked: if (root.model) root.model.setTab(tabItem.index)
         }
 
@@ -102,7 +110,12 @@ Item {
           textFormat: Text.PlainText
           font.family: root.fontFamily
           font.pixelSize: Style.font.heading
-          color: parent.current ? Commons.Color.menu.selectedText : root.dim
+          color: tabItem.current ? Commons.Color.menu.selectedText
+               : tabMouse.containsMouse ? root.fg : root.dim
+          Behavior on color {
+            enabled: !Style.reduceMotion
+            ColorAnimation { duration: Style.duration(120) }
+          }
         }
 
         // The current tab is named by a rule under it rather than by a
@@ -177,10 +190,17 @@ Item {
 
       width: list.width
       height: root.rowHeight
-      color: current ? Commons.Color.menu.selectedBackground : "transparent"
+      color: current ? Commons.Color.menu.selectedBackground
+           : rowMouse.containsMouse ? root.hoverBackground : root.restBackground
+      Behavior on color {
+        enabled: !Style.reduceMotion
+        ColorAnimation { duration: Style.duration(120) }
+      }
 
       MouseArea {
+        id: rowMouse
         anchors.fill: parent
+        hoverEnabled: true
         onClicked: {
           if (!root.model) return
           root.model.cursor = index

@@ -10,6 +10,8 @@
 import QtQuick
 import QtQuick.Window
 import QtTest
+import qs.Commons
+import qs.Commons as Commons
 
 TestCase {
   name: "CardGeometry"
@@ -26,7 +28,7 @@ TestCase {
   // A QtObject, so a test can set tab and cursor and Card sees it change.
   QtObject {
     id: fakeModel
-    property var tabs: ["S"]
+    property var tabs: ["Apps", "Services", "Selection", "Options", "Drafts", "Flakes", "Queue"]
     property int tab: 0
     property int cursor: 0
     property int count: 3
@@ -81,6 +83,9 @@ TestCase {
     fakeModel.tab = 0
     fakeModel.cursor = 0
     win.width = 800
+    Style.reduceMotion = true
+    // Park the pointer off every row and tab so hover does not leak between tests.
+    mouseMove(win.contentItem, win.width - 2, win.height - 2)
   }
 
   // Every row is checked at both layouts: with the icon column and without.
@@ -228,5 +233,37 @@ TestCase {
     verify(narrow > scope.height, "the line wraps at 300 px")
     fakeModel.tab = 0
     compare(scope.height, 0)
+  }
+
+  function centreOf(item) {
+    return item.mapToItem(win.contentItem, item.width / 2, item.height / 2)
+  }
+
+  function test_row_hover_does_not_move_the_cursor() {
+    var lv = find(card, "QQuickListView")
+    tryCompare(lv, "count", 3)
+    var p = centreOf(lv.itemAtIndex(1))
+    mouseMove(win.contentItem, p.x, p.y)
+    verify(Qt.colorEqual(lv.itemAtIndex(1).color, card.hoverBackground))
+    verify(Qt.colorEqual(lv.itemAtIndex(0).color, Commons.Color.menu.selectedBackground))
+    compare(fakeModel.cursor, 0)
+  }
+
+  function test_resting_row_is_clear() {
+    var lv = find(card, "QQuickListView")
+    tryCompare(lv, "count", 3)
+    compare(lv.itemAtIndex(1).color.a, 0)
+  }
+
+  function test_tab_hover() {
+    var tabs = find(card, "QQuickRow")
+    var item = tabs.children[1]
+    var text = null
+    for (var i = 0; i < item.children.length; i++)
+      if (item.children[i].hasOwnProperty("text")) { text = item.children[i]; break }
+    var p = centreOf(item)
+    mouseMove(win.contentItem, p.x, p.y)
+    verify(Qt.colorEqual(text.color, card.fg))
+    compare(fakeModel.tab, 0)
   }
 }

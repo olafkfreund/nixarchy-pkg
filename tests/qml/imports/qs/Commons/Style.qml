@@ -8,6 +8,8 @@ pragma Singleton
 import QtQuick
 
 QtObject {
+  property bool reduceMotion: false
+  function duration(ms) { return reduceMotion ? 0 : ms }
   function space(v) { return Math.max(1, Math.round(v)) }
   readonly property real cornerRadius: 0
   readonly property real gapsOut: 10
