@@ -75,6 +75,12 @@ readonly APPS="$CONFIG_DIR/apps.nix"
 readonly SERVICES="$CONFIG_DIR/services.nix"
 readonly INDEX="$CACHE_DIR/index.tsv"
 readonly STAMP="$CACHE_DIR/stamp"
+# One rule for dropping a tag the flag already says, used by search and state.
+# shellcheck disable=SC2016  # $f is a jq parameter, not a shell expansion.
+readonly UNTAG_JQ='def untag($f):
+  (if ($f | index("unfree")) then gsub(" *\\[unfree\\]"; "") else . end)
+  | (if ($f | index("broken")) then gsub(" *\\[broken\\]"; "") else . end)
+  | gsub("^ +| +$"; "");'
 # shellcheck disable=SC2016 # Nix interpolation stays literal until the user is validated.
 readonly DISCOVER='c: let
   lib = c.pkgs.lib;
@@ -493,12 +499,19 @@ extras_tsv() {
   ' "$APPS"
 }
 
-# Nicer labels for the app rows, when the index has them: field 3 of an
-# `app` row reads "Brave (Browser)". Absent or stale index, the id stands
-# on its own, which is what the selection file shows anyway.
+# Index rows needed by state, with a kind column: app labels and selected
+# default package facts. Absent or stale labels leave the id on its own.
 labels_tsv() {
   [ -s "$INDEX" ] || return 0
-  awk -F'\t' '$1 == "app" { print $2 "\t" $3 }' "$INDEX"
+  awk -F'\t' '
+    FNR == NR { if ($1 != "") { w[$1] = 1; n++ }; next }
+    $1 == "app" { print "app\t" $2 "\t" $3; next }
+    n && $1 == "pkg" && ($2 in w) {
+      v = ""; i = index($5, "\\nversion:  ")
+      if (i) { v = substr($5, i + 12); j = index(v, "\\n"); if (j) v = substr(v, 1, j - 1) }
+      print "pkg\t" $2 "\t" $3 "\t" $4 "\t" v
+    }
+  ' <(printf '%s\n' "${1-}") "$INDEX"
 }
 
 # The index, searched. 137k rows is too many to hand a QML list model, so
@@ -572,7 +585,7 @@ cmd_search() {
     --argjson index "$facts" \
     --argjson options "$OPT_JSON" \
     --arg query "$query" \
-    '
+    "$UNTAG_JQ"'
     def lines: split("\n") | map(select(length > 0));
     ($extras | lines | map(split("\t") | select(.[0] == "opt")
       | {key: .[1], value: {set: (.[2] == "true"),
@@ -594,9 +607,7 @@ cmd_search() {
         # summary, so the card said unfree twice (#30). Dropped only when the
         # structured flag is there to say it: an index from before the flags
         # existed has nothing else to warn with.
-        summary: ((.[2] // "")
-                  | if ($f | index("unfree")) then gsub(" \\[unfree\\]"; "") else . end
-                  | if ($f | index("broken")) then gsub(" \\[broken\\]"; "") else . end),
+        summary: ((.[2] // "") | untag($f)),
         # An option row carries its Nix type here; a package row carries
         # flags. Never both.
         type:    (if .[0] == "opt" then (.[3] // "") else "" end),
@@ -776,7 +787,7 @@ opt_meta() {
         elif $t | startswith("unsigned integer") then ["0", "9223372036854775807"]
         elif $t | startswith("signed integer") then ["-9223372036854775808", "9223372036854775807"]
         else [null, null] end;
-    .[$p] as $o
+    . as $all | .[$p] as $o
     | if $o == null then null else
         ($o.type // "") as $t
         | ($t | test("^one of (?:" + alt + ")(?:, (?:" + alt + "))*$")) as $listed
@@ -797,7 +808,9 @@ opt_meta() {
             nullable: ($t | startswith("null or ")),
             min: $b[0], max: $b[1],
             choices: (if $listed then [ $t | ltrimstr("one of ") | scan(alt) ] else [] end),
-            choicesUnavailable: (($t | startswith("one of ")) and ($listed | not))
+            choicesUnavailable: (($t | startswith("one of ")) and ($listed | not)),
+            sensitive: (($p | split(".") | last) | test("(?i)(password|passwd|secret|token|apikey|privatekey|presharedkey|psk)$")) and ($t | test("string")),
+            fileOption: (($p | sub("(?<l>[^.]+)$"; "\(.l)File")) as $f | if $all[$f] != null then $f else null end)
           }
       end' "$oj" 2>/dev/null || printf 'null\n'
 }
@@ -2489,11 +2502,16 @@ cmd_state() {
     rfiles=$(printf '%s' "$rpaths" | jq -Rsc 'split("\n") | map(select(length > 0))')
   fi
 
+  local want=""
+  if ! $stale; then
+    want=$(extras_tsv | awk -F'\t' '$1 == "pkg" && $3 == "default" { print $2 }') || want=""
+  fi
+
   jq -n \
     --rawfile apps <(rows_tsv "$APPS" app) \
     --rawfile services <(rows_tsv "$SERVICES" service) \
     --rawfile extras <(extras_tsv) \
-    --rawfile labels <(labels_tsv) \
+    --rawfile labels <(labels_tsv "$want") \
     --argjson stale "$stale" \
     --argjson index "$facts" \
     --argjson options "$OPT_JSON" \
@@ -2505,11 +2523,19 @@ cmd_state() {
     --arg flakeDir "${NIXARCHY_FLAKE:-/etc/nixos}" \
     --argjson flakeFound "$([ -r "${NIXARCHY_FLAKE:-/etc/nixos}/flake.nix" ] && echo true || echo false)" \
     --rawfile flakes <(cmd_flake_list) \
-    '
+    "$UNTAG_JQ"'
     def lines: split("\n") | map(select(length > 0));
     def cols:  lines | map(split("\t"));
 
-    ($labels | cols | map({key: .[0], value: .[1]}) | from_entries) as $label |
+    ($labels | cols) as $lab |
+    ($lab | map(select(.[0] == "app") | {key: .[1], value: .[2]}) | from_entries) as $label |
+    ($lab | map(select(.[0] == "pkg")
+        | ((.[3] // "") | split(" ") | map(select(length > 0))) as $f
+        | { key: .[1], value: {
+              summary: ((.[2] // "") | untag($f)),
+              flags: $f,
+              version: (if (.[4] // "") == "?" then "" else (.[4] // "") end) } })
+      | from_entries) as $fact |
 
     {
       ok: true,
@@ -2547,7 +2573,8 @@ cmd_state() {
       })),
       packages: ($extras | cols | map(select(.[0] == "pkg") | {
         attr: .[1], channel: (.[2] // "default")
-      })),
+      } + (if .[2] == "default" and $fact[.[1]]
+           then $fact[.[1]] | with_entries(select(.value != "")) else {} end))),
       options: ($extras | cols | map(select(.[0] == "opt") | {
         path: .[1], set: (.[2] == "true"), line: (.[3] // "")
       })),

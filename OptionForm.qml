@@ -370,6 +370,7 @@ FocusScope {
     if (event.key !== Qt.Key_Delete || current.state !== "set" ||
         textField.activeFocus || integerField.activeFocus || scaffoldField.activeFocus) return false
     event.accepted = true
+    if (event.isAutoRepeat) return true
     if (!armedRemove) { armRemove(); return true }
     if (root.model.applying) { root.error = "an apply is running \u2014 wait for it to finish"; return true }
     if (root.model.busy) { root.error = "still writing \u2014 try again in a moment"; return true }
@@ -502,6 +503,20 @@ FocusScope {
         width: parent.width
         visible: root.option.choicesUnavailable === true
         text: "This type's alternatives are not listed in a form this can offer \u2014 write a Nix expression."
+        textFormat: Text.PlainText
+        wrapMode: Text.Wrap
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.title
+        color: root.dim
+      }
+
+      Text {
+        objectName: "secretWarning"
+        width: parent.width
+        visible: root.option.sensitive === true
+        text: "This value is copied into the Nix store, which every user on this machine can read."
+          + (root.option.fileOption ? " " + root.option.fileOption
+             + " reads it from a file at run time instead -- give it the path as a quoted string, \"/run/secrets/...\", so the file itself is not copied into the store." : "")
         textFormat: Text.PlainText
         wrapMode: Text.Wrap
         font.family: root.fontFamily

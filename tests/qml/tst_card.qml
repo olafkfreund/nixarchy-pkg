@@ -25,6 +25,18 @@ TestCase {
       summary: "one flag here", flags: ["unfree"], note: "a note" },
     { id: "none", section: "Beta", label: "Gamescope", category: "Game", summary: "no flags here", flags: [] }
   ]
+  property var appRows: []
+  property var selRows: [
+    { attr: "ripgrep", channel: "default", summary: "Utility that combines usability",
+      version: "15.2.0", flags: [] },
+    { attr: "vlc", channel: "other" },
+    { attr: "steam", channel: "default",
+      summary: "A very long summary that needs to elide before it reaches the tags at a normal card width",
+      version: "1.0", flags: ["unfree", "broken", "curated:steam"] },
+    { attr: "nosuchpkg", channel: "default" },
+    { attr: "searchrow", flags: ["unfree"], summary: "no channel on a search row" },
+    { attr: "version-only", channel: "default", version: "2.0", flags: [] }
+  ]
   // A QtObject, so a test can set tab and cursor and Card sees it change.
   QtObject {
     id: fakeModel
@@ -96,7 +108,11 @@ TestCase {
     return out
   }
 
+  function initTestCase() { appRows = theRows.slice() }
+
   function init() {
+    theRows = appRows
+    fakeModel.count = 3
     fakeModel.tab = 0
     fakeModel.cursor = 0
     fakeModel.busy = false
@@ -157,6 +173,25 @@ TestCase {
              "tab " + fakeModel.tab + ", row " + n + ": the summary must fit"
              + " its row -- overflows by " + overflow.toFixed(1))
     }
+  }
+
+  function useRows(rows, tab) {
+    theRows = rows
+    fakeModel.count = rows.length
+    fakeModel.tab = tab
+    tryCompare(find(card, "QQuickListView"), "count", rows.length)
+  }
+
+  function tagsIn(delegate) {
+    var tags = []
+    function walk(it) {
+      if (!it) return
+      if (it.hasOwnProperty("text") && it.parent && it.parent.hasOwnProperty("tone"))
+        tags.push({ text: it.text, color: it.parent.tone })
+      for (var i = 0; i < it.children.length; i++) walk(it.children[i])
+    }
+    walk(delegate)
+    return tags
   }
 
   // The property, not the formula. Reproducing the width expression would
@@ -724,6 +759,79 @@ TestCase {
     } finally {
       fakeModel.queueError = ""; fakeModel.queued = 0; fakeModel.indexStale = false
     }
+  }
+
+  function test_selection_rows_draw_a_channel_tag() {
+    useRows(selRows, 2)
+    var lv = find(card, "QQuickListView")
+    compare(tagsIn(lv.itemAtIndex(0)).map(t => t.text), ["default"])
+    compare(tagsIn(lv.itemAtIndex(1)).map(t => t.text), ["other"])
+    compare(tagsIn(lv.itemAtIndex(2)).map(t => t.text),
+            ["unfree", "broken", "curated:steam", "default"])
+  }
+
+  function test_version_leads_the_second_column() {
+    useRows(selRows, 2)
+    var lv = find(card, "QQuickListView")
+    function second(i) {
+      var ts = elidables(lv.itemAtIndex(i), [])
+      return ts[ts.length - 1].text
+    }
+    compare(second(0), "15.2.0  Utility that combines usability")
+    compare(second(5), "2.0  ")
+    compare(second(1), "")
+    compare(second(3), "")
+  }
+
+  function test_channel_tag_tones() {
+    useRows(selRows, 2)
+    var lv = find(card, "QQuickListView")
+    var other = tagsIn(lv.itemAtIndex(1))[0]
+    var steam = tagsIn(lv.itemAtIndex(2))
+    verify(other !== undefined, "other has a tag")
+    compare(steam.length, 4, "steam has three flags and its channel")
+    verify(Qt.colorEqual(other.color, Commons.Color.accent), "other uses accent")
+    verify(Qt.colorEqual(steam[0].color, Commons.Color.accent), "unfree stays accent")
+    verify(Qt.colorEqual(steam[1].color, Commons.Color.urgent), "broken stays urgent")
+    verify(Qt.colorEqual(steam[3].color, card.dim), "default stays dim")
+  }
+
+  function test_selection_summary_fits_at_800_and_700() {
+    failOnWarning(/Binding loop detected/)
+    useRows(selRows, 2)
+    var lv = find(card, "QQuickListView")
+    for (var width of [800, 700]) {
+      win.width = width
+      wait(150)
+      for (var i = 0; i < selRows.length; i++) {
+        var delegate = lv.itemAtIndex(i)
+        verify(delegate !== null, "delegate " + i + " at " + width + " px")
+        var row = find(delegate, "QQuickRow")
+        var ts = elidables(delegate, [])
+        var summary = ts[ts.length - 1]
+        verify(summary.x + summary.width - row.width <= 0.5,
+               "row " + i + " fits at " + width + " px")
+        verify(summary.width >= 0, "row " + i + " has nonnegative width")
+      }
+    }
+  }
+
+  function test_search_row_on_selection_has_no_channel_tag() {
+    useRows(selRows, 2)
+    var lv = find(card, "QQuickListView")
+    compare(tagsIn(lv.itemAtIndex(4)).map(t => t.text), ["unfree"])
+    useRows(appRows, 0)
+    compare(tagsIn(lv.itemAtIndex(0)).map(t => t.text), ["unfree", "curated:steam"])
+    compare(tagsIn(lv.itemAtIndex(1)).map(t => t.text), ["unfree"])
+    compare(tagsIn(lv.itemAtIndex(2)).length, 0)
+  }
+
+  function test_bare_row_is_quiet() {
+    failOnWarning(/.?/)
+    useRows(selRows, 2)
+    var delegate = find(card, "QQuickListView").itemAtIndex(3)
+    var ts = elidables(delegate, [])
+    compare(ts[ts.length - 1].text, "")
   }
 
   // #62 + #66 + #69: queue status, index age, options status and hints all

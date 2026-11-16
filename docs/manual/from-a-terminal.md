@@ -187,6 +187,12 @@ top-level keys of `state` — `apps`, `services`, `packages`, `options`,
 `verdict`, `fingerprint`, `pins`, `unpinned`, `blocked` and `note` of `check`.
 Those are the shape, and changing them would be a breaking change.
 
+A `packages` row carries `attr` and `channel`. A `default` package with a
+fresh index entry may also carry `summary`, `version` and `flags`. These
+optional fields are omitted when the index is stale or missing, when it lacks
+the package, and for every `other` package; they are not part of the relied-on
+shape. An indexed package with no flags carries `flags: []`.
+
 **Not relied on:** the exact wording of any `message` or `error` string.
 Those are a writer's own words, passed through unaltered, and the writers
 belong to nixarchy rather than to this plugin — they will improve their

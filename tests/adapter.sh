@@ -616,6 +616,135 @@ else
   echo "  skip (no search index; run nixarchy-pkg reindex)"
 fi
 
+echo "state: what the selection says"
+S=$(mktemp -d)
+mkdir -p "$S/config/nixarchy" "$S/cache/nixarchy" "$S/bin"
+cat >"$S/config/nixarchy/apps.nix" <<'EOF'
+{ ... }:
+{
+  demo.enable = true; #@ demo
+  ripgrep = true; #@pkg ripgrep
+  foo = true; #@pkg foo
+  novers = true; #@pkg novers
+  nolineversion = true; #@pkg nolineversion
+  qmark = true; #@pkg qmark
+  nosummary = true; #@pkg nosummary
+  vlcOther = true; #@pkg-other vlc
+  nerd-fonts.blex-mono = true; #@pkg nerd-fonts.blex-mono
+  nosuchpkg = true; #@pkg nosuchpkg
+}
+EOF
+cat >"$S/config/nixarchy/services.nix" <<'EOF'
+{ ... }:
+{
+  demo.enable = true; #@ demo
+}
+EOF
+printf '%s\n' 'nixpkgs=/n/a' 'walk=/n/a' 'optionsjson=/n/a' 'appindex=/n/a' \
+  'apptable=/n/a' 'flatpakrows=/n/a' 'pkgnewrow=/n/a' >"$S/bin/nixarchy-search"
+sed -i '1i#!/bin/sh' "$S/bin/nixarchy-search"
+chmod +x "$S/bin/nixarchy-search"
+sed -n 's/^[^=]*=//p' "$S/bin/nixarchy-search" >"$S/cache/nixarchy/stamp"
+{
+  printf 'app\tdemo\tDemo (Utility)\t\t\n'
+  printf 'pkg\tripgrep\tUtility that combines usability\t\tripgrep\\nversion:  15.2.0\\nhomepage: x\\nlicense: MIT\\n\\ndesc\n'
+  printf 'pkg\tfoo\tFoo thing  [unfree]\tunfree\tfoo\\nversion:  1.2.3\\nhomepage: x\\nlicense: MIT\\n\\ndesc\n'
+  printf 'pkg\tnovers\tNo version\t\tnovers\\nversion:  \\nhomepage: x\n'
+  printf 'pkg\tnolineversion\tNo version line\t\tnolineversion\\nhomepage: x\n'
+  printf 'pkg\tqmark\tQuestion version\t\tqmark\\nversion:  ?\\nhomepage: x\n'
+  printf 'pkg\tnosummary\t  [unfree]  [broken]\tunfree broken\tnosummary\\nversion:  1.0\n'
+  printf 'pkg\tvlc\tVideo player\t\tvlc\\nversion:  3.0\n'
+  printf 'pkg\tnerd-fonts.blex-mono\tBlex Mono font\t\tblex\\nversion:  2.0\n'
+  printf 'pkg\tnerd-fonts.blex\tBlex font\t\tblex\\nversion:  9.0\n'
+  printf 'pkg\tripgrep-all\tDifferent package\t\trga\\nversion:  0.1\n'
+} >"$S/cache/nixarchy/index.tsv"
+selection_state() {
+  XDG_CONFIG_HOME="$S/config" XDG_CACHE_HOME="$S/cache" PATH="$S/bin:$PATH" "$ADAPTER" state
+}
+out=$(selection_state)
+check "fresh selection index is not stale" jq -e '.indexStale == false' <<<"$out"
+check "default ripgrep carries summary version and empty flags" jq -e \
+  '.packages[] | select(.attr == "ripgrep") | .summary == "Utility that combines usability" and .version == "15.2.0" and .flags == []' <<<"$out"
+check "foo strips the unfree suffix and carries the flag" jq -e \
+  '.packages[] | select(.attr == "foo") | .summary == "Foo thing" and .flags == ["unfree"]' <<<"$out"
+check "tag-only summary is absent but both flags remain" jq -e \
+  '.packages[] | select(.attr == "nosummary") | .flags == ["unfree", "broken"] and (has("summary") | not)' <<<"$out"
+foo_search=$(XDG_CACHE_HOME="$S/cache" PATH="$S/bin:$PATH" "$ADAPTER" search -- foo)
+foo_summary=$(jq -r '.rows[0].summary' <<<"$foo_search")
+# shellcheck disable=SC2016  # $summary is jq's variable, bound by --arg.
+check "selection and search agree on foo summary" jq -e --arg summary "$foo_summary" \
+  '.packages[] | select(.attr == "foo") | .summary == $summary' <<<"$out"
+check "dotted attr carries its own summary and version" jq -e \
+  '.packages[] | select(.attr == "nerd-fonts.blex-mono") | .summary == "Blex Mono font" and .version == "2.0"' <<<"$out"
+for attr in novers nolineversion qmark; do
+  # shellcheck disable=SC2016  # $attr is jq's variable, bound by --arg.
+  check "$attr carries empty flags but no version" jq -e --arg attr "$attr" \
+    '.packages[] | select(.attr == $attr) | .flags == [] and (has("version") | not)' <<<"$out"
+done
+check "other vlc has only attr and channel" jq -e \
+  '.packages[] | select(.attr == "vlc") | keys == ["attr", "channel"]' <<<"$out"
+check "missing package has only attr and channel" jq -e \
+  '.packages[] | select(.attr == "nosuchpkg") | keys == ["attr", "channel"]' <<<"$out"
+check "package order and attr channel survive" jq -e \
+  '.packages | map([.attr, .channel]) == [["ripgrep","default"],["foo","default"],["novers","default"],["nolineversion","default"],["qmark","default"],["nosummary","default"],["vlc","other"],["nerd-fonts.blex-mono","default"],["nosuchpkg","default"]]' <<<"$out"
+check "Apps and Services still take labels from the index" jq -e \
+  '.apps[0].label == "Demo (Utility)" and .services[0].label == "Demo (Utility)"' <<<"$out"
+check "near package names do not lend their facts" jq -e \
+  '.packages[] | select(.attr == "ripgrep") |
+   .summary == "Utility that combines usability" and .version == "15.2.0" and
+   .summary != "Different package" and .version != "0.1"' <<<"$out"
+
+cp "$S/config/nixarchy/apps.nix" "$S/apps.base"
+sed -i '/vlcOther =/a\  vlc = true; #@pkg vlc' "$S/config/nixarchy/apps.nix"
+out=$(selection_state)
+check "dual-selected default vlc gets its version" jq -e \
+  '.packages[] | select(.attr == "vlc" and .channel == "default") | .version == "3.0"' <<<"$out"
+check "dual-selected other vlc stays bare" jq -e \
+  '.packages[] | select(.attr == "vlc" and .channel == "other") | keys == ["attr", "channel"]' <<<"$out"
+cp "$S/apps.base" "$S/config/nixarchy/apps.nix"
+
+printf '%s\n' stale >"$S/cache/nixarchy/stamp"
+out=$(selection_state)
+check "stale index leaves every package bare" jq -e \
+  '.indexStale == true and (.packages | all(keys == ["attr", "channel"]))' <<<"$out"
+sed -n 's/^[^=]*=//p' "$S/bin/nixarchy-search" >"$S/cache/nixarchy/stamp"
+mv "$S/cache/nixarchy/index.tsv" "$S/index.saved"
+out=$(selection_state)
+check "missing index leaves every package bare" jq -e \
+  '.ok == true and (.packages | all(keys == ["attr", "channel"]))' <<<"$out"
+mv "$S/index.saved" "$S/cache/nixarchy/index.tsv"
+
+if [ "$(id -u)" = 0 ]; then
+  echo "  skip: unreadable apps.nix requires non-root"
+else
+  chmod 000 "$S/config/nixarchy/apps.nix"
+  rc=0; out=$(selection_state) || rc=$?
+  # shellcheck disable=SC2016  # $path is jq's variable, bound by --arg.
+  check "unreadable apps.nix answers with its name" jq -e --arg path "$S/config/nixarchy/apps.nix" \
+    '.ok == true and (.message | contains($path))' <<<"$out"
+  check "unreadable apps.nix exits zero" test "$rc" = 0
+  chmod 600 "$S/config/nixarchy/apps.nix"
+fi
+{
+  printf '{ ... }:\n{\n'
+  for i in {1..2200}; do printf '  option%d = true; #@opt option%d\n' "$i" "$i"; done
+  printf '}\n'
+} >"$S/config/nixarchy/apps.nix"
+many_options=$(selection_state)
+check "2200 option rows still answer" jq -e \
+  '.ok == true and (.options | length == 2200)' <<<"$many_options"
+{
+  printf '{ ... }:\n{\n  demo.enable = true; #@ demo\n  ripgrep = true; #@pkg ripgrep\n'
+  for i in {1..5000}; do printf '  selection-package-%05d-padding-padding = true; #@pkg selection-package-%05d-padding-padding\n' "$i" "$i"; done
+  printf '}\n'
+} >"$S/config/nixarchy/apps.nix"
+many_packages=$(selection_state)
+check "5000 selected packages still enrich and resolve app labels" jq -e \
+  '.ok == true and (.packages | length == 5001) and
+   (.packages | any(.attr == "ripgrep" and .summary == "Utility that combines usability" and .version == "15.2.0")) and
+   .apps[0].label == "Demo (Utility)" and .services[0].label == "Demo (Utility)"' <<<"$many_packages"
+rm -rf "$S"
+
 if $HAVE_CATALOGUE; then
 echo "writers"
 CONFIG=$(fresh_config); export XDG_CONFIG_HOME="$CONFIG"
@@ -646,6 +775,11 @@ check "the fixture catalogue answers a boolean" \
 check "and says so for an option it lacks" \
   jq -e '.ok == false' <<<"$(fx opt describe t.nope)"
 check "port bounds are strings" jq -e '.min == "0" and .max == "65535"' <<<"$(fx opt describe t.port)"
+check "password has a file alternative" jq -e '.sensitive == true and .fileOption == "t.passwordFile"' <<<"$(fx opt describe t.password)"
+check "password file sibling is not sensitive" jq -e '.sensitive == false' <<<"$(fx opt describe t.passwordFile)"
+check "token has no file alternative" jq -e '.sensitive == true and .fileOption == null' <<<"$(fx opt describe t.token)"
+check "boolean token is not sensitive" jq -e '.sensitive == false' <<<"$(fx opt describe t.enableToken)"
+check "boolean is not sensitive" jq -e '.sensitive == false and .fileOption == null' <<<"$(fx opt describe t.bool)"
 check "signed integer bounds are strings" jq -e '.min == "-9223372036854775808" and .max == "9223372036854775807"' <<<"$(fx opt describe t.int)"
 
 CONFIG=$(fresh_config); export XDG_CONFIG_HOME="$CONFIG"
