@@ -265,6 +265,10 @@ Traps:
 - `XDG_CONFIG_HOME="$PCFG" ctoggle …` keeps its prefix; do not export it.
 - `ctoggle` reads stdin from `/dev/null`; do not pipe into it.
 
+(Deviation, step 2: a `# shellcheck disable=SC2016` above the writers guard,
+for the single-quoted jq `$id` filters that `--arg` binds. The cited line
+numbers were #60's; every site was found by content and matched.)
+
 ### 3. Coordinator: verify, review, PR
 
 - On razer (the lead runs it): `bash tests/adapter.sh` → 0 failures.
