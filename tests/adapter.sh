@@ -511,6 +511,33 @@ check "the fixture catalogue answers a boolean" \
   jq -e '.ok == true and .widget == "boolean"' <<<"$(fx opt describe t.bool)"
 check "and says so for an option it lacks" \
   jq -e '.ok == false' <<<"$(fx opt describe t.nope)"
+check "port bounds are strings" jq -e '.min == "0" and .max == "65535"' <<<"$(fx opt describe t.port)"
+check "signed integer bounds are strings" jq -e '.min == "-9223372036854775808" and .max == "9223372036854775807"' <<<"$(fx opt describe t.int)"
+
+CONFIG=$(fresh_config); export XDG_CONFIG_HOME="$CONFIG"
+APPSNIX="$CONFIG/nixarchy/apps.nix"
+before=$(sha256sum "$APPSNIX")
+check "out-of-range port is refused" jq -e '.ok == false and (.error | contains("outside"))' <<<"$(fx opt set t.port 70000)"
+check "refused port leaves file untouched" test "$before" = "$(sha256sum "$APPSNIX")"
+check "leading zeros are refused" jq -e '.ok == false and (.error | contains("leading zeros"))' <<<"$(fx opt set t.port 007)"
+check "large unsigned literal writes" jq -e '.ok' <<<"$(fx opt set t.u32 4294967295)"
+check "negative range lower bound refuses -10" jq -e '.ok == false' <<<"$(fx opt set t.neg -10)"
+check "negative range lower bound accepts -9" jq -e '.ok' <<<"$(fx opt set t.neg -9)"
+check "out-of-range list item is refused" jq -e '.ok == false and (.error | contains("outside"))' <<<"$(fx opt set t.ports '[ 0 70000 ]')"
+check "integer list accepts its bounds" jq -e '.ok' <<<"$(fx opt set t.ports '[ 0 65535 ]')"
+before=$(sha256sum "$APPSNIX")
+check "out-of-range nullable integer is refused on set" jq -e '.ok == false and (.error | contains("outside"))' <<<"$(fx opt set t.nullPort 70000)"
+check "refused nullable set leaves file untouched" test "$before" = "$(sha256sum "$APPSNIX")"
+check "nullable integer accepts null" jq -e '.ok' <<<"$(fx opt set t.nullPort null)"
+before=$(sha256sum "$APPSNIX")
+check "out-of-range nullable integer is refused on replace" jq -e '.ok == false and (.error | contains("outside"))' <<<"$(fx opt replace t.nullPort 70000)"
+check "refused nullable replace leaves file untouched" test "$before" = "$(sha256sum "$APPSNIX")"
+check "Nix expression passes literal check" jq -e '.ok' <<<"$(fx opt set t.port 'builtins.toString 80')"
+check "unsigned literal can be set" jq -e '.ok' <<<"$(fx opt set t.uint 0)"
+before=$(sha256sum "$APPSNIX")
+check "replace refuses negative unsigned literal" jq -e '.ok == false and (.error | contains("outside"))' <<<"$(fx opt replace t.uint -1)"
+check "refused replace leaves file untouched" test "$before" = "$(sha256sum "$APPSNIX")"
+rm -rf "$CONFIG"
 
 echo "options"
 if [ -n "$(command -v nixarchy-search)" ]; then

@@ -124,4 +124,101 @@ TestCase {
     form.begin({ path: "programs.git.enable" })
     compare(describeProc().command.join(" "), "nixarchy-pkg opt describe --scope system programs.git.enable")
   }
+
+  function test_integer_focus_steps_and_bounds() {
+    form.begin({ path: "t.port" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.port", widget: "integer",
+      default: "22", min: "0", max: "65535", current: { state: "absent" } }))
+    var field = findChild(form, "integerField")
+    verify(field !== null)
+    tryCompare(field, "activeFocus", true)
+    field.text = "65535"
+    keyClick(Qt.Key_Up)
+    compare(field.text, "65535")
+    field.text = "70000"
+    form.commit()
+    verify(form.error.indexOf("outside") >= 0)
+    compare(writeProcess().command.length, 0)
+    form.option = { widget: "integer", min: "-9223372036854775808", max: "9223372036854775807", current: { state: "absent" } }
+    field.text = "9007199254740993"
+    keyClick(Qt.Key_Up)
+    compare(field.text, "9007199254740994")
+    field.text = "0"
+    keyClick(Qt.Key_Down)
+    compare(field.text, "-1")
+  }
+
+  function test_lone_minus_refuses_without_writing() {
+    form.begin({ path: "t.port" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.port", widget: "integer",
+      current: { state: "absent" } }))
+    var field = findChild(form, "integerField")
+    tryCompare(field, "activeFocus", true)
+    field.text = "-"
+    keyClick(Qt.Key_Return)
+    verify(form.error.indexOf("complete integer") >= 0)
+    compare(writeProcess().command.length, 0)
+    verify(!fakeModel.busy)
+  }
+
+  function test_delete_twice_removes_and_empty_string_arms() {
+    form.begin({ path: "t.bool" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.bool", widget: "boolean",
+      current: { state: "set", value: "true" } }))
+    var writer = writeProcess()
+    keyClick(Qt.Key_Delete)
+    verify(form.armedRemove)
+    compare(writer.command.length, 0)
+    keyClick(Qt.Key_Delete)
+    compare(writer.command.slice(1, 3).join(" "), "opt remove")
+    writer.deliver(JSON.stringify({ ok: true }))
+    form.begin({ path: "t.str" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.str", widget: "string",
+      current: { state: "set", value: "\"old\"" } }))
+    var field = findChild(form, "textField")
+    tryCompare(field, "activeFocus", true)
+    field.text = ""
+    keyClick(Qt.Key_Return)
+    verify(form.armedRemove)
+    form.finish()
+    form.begin({ path: "t.str" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.str", widget: "string",
+      current: { state: "set", value: "\"old\"" } }))
+    writer.command = []
+    keyClick(Qt.Key_Return)
+    verify(!form.armedRemove)
+    compare(writer.command.length, 0)
+  }
+
+  function test_delete_edits_scaffold_without_arming_remove() {
+    form.begin({ path: "t.multi" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.multi", widget: "scaffold",
+      current: { state: "set", value: "abcde\nfgh" } }))
+    var field = findChild(form, "scaffoldField")
+    tryCompare(field, "activeFocus", true)
+    var writer = writeProcess()
+    field.cursorPosition = 2
+    keyClick(Qt.Key_Home)
+    keyClick(Qt.Key_Delete)
+    keyClick(Qt.Key_Delete)
+    compare(field.text, "cde\nfgh")
+    verify(!form.armedRemove)
+    compare(writer.command.length, 0)
+  }
+
+  function test_disarming_clears_only_remove_message() {
+    form.begin({ path: "t.bool" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.bool", widget: "boolean",
+      current: { state: "set", value: "true" } }))
+    form.forceActiveFocus()
+    keyClick(Qt.Key_Delete)
+    verify(form.armedRemove)
+    verify(form.error.indexOf("DEL again removes ") === 0)
+    keyClick(Qt.Key_Space)
+    verify(!form.armedRemove)
+    compare(form.error, "")
+    form.error = "another refusal"
+    keyClick(Qt.Key_Space)
+    compare(form.error, "another refusal")
+  }
 }
