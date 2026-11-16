@@ -20,6 +20,24 @@ Item {
   // Alpha, not darkening: darkening inverts the hierarchy on light themes.
   readonly property color dim: Qt.rgba(fg.r, fg.g, fg.b, 0.6)
   readonly property string fontFamily: Style.font.family
+  // Through a typed property first, as `fg`/`dim` do: the test stub's
+  // `Color.menu` holds plain strings, and a string has no .r/.g/.b/.a.
+  readonly property color selectedBg: Commons.Color.menu.selectedBackground
+  readonly property color hoverBackground: Qt.rgba(selectedBg.r, selectedBg.g, selectedBg.b, selectedBg.a * 0.5)
+  // Alpha 0 of the same colour, not "transparent": a fade to #00000000 passes through grey.
+  readonly property color restBackground: Qt.rgba(selectedBg.r, selectedBg.g, selectedBg.b, 0)
+  readonly property bool waiting: Boolean(model && (model.busy || model.inspecting || model.checkRunning))
+  property real busyProgress: 0
+  readonly property bool busyAnimating: busyAnim.running
+  NumberAnimation on busyProgress {
+    id: busyAnim
+    from: 0; to: 1
+    // A running animation keeps its starting duration; a 0 ms loop could spin when motion resumes.
+    duration: 1100
+    loops: Animation.Infinite
+    // Only while someone can see it: the Card outlives a closed menu.
+    running: root.waiting && !Style.reduceMotion && Boolean(root.Window.window && root.Window.window.visible)
+  }
   // Apps and Services rows carry an icon; the other tabs don't.
   readonly property bool showIcons: root.model && root.model.tab <= 1
 
@@ -73,6 +91,7 @@ Item {
 
   Row {
     id: header
+    objectName: "header"
     anchors { top: parent.top; left: parent.left; right: parent.right }
     height: Style.font.heading + Style.space(14)
     spacing: Style.space(14)
@@ -91,18 +110,28 @@ Item {
         // Rows take a click; so do the tabs above them (#30). setTab moves
         // the keyboard the way a key would.
         MouseArea {
+          id: tabMouse
           anchors.fill: parent
+          hoverEnabled: true
           onClicked: if (root.model) root.model.setTab(tabItem.index)
         }
 
         Text {
           id: label
           anchors.verticalCenter: parent.verticalCenter
-          text: parent.modelData
+          text: {
+            const n = root.model ? root.model.tabCount(tabItem.index) : ""
+            return tabItem.modelData + (n ? " " + n : "")
+          }
           textFormat: Text.PlainText
           font.family: root.fontFamily
           font.pixelSize: Style.font.heading
-          color: parent.current ? Commons.Color.menu.selectedText : root.dim
+          color: tabItem.current ? Commons.Color.menu.selectedText
+               : tabMouse.containsMouse ? root.fg : root.dim
+          Behavior on color {
+            enabled: !Style.reduceMotion
+            ColorAnimation { duration: Style.duration(120) }
+          }
         }
 
         // The current tab is named by a rule under it rather than by a
@@ -126,17 +155,26 @@ Item {
   //
   // "selection" is the writers' own word, not a new one: nixarchy-pkg-remove
   // says "removed from your selection" and counts what is "still selected".
-  Text {
+  //
+  // An Item owns the height: a wrapping Text's implicitHeight depends on its
+  // own geometry, so binding its height to it loops (#57).
+  Item {
     id: scope
+    objectName: "scope"
     anchors { top: header.bottom; left: parent.left; right: parent.right }
-    visible: root.model && root.model.tab === 2 && !root.model.searching
-    height: visible ? implicitHeight + Style.space(6) : 0
-    text: "packages nixarchy manages \u2014 not everything installed"
-    textFormat: Text.PlainText
-    wrapMode: Text.Wrap
-    font.family: root.fontFamily
-    font.pixelSize: Style.font.title
-    color: root.dim
+    visible: Boolean(root.model && root.model.tab === 2 && !root.model.searching)
+    height: visible ? scopeText.implicitHeight + Style.space(6) : 0
+
+    Text {
+      id: scopeText
+      width: parent.width
+      text: "packages nixarchy manages \u2014 not everything installed"
+      textFormat: Text.PlainText
+      wrapMode: Text.Wrap
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.title
+      color: root.dim
+    }
   }
 
   // ---- the list -------------------------------------------------------
@@ -168,10 +206,17 @@ Item {
 
       width: list.width
       height: root.rowHeight
-      color: current ? Commons.Color.menu.selectedBackground : "transparent"
+      color: current ? Commons.Color.menu.selectedBackground
+           : rowMouse.containsMouse ? root.hoverBackground : root.restBackground
+      Behavior on color {
+        enabled: !Style.reduceMotion
+        ColorAnimation { duration: Style.duration(120) }
+      }
 
       MouseArea {
+        id: rowMouse
         anchors.fill: parent
+        hoverEnabled: true
         onClicked: {
           if (!root.model) return
           root.model.cursor = index
@@ -398,11 +443,26 @@ Item {
     anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
     spacing: Style.space(4)
 
-    Rectangle {
+    Item {
+      objectName: "busyRule"
       width: parent.width
       height: Math.max(1, Style.space(1))
-      color: root.dim
-      opacity: 0.25
+      clip: true
+
+      Rectangle {
+        objectName: "busyRuleBase"
+        anchors.fill: parent
+        color: root.waiting && Style.reduceMotion ? Commons.Color.menu.selectedText : root.dim
+        opacity: root.waiting && Style.reduceMotion ? 1 : 0.25
+      }
+      Rectangle {
+        objectName: "busySegment"
+        width: parent.width / 5
+        height: parent.height
+        x: -width + root.busyProgress * (parent.width + width)
+        visible: root.waiting && !Style.reduceMotion
+        color: Commons.Color.menu.selectedText
+      }
     }
 
     // Whatever a writer last said. These are the refusals -- an id that
