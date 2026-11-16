@@ -1786,6 +1786,7 @@ cat >"$O62/bin/nix" <<'NEOF'
 #!/usr/bin/env bash
 echo run >>"$O62/nix.calls"
 case "${NIX_MODE-ok}" in
+  change-lock) echo lock-during-eval >"$O62/fl/flake.lock" ;;
   fail)  echo "error: attribute 'x' missing" >&2; exit 1 ;;
   nohost) echo "error: flake does not provide attribute 'nixosConfigurations.\"h\"'" >&2; exit 1 ;;
   sleep) sleep 5 ;;
@@ -1799,7 +1800,7 @@ JSON
 NEOF
 chmod +x "$O62/bin/nix"
 export O62
-opt62() { env PATH="$O62/bin:$PATH" XDG_STATE_HOME="$O62/state" XDG_CACHE_HOME="$O62/cache" \
+opt62() { env PATH="$O62/bin:$PATH" XDG_STATE_HOME="$O62/state" XDG_CACHE_HOME="${CACHE62:-$O62/cache}" \
   NIXARCHY_FLAKE="${FLAKE62:-$O62/fl}" "$ADAPTER" "$@"; }
 mkdir -p "$O62/cache/nixarchy"
 printf 'pkg\tgit\tthe git\tflags\tprev\nopt\tprograms.git.enable\tstale row\tboolean\tOLD\n' >"$O62/cache/nixarchy/index.tsv"
@@ -1824,6 +1825,12 @@ check "search takes option rows from the cache, not the index" \
   jq -e '.options.source == "flake" and (.rows | length == 1) and .rows[0].summary == "Whether to enable git" and .rows[0].scope == "system"' <<<"$out"
 check "state reports where the options came from" \
   jq -e '.optionsInfo.source == "flake" and .optionsInfo.stale == false' <<<"$(opt62 state)"
+out=$(NIX_MODE=change-lock opt62 options refresh)
+check "refresh succeeds when the lock changes during eval" jq -e '.ok == true' <<<"$out"
+check "a lock changed during eval leaves state options stale" \
+  jq -e '.optionsInfo.source == "flake" and .optionsInfo.stale == true' <<<"$(opt62 state)"
+echo lock-one >"$O62/fl/flake.lock"
+opt62 options refresh >/dev/null
 check "describe reads the cached system.json" \
   jq -e '.ok and .source == "flake" and .scope == "system" and .default == "false"' <<<"$(opt62 opt describe programs.git.enable)"
 check "describe --scope user reads user.json" \
@@ -1893,6 +1900,14 @@ opt62 options refresh >/dev/null; second_gen=$(readlink "$OC/options")
 check "the replaced generation survives one publish" test -d "$first_gen" -a "$first_gen" != "$second_gen"
 sleep 1; opt62 options refresh >/dev/null
 check "and goes after the next" test ! -d "$first_gen"
+# A cache home may itself be a symlink; preserve the previous resolved target.
+mkdir -p "$O62/real-cache"
+ln -s "$O62/real-cache" "$O62/linked-cache"
+CACHE62=$O62/linked-cache opt62 options refresh >/dev/null
+linked_old=$(readlink -f "$O62/linked-cache/nixarchy/options")
+sleep 1
+CACHE62=$O62/linked-cache opt62 options refresh >/dev/null
+check "symlinked cache home keeps the replaced generation" test -d "$linked_old"
 rm -rf "$O62"
 
 echo "failure is a value, not an exit code"

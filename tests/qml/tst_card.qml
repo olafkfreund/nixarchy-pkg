@@ -606,4 +606,23 @@ TestCase {
       fakeModel.queueError = ""; fakeModel.queued = 0; fakeModel.optionsStatus = ""
     }
   }
+
+  function test_stale_index_and_options_status_do_not_overlap() {
+    fakeModel.queued = 0
+    fakeModel.indexStale = true
+    fakeModel.optionsStatus = "options: reading your flake\u2026"
+    try {
+      var q = byName(card, "queueStatus"), s = byName(card, "indexStaleStatus")
+      var o = byName(card, "optionsStatus"), h = byName(card, "hints")
+      verify(q && s && o && h && s.visible && o.visible)
+      var right = function (it) { return it.mapToItem(card, it.width, 0).x }
+      var left = function (it) { return it.mapToItem(card, 0, 0).x }
+      verify(right(q) <= left(s), "queue ends before stale index")
+      verify(right(s) <= left(o), "stale index ends before options")
+      verify(right(o) <= left(h), "options end before hints")
+    } finally {
+      fakeModel.indexStale = false
+      fakeModel.optionsStatus = ""
+    }
+  }
 }

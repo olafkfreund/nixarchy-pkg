@@ -530,7 +530,8 @@ Item {
         objectName: "queueStatus"
         anchors {
           left: parent.left; leftMargin: Style.space(10)
-          right: optionsText.visible ? optionsText.left : hints.left; rightMargin: Style.space(14)
+          right: staleText.visible ? staleText.left : optionsText.visible ? optionsText.left : hints.left
+          rightMargin: Style.space(14)
           verticalCenter: parent.verticalCenter
         }
         // A long reason (an interrupted write names its files and both
@@ -556,10 +557,17 @@ Item {
       // package on it reads as free. Said plainly, with the key that fixes
       // it, rather than left for the user to discover after a rebuild.
       Text {
-        anchors { horizontalCenter: parent.horizontalCenter; verticalCenter: parent.verticalCenter }
+        id: staleText
+        objectName: "indexStaleStatus"
+        anchors {
+          right: optionsText.visible ? optionsText.left : hints.left; rightMargin: Style.space(14)
+          verticalCenter: parent.verticalCenter
+        }
         visible: root.model && root.model.indexStale
         text: "index stale \u2014 r to rebuild"
         textFormat: Text.PlainText
+        elide: Text.ElideRight
+        width: Math.min(implicitWidth, parent.width * 0.27)
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
         color: Commons.Color.urgent
@@ -578,7 +586,7 @@ Item {
         text: root.model ? String(root.model.optionsStatus || "") : ""
         textFormat: Text.PlainText
         elide: Text.ElideRight
-        width: Math.min(implicitWidth, parent.width * 0.35)
+        width: Math.min(implicitWidth, parent.width * 0.27)
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
         color: root.model && root.model.optionsError ? Commons.Color.urgent : root.dim

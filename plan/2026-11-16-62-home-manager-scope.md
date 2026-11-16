@@ -325,3 +325,9 @@ imports `~/.config/nixarchy/home.nix`; writers take `--home`". The body is
 the spec's section C, verbatim. The lead files it after PR 1 merges.
 
 (Workflow run 2026-11-16: the steps of this PR were implemented in one parallel workflow pass and committed together as one commit, because agent-run codex will not start on a worktree with uncommitted changes and the implementing agents may not commit. The PR names which steps Codex wrote and which the coordinating agent wrote; each agent verified every step with the adapter suite, shellcheck, the QML suites and nix flake check, and the lead re-ran the adapter suite and nix flake check before committing.)
+
+Deviation: state reports cache provenance as `optionsInfo` because its existing
+`options` key holds selected option rows. Search and reindex still report it
+under `options`.
+
+(Review fixes, round 2: the options staleness stamp is taken before the flake eval starts; a failed options refresh's error stays until a later successful refresh; a successful background refresh re-runs the visible option search; refresh, options refresh and search queue one rerun instead of dropping a request while running; the footer lays out queue status, index-stale text, options status and hints without overlap; generation pruning resolves symlinked cache dirs; reindex shows "reading your flake" and no longer promises 45 s. Codex wrote the edits; the lead verified them.)

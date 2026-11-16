@@ -1848,6 +1848,7 @@ cmd_options_refresh() {
   OPTIONS_READING=true
   private_dir OPTSDIR pkg-options
   export TMPDIR=$OPTSDIR
+  stamp=$(options_stamp "$flake" "$host" "$user")
   started=$(date +%s%3N)
   setsid timeout 300 "${NIX[@]}" eval --json --no-write-lock-file \
     "$flake#nixosConfigurations.\"$host\"" --apply "${DISCOVER//@USER@/$user}" \
@@ -1895,7 +1896,6 @@ cmd_options_refresh() {
         + "\n\ndeclared in:\n  " + (($v.declarations // []) | join("\n  "))),
       $scope] | @tsv' "$OPTSDIR/out.json" >"$gen/rows.tsv"
   counts=$(jq -c '{system:(.nixos | length), user:(.home // [] | length)}' "$OPTSDIR/out.json")
-  stamp=$(options_stamp "$flake" "$host" "$user")
   jq -nc --arg builtAt "$built_at" --arg host "$host" --arg user "$user" \
     --arg flake "$(readlink -f "$flake")" --argjson data "$(jq -c '{homeManager,users,perUser}' "$OPTSDIR/out.json")" \
     --argjson counts "$counts" --argjson seconds "$seconds" --arg stamp "$stamp" \
@@ -1908,7 +1908,7 @@ cmd_options_refresh() {
   OPTSGEN=""
   for d in "$CACHE_DIR"/options.d/*; do
     [ -e "$d" ] || continue
-    [ "$d" = "$gen" ] || [ "$d" = "$old" ] || rm -rf -- "$d" || :
+    [ "$d" = "$gen" ] || [ "$(readlink -f "$d")" = "$old" ] || rm -rf -- "$d" || :
   done
   OPTIONS_READING=false
   jq -nc --arg host "$host" --arg user "$user" --arg flake "$flake" \

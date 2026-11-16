@@ -69,6 +69,12 @@ QtObject {
   property int _pendingRun: 0
   property int _armWant: 0
   property bool _pendingAgain: false
+  property bool _readerAgain: false
+  property bool _readerAbsorbed: true
+  property bool _optionsAgain: false
+  property bool _optionsAbsorbed: true
+  property bool _searchAgain: false
+  property bool _searchAbsorbed: true
   // False from a pending run's start until its answer is absorbed, so a
   // rerun never starts before the answer it follows (exit and stdout come
   // in either order).
@@ -87,7 +93,7 @@ QtObject {
   property string optionsSource: ""
   property bool optionsStale: false
   property string optionsError: ""
-  readonly property bool optionsReading: _optionsRefresh.running
+  readonly property bool optionsReading: _optionsRefresh.running || reindexing
   readonly property string optionsStatus: {
     if (optionsReading) return "options: reading your flake\u2026"
     if (optionsError !== "") return "options: " + optionsError
@@ -381,8 +387,13 @@ QtObject {
   // cannot swallow the result of a toggle you pressed while it ran.
   property Process _reader: Process {
     stdout: StdioCollector {
-      onStreamFinished: root._absorb(text, false)
+      onStreamFinished: {
+        root._absorb(text, false)
+        root._readerAbsorbed = true
+        root._readerRerun()
+      }
     }
+    onRunningChanged: root._readerRerun()
   }
 
   // Search reads on its own channel. Sharing _reader with refresh() meant
@@ -393,8 +404,13 @@ QtObject {
   // this file has its own Process for exactly this reason.
   property Process _searcher: Process {
     stdout: StdioCollector {
-      onStreamFinished: root._absorb(text, false)
+      onStreamFinished: {
+        root._absorb(text, false)
+        root._searchAbsorbed = true
+        root._searchRerun()
+      }
     }
+    onRunningChanged: root._searchRerun()
   }
 
   property Process _writer: Process {
@@ -433,7 +449,7 @@ QtObject {
 
   // The `options` object of search and reindex, or `optionsInfo` of state.
   // A refresh failure arrives as {ok:false, error} (reindex carries one).
-  function _absorbOptions(o) {
+  function _absorbOptions(o, refreshAnswer) {
     if (o === undefined || o === null || typeof o !== "object") return
     if (o.ok === false) {
       root.optionsError = String(o.error || "could not read the options")
@@ -442,7 +458,7 @@ QtObject {
     if (o.source === undefined) return
     root.optionsSource = String(o.source)
     root.optionsStale = o.stale === true
-    root.optionsError = ""
+    if (refreshAnswer && o.ok === true) root.optionsError = ""
   }
 
   // A stale cache found on opening is refreshed once, in the background.
@@ -453,9 +469,16 @@ QtObject {
   }
 
   function refreshOptions() {
-    if (_optionsRefresh.running) return
+    if (_optionsRefresh.running || !_optionsAbsorbed) { _optionsAgain = true; return }
+    _optionsAbsorbed = false
     _optionsRefresh.command = [script, "options", "refresh"]
     _optionsRefresh.running = true
+  }
+
+  function _optionsRerun() {
+    if (!_optionsAgain || _optionsRefresh.running || !_optionsAbsorbed) return
+    _optionsAgain = false
+    refreshOptions()
   }
 
   property Process _optionsRefresh: Process {
@@ -465,9 +488,13 @@ QtObject {
         try { data = JSON.parse(text) } catch (e) { data = null }
         if (data === null || typeof data !== "object")
           data = { ok: false, error: "could not read the adapter" }
-        root._absorbOptions(data)
+        root._absorbOptions(data, true)
+        if (data.ok === true && root.tab === 3 && root.searching) root.runSearch()
+        root._optionsAbsorbed = true
+        root._optionsRerun()
       }
     }
+    onRunningChanged: root._optionsRerun()
   }
 
   function _absorb(text, isWrite) {
@@ -497,7 +524,7 @@ QtObject {
     // that as state emptied every tab until the menu was reopened.
     if (data.apps === undefined) {
       if (data.indexStale !== undefined) root.indexStale = data.indexStale
-      root._absorbOptions(data.options)
+      root._absorbOptions(data.options, true)
       if (data.message) root.message = String(data.message)
       if (isWrite) root.refresh()
       return
@@ -589,9 +616,17 @@ QtObject {
   }
 
   function refresh() {
+    refreshPending()
+    if (_reader.running || !_readerAbsorbed) { _readerAgain = true; return }
+    _readerAbsorbed = false
     _reader.command = [script, "state"]
     _reader.running = true
-    refreshPending()
+  }
+
+  function _readerRerun() {
+    if (!_readerAgain || _reader.running || !_readerAbsorbed) return
+    _readerAgain = false
+    refresh()
   }
 
   function refreshPending() {
@@ -668,11 +703,19 @@ QtObject {
 
   function runSearch() {
     if (!indexTab || !searching) { results = []; return }
+    if (_searcher.running || !_searchAbsorbed) { _searchAgain = true; return }
+    _searchAbsorbed = false
     // `--` last, so a query starting with a dash is a query (#30).
     _searcher.command = [script, "search",
                          "--kind", tab === 2 ? "pkg" : "opt",
                          "--limit", "60", "--", query]
     _searcher.running = true
+  }
+
+  function _searchRerun() {
+    if (!_searchAgain || _searcher.running || !_searchAbsorbed) return
+    _searchAgain = false
+    runSearch()
   }
 
   // True when the write started; false when one was already running.
@@ -887,7 +930,7 @@ QtObject {
     if (reindexing) { message = "already rebuilding the index"; return false }
     reindexing = true
     _reindexAnswered = false
-    message = "rebuilding the search index (about 45 s)"
+    message = "rebuilding the search index and reading your flake (may take several minutes)"
     _reindexer.command = [script, "reindex"]
     _reindexer.running = true
     return true
