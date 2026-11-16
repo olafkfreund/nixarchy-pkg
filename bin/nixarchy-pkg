@@ -321,14 +321,55 @@ searched() {
 # fields. The unfree and broken flags arrived in #493, and an index from
 # before it reports every package as free. The panel must be able to say
 # so rather than quietly dropping the warning.
-index_stale() {
-  local key
-  [ -s "$INDEX" ] || return 0
-  key=$(printf '%s\n' \
-    "$(searched nixpkgs)" "$(searched walk)" "$(searched optionsjson)" \
-    "$(searched appindex)" "$(searched apptable)" \
-    "$(searched flatpakrows)" "$(searched pkgnewrow)")
-  [ "$(cat "$STAMP" 2>/dev/null)" != "$key" ]
+#
+# The seven inputs nixarchy-search keys the index on, in its stamp_key
+# order; what each looks like; and what the panel calls it.
+INDEX_INPUTS=(nixpkgs walk optionsjson appindex apptable flatpakrows pkgnewrow)
+INDEX_GLOBS=('*-source' '*-pkg-index.nix' '*/options.json' '*-nixarchy-app-index.tsv'
+             '*-nixarchy-app-attrs.tsv' '*-nixarchy-flatpak-rows.tsv' '*-nixarchy-pkg-new-row.tsv')
+INDEX_NAMES=(nixpkgs 'index builder' options 'app list' 'app list' flatpaks 'new-package row')
+
+# index_recognised V0..V6 -- every value has its input's shape (options may be empty).
+index_recognised() {
+  local i=0 v
+  for v in "$@"; do
+    if ! { [ "$i" = 2 ] && [ -z "$v" ]; }; then
+      # shellcheck disable=SC2053  # the right side is a glob on purpose
+      [[ $v == ${INDEX_GLOBS[i]} ]] || return 1
+    fi
+    i=$((i + 1))
+  done
+  [ "$i" = 7 ]
+}
+
+# index_facts -- {status, builtAt, changed} as one JSON object.
+# status keeps the old staleness test byte for byte, so indexStale is
+# exactly `.status != "fresh"`.
+index_facts() {
+  local status built key i cur=() st=() names=()
+  if [ ! -s "$INDEX" ]; then
+    jq -nc '{status: "missing", builtAt: null, changed: null}'
+    return 0
+  fi
+  for i in "${INDEX_INPUTS[@]}"; do cur+=("$(searched "$i")"); done
+  key=$(printf '%s\n' "${cur[@]}")
+  if [ "$(cat "$STAMP" 2>/dev/null)" != "$key" ]; then status=stale; else status=fresh; fi
+  built=$(stat -c %Y "$INDEX" 2>/dev/null) || built=""
+  if [ "$status" = stale ] && command -v nixarchy-search >/dev/null 2>&1 && [ -r "$STAMP" ]; then
+    mapfile -t st <"$STAMP"
+    if [ "${#st[@]}" -eq 7 ] && index_recognised "${st[@]}" && index_recognised "${cur[@]}"; then
+      for i in 0 1 2 3 4 5 6; do
+        [ "${st[i]}" = "${cur[i]}" ] || names+=("${INDEX_NAMES[i]}")
+      done
+    fi
+  fi
+  jq -nc --arg status "$status" --arg built "$built" \
+    --args '{status: $status,
+             builtAt: (if $built == "" then null else ($built | tonumber) end),
+             changed: ($ARGS.positional
+                       | reduce .[] as $n ([]; if any(.[]; . == $n) then . else . + [$n] end)
+                       | if length == 0 then null else . end)}' \
+    ${names[@]+"${names[@]}"}
 }
 
 # One selection file's marked rows, as TSV for jq to pick up.
@@ -461,8 +502,9 @@ cmd_search() {
   case "$kind" in ''|pkg|opt|app) ;; *) die "--kind takes pkg, opt or app, not '$kind'" ;; esac
   [ -s "$INDEX" ] || die "no search index yet -- run: nixarchy-pkg reindex"
 
-  local stale=false
-  index_stale && stale=true
+  local facts stale
+  facts=$(index_facts)
+  stale=$(jq -r '.status != "fresh"' <<<"$facts")
 
   jq -n \
     --rawfile rows <(
@@ -485,12 +527,14 @@ cmd_search() {
       ' "$INDEX" | sort -t"$(printf '\t')" -k1,1n -k2,2n | head -n "$limit" | cut -f3-
     ) \
     --argjson stale "$stale" \
+    --argjson index "$facts" \
     --arg query "$query" \
     '
     def lines: split("\n") | map(select(length > 0));
     {
       ok: true,
       indexStale: $stale,
+      index: $index,
       query: $query,
       rows: ($rows | lines | map(split("\t")) | map(
         (if .[0] == "opt" then []
@@ -1959,22 +2003,41 @@ cmd_apply() {
 # at all, so every package on a stale index reads as free.
 cmd_reindex() {
   need nixarchy-search
-  # nixarchy-search builds the index before it opens its picker, so asking
-  # it to reindex with no terminal does the work and then fails at the
-  # picker. That failure is expected and not worth reporting; whether the
-  # index came out fresh is, and index_stale answers it from the stamp.
-  NIXARCHY_IN_PICKER=1 nixarchy-search --reindex </dev/null >/dev/null 2>&1 || true
-  local stale=false
-  index_stale && stale=true
-  jq -nc --argjson stale "$stale" \
-    '{ok: ($stale | not), indexStale: $stale,
-      message: (if $stale then "the index is still stale -- run nixarchy search in a terminal to see why"
-                else "index rebuilt" end)}'
+  # nixarchy-search builds the index, then opens its picker; with no
+  # terminal the picker fails ("inappropriate ioctl for device") and the
+  # script still exits 0. So its status says nothing, and the stamp is the
+  # judge. stderr is kept for the reason when the index is still stale.
+  local err facts
+  err=$(NIXARCHY_IN_PICKER=1 nixarchy-search --reindex </dev/null 2>&1 >/dev/null 9>&- 8>&-) || :
+  facts=$(index_facts)
+  if jq -e '.status == "fresh"' <<<"$facts" >/dev/null; then
+    jq -nc --argjson index "$facts" \
+      '{ok: true, indexStale: false, index: $index, message: "index rebuilt"}'
+    return 0
+  fi
+  jq -nc --arg err "$err" --argjson index "$facts" \
+    --arg log "$CACHE_DIR/index-errors.log" '
+    ($err | split("\n")
+          | map(sub("^\\s+"; "") | sub("\\s+$"; ""))
+          | map(select(length > 0
+              and (startswith("Building the search index.") | not)
+              and (startswith("indexing nixpkgs (this takes") | not)
+              and (startswith("no option index: documentation.nixos.enable is off") | not)
+              and (. != "system, so there is no options.json to read.")
+              and (. != "inappropriate ioctl for device")
+              and (startswith("evaluation warning:") | not)))
+          | .[-8:]) as $d
+    | ([$d[] | select(startswith("indexing nixpkgs failed;") | not)] | last) as $why
+    | {ok: false, indexStale: true, index: $index, detail: $d,
+       error: ("the search index is still \($index.status): "
+               + ($why // "nixarchy-search gave no reason")
+               + " -- see " + $log)}'
 }
 
 cmd_state() {
-  local stale=false
-  index_stale && stale=true
+  local facts stale
+  facts=$(index_facts)
+  stale=$(jq -r '.status != "fresh"' <<<"$facts")
 
   # Process substitution swallows a callee's exit status, so a read that
   # fails inside the jq below cannot be noticed there -- `$(cat <(f))` is 0
@@ -1999,6 +2062,7 @@ cmd_state() {
     --rawfile extras <(extras_tsv) \
     --rawfile labels <(labels_tsv) \
     --argjson stale "$stale" \
+    --argjson index "$facts" \
     --arg appsFile "$APPS" \
     --arg servicesFile "$SERVICES" \
     --arg unreadable "$unread_msg" \
@@ -2014,6 +2078,7 @@ cmd_state() {
     {
       ok: true,
       indexStale: $stale,
+      index: $index,
       files: { apps: $appsFile, services: $servicesFile },
       channel: $channel,
       # Absent when every file read, so an ordinary state carries no
