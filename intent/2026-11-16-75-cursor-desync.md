@@ -16,9 +16,12 @@ matching.
   tab: toggle, add, remove, undraft, open the form; `Menu.qml:536-553`,
   `PkgModel.qml:580-617`), a click sets it (`Card.qml:222`), and the arrows
   move it (`PkgModel.qml:311-316`).
-- The list draws its own `currentIndex`. That is what the user sees: the
-  highlighted row (`Card.qml:205`) and the preview (`Card.qml:59`, which reads
-  `list.currentItem`).
+- The list draws its own `currentIndex`, and that is the highlighted row
+  (`Card.qml:205`).
+- The preview reads a third thing, `list.currentItem` (`Card.qml:59`). It
+  goes null when the selected row's delegate is scrolled out of the list's
+  buffer, even while `currentIndex` matches `cursor`: the preview blanks while
+  `SPACE` still acts on the row out of sight.
 
 `currentIndex` is bound to `model.cursor` (`Card.qml:193`). If `ListView`
 moves its own `currentIndex` while `cursor` stays the same, the binding never
@@ -61,9 +64,14 @@ restore them, and `currentIndex` is 0 while `cursor` is 2. The same binding is i
   the write ran, and that choice wins. It does not jump to the top.
 - A tab change, a new query and new search results select the first row,
   as today, and the list follows even when the cursor was already 0.
+- The preview shows the selected row whether or not it is scrolled into view.
 - QML tests fail on today's code and pass after the fix. They cover rows that
-  empty and refill, replacement with the same count, a shorter list, the
-  Queue check row going away, Flakes naming, and the tab and search resets.
+  empty and refill, the Queue check row going away, Flakes naming, and the
+  tab and search resets. Replacement with the same count and a list that
+  shrinks below the cursor already re-sync today (the clamp at `:404` changes
+  `cursor`); they are kept as regression tests. Note for the spec: `state`
+  changes (`:400`) before that clamp, so a fix that reacts to the rows
+  changing sees the old `cursor` first.
 
 ## Affected users and systems
 
@@ -86,8 +94,8 @@ restore them, and `currentIndex` is 0 while `cursor` is 2. The same binding is i
 ## Open questions
 
 1. Which side should own the selection? (a) The model's `cursor` stays the
-   truth, and the list is pushed back to it whenever its rows change.
-   (b) The list's `currentIndex` becomes the truth, and keys act on it.
+   truth; the list, its highlight and the preview always follow it. (b) The
+   list's `currentIndex` becomes the truth, and keys act on it.
    Recommended: (a). Every key handler and the adapter calls already use
    `cursor`, and (b) would move logic into the view.
 2. After a write that removes the selected row (for example a package removed
