@@ -23,7 +23,7 @@ removal.
 ## How a change happens
 
 1. The user picks a row. One marked line is written into
-   `~/.config/nixarchy/{apps,services,advanced}.nix` -- a file they own.
+   `~/.config/nixarchy/{apps,services,advanced,flatsnap}.nix` -- a file they own.
 2. Nothing is built. The footer and the bar widget show a queued count.
 3. The user presses `a` (or `SHIFT+A` for a terminal). `nixarchy-apply`
    copies the selection into the flake directory and rebuilds.

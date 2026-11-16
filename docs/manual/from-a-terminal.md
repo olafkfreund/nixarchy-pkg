@@ -30,15 +30,16 @@ declining to do something is an answer.
 | `draft new <url>` / `draft undraft <name>` | See [Drafts](drafts) |
 | `recover [--discard]` | Put back what an interrupted write changed, or keep the files as they are. See [Troubleshooting](troubleshooting) |
 | `pending` | What would change on the next apply |
-| `apply` | The rebuild. Streams a log, then one JSON object |
+| `check [--dry-run]` | Evaluate a private copy of the flake with the queued selection |
+| `apply [--pin <part>=<sha256>]` | The rebuild. Streams a log, then one JSON object |
 | `reindex` | Rebuild the search index. About a minute |
 
 ## A worked example
 
-What is queued, as a list of names:
+What is queued, as a list of markers:
 
 ```bash
-nixarchy-pkg pending | jq -r '.changes[].id'
+nixarchy-pkg pending | jq -r '.changes[].marker'
 ```
 
 Everything unfree in your selection:
@@ -53,14 +54,91 @@ Whether this machine follows stable or unstable:
 nixarchy-pkg state | jq -r '.channel'
 ```
 
+## `pending`
+
+`pending` snapshots your selection into a private directory under
+`~/.local/state/nixarchy` and compares it against the flake's copy:
+
+```bash
+nixarchy-pkg pending | jq
+```
+
+Its object carries:
+
+| Field | Meaning |
+| --- | --- |
+| `ok`, `neverApplied`, `base` | Whether the read succeeded, whether `$base/nixarchy` exists yet, and the flake base path |
+| `writing` | `true` if a write was in progress or interrupted (`pkg-recovery/open` existed) during the read |
+| `count` | `changes | length` — the number of marked-line changes |
+| `changes[]` | `{marker, file, line, change, lineNo}` where `change` is `on`, `off`, `added`, `removed`, or `modified` (a marked value changed in place), and `lineNo` is the line number in the live file (or `null` for `off` and `removed`) |
+| `files[]` | `{file, label, path, status, unmarked, hunk, conflict, explained}` for each changed part or draft. `status` is `new`, `modified`, or `dropped`; `conflict` is `overwrite`, `blocks`, or `null`; `explained` is `true` when `status` is `modified`, `unmarked` is `0`, and at least one `changes[]` row belongs to this file |
+| `total` | `count` plus the number of `files[]` entries with `explained: false` |
+| `fingerprint` | One 64-digit SHA-256 over every `.nix` file in the selection snapshot, names included |
+| `pins` | `{apps, services, advanced, flatsnap}` — each file's 64-digit SHA-256, or `""` when absent |
+| `sources` | `{apps, services, advanced, flatsnap}` — each live path in `~/.config/nixarchy`, or `null` when absent |
+| `unpinned` | `{drafts: ["packages/<name>.nix", …], flake: true}` |
+
+## `check [--dry-run]`
+
+`check` materialises the flake's tracked files and your selection into a
+private directory under `~/.local/state/nixarchy` and evaluates this machine's
+`nixosConfigurations.<host>.config.system.build.toplevel.drvPath`. With
+`--dry-run`, a passing evaluation also runs `nix build --dry-run`.
+
+```bash
+nixarchy-pkg check
+nixarchy-pkg check --dry-run
+```
+
+When `ok` is `true`, the answer always carries:
+
+| Field | Meaning |
+| --- | --- |
+| `host` | `uname -n` |
+| `verdict` | `evaluates`, `fails`, `superseded`, or `unknown` |
+| `fingerprint` | The selection snapshot's 64-digit SHA-256 |
+| `pins` | `{apps, services, advanced, flatsnap}` hashes from the checked snapshot |
+| `unpinned` | `{drafts: […], flake: true}` |
+| `blocked` | Drafts edited in the flake: `[{label, conflict: "blocks"}, …]` |
+| `note` | `"Checked evaluation only, not a build or a switch. This is evidence, not a guarantee: apply evaluates again for real."` (plus `" With import-from-derivation on, evaluating may have built some inputs."` when `allow-import-from-derivation` is `true`) |
+
+Additional fields appear when set:
+
+| Field | When present |
+| --- | --- |
+| `reason` | On `verdict: "unknown"`, why the check declined or timed out |
+| `drvPath` | After a successful evaluation (kept if the verdict then becomes `superseded`), the evaluated system `.drv` path |
+| `summary`, `error`, `at` | On `verdict: "fails"`, when Nix printed them: the one-line summary, the last 200 lines of rewritten error output, and `{file, line}` (or `null`) in `~/.config/nixarchy` |
+| `dryRun`, `dryRunError` | With `--dry-run` after `evaluates`: `{build, fetch, downloadMiB}` (or `null`), and the error string when the dry run failed |
+
+## `apply [--pin <part>=<sha256>]`
+
+`apply` accepts repeatable `--pin <part>=<sha256>` flags, where `<part>` is
+`apps`, `services`, `advanced`, or `flatsnap`, and `<sha256>` is 64 lowercase
+hex digits (or empty when the file must be absent):
+
+```bash
+nixarchy-pkg apply --pin apps=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef --pin flatsnap=
+```
+
+Each `--pin` is forwarded to `nixarchy-apply` as `--expect-sha256
+<part>=<sha256>`. If a file changed on disk since it was hashed, `apply` exits
+without copying or building and sets `nixarchyPkgApply.message` to:
+
+```
+a file changed since you reviewed it -- nothing was copied or built; look at the queue again
+```
+
 ## What is stable and what is not
 
 This page makes the output an interface, so it should say which parts.
 
 **Relied on:** `ok` on every object, and `error` when `ok` is false. The
 top-level keys of `state` — `apps`, `services`, `packages`, `options`,
-`drafts`, `files`, `channel`, `indexStale`. The `count` and `changes` of
-`pending`. Those are the shape, and changing them would be a breaking change.
+`drafts`, `files`, `channel`, `indexStale`. The `count`, `total`, `changes`,
+`files`, `fingerprint`, `pins`, `sources` and `unpinned` of `pending`, and the
+`verdict`, `fingerprint`, `pins`, `unpinned`, `blocked` and `note` of `check`.
+Those are the shape, and changing them would be a breaking change.
 
 **Not relied on:** the exact wording of any `message` or `error` string.
 Those are a writer's own words, passed through unaltered, and the writers

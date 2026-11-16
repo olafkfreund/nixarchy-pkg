@@ -19,6 +19,17 @@ Item {
   readonly property color dim: Qt.darker(fg, 1.6)
   readonly property string fontFamily: Style.font.family
 
+  // Queue rows say how much they matter: a conflict or a failed check is
+  // urgent, other check results stand out, notes recede.
+  function rowColor(row) {
+    if (!model || !model.queueTab) return fg
+    if (row.kind === "conflict" || (row.kind === "check" && row.verdict === "fails"))
+      return Commons.Color.urgent
+    if (row.kind === "check") return Commons.Color.accent
+    if (row.kind === "note" || row.kind === "writing") return dim
+    return fg
+  }
+
   readonly property real rowHeight: Math.round(Style.font.heading * 2.2)
   // Deliberately NOT derived from the list's contentHeight: the surface
   // sizes itself from this, the list sizes itself from the surface, and
@@ -175,12 +186,12 @@ Item {
                  ? Math.min(implicitWidth, parent.width)
                  : Math.min(implicitWidth, parent.width * 0.42)
           elide: Text.ElideRight
-          text: modelData.label || modelData.name || modelData.attr
+          text: modelData.text || modelData.label || modelData.name || modelData.attr
                 || modelData.path || modelData.id || ""
           textFormat: Text.PlainText
           font.family: root.fontFamily
           font.pixelSize: Style.font.heading
-          color: current ? Commons.Color.menu.selectedText : root.fg
+          color: current ? Commons.Color.menu.selectedText : root.rowColor(modelData)
         }
 
         // unfree, broken, and the curated cross-reference: picking the raw
@@ -337,6 +348,9 @@ Item {
         }
         text: {
           if (!root.model) return ""
+          if (root.model.queued === -1)
+            return root.model.queueError ? "queue unknown -- " + root.model.queueError
+                                         : "reading queue\u2026"
           if (root.model.queued === 0) return "nothing queued"
           var n = root.model.queued
           return n + (n === 1 ? " change queued" : " changes queued")

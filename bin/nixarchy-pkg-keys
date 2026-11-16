@@ -68,6 +68,17 @@ ESCAPE                     -> Cancel
                               An untouched field writes nothing: the value
                               shown is the option's own default or example,
                               and leaving it alone keeps the default
+-- Queue --------------------------
+c                          -> Check: evaluate what apply would build, on a
+                              private copy. Nothing is switched. About a minute
+SHIFT + C                  -> The same, then ask what a build would fetch
+                              (a dry run)
+r                          -> On this tab, read the queue again (elsewhere it
+                              rebuilds the search index)
+RETURN                     -> Open the row's file in your editor, or show what
+                              changed when it has no file of its own. Any key
+                              puts that view away
+ESCAPE                     -> Stop a check that is running, then as usual
 -- While applying -----------------
 j / k, PAGE UP / PAGE DOWN -> Scroll the build log. Scrolling back stops it
                               following the build; END follows again

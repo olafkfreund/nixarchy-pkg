@@ -91,7 +91,9 @@ above. Knowing about it is the mitigation.
 
 ## What applying actually does
 
-`nixarchy-apply` copies the three files into your flake directory — to
+`nixarchy-apply` copies your selection files -- `apps.nix`, `services.nix`,
+`advanced.nix`, `flatsnap.nix` when it exists, and every draft in
+`packages/` -- into your flake directory — to
 `hosts/<hostname>/nixarchy/` if that exists, beside the flake otherwise — and
 rebuilds.
 
@@ -99,6 +101,12 @@ The copy exists because a flake cannot read a file outside its own tree.
 Comparing your files against that copy is what produces the queued count, and
 it is an honest answer to "what would apply change?" rather than something
 this tool remembers.
+
+Checking (`c` on the Queue tab, or `nixarchy-pkg check`) copies the flake's
+tracked files plus your selection into a private directory under
+`~/.local/state/nixarchy` and evaluates this machine's configuration. That
+puts them in the world-readable Nix store, as apply does; it never builds the
+system, never switches, and never needs root.
 
 ## Writing safely
 

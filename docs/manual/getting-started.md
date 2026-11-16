@@ -97,8 +97,9 @@ ripgrep  #@pkg ripgrep
 That is the whole of it. A file you own, one line, with a marker saying who
 wrote it.
 
-4. Press `a`, and `a` again. The first press only says what will happen
-   -- a rebuild of the whole system -- and any other key cancels it.
+4. Press `a`, and `a` again. The first press reads the queue ("reading the
+   queue…") and then says what will happen -- "a again to rebuild: 1 change"
+   -- and any other key cancels it.
 
 Now it builds. The card fills with the build log — this is `nixarchy-apply`,
 and it will ask for a password through your polkit agent. When it finishes,

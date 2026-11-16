@@ -24,7 +24,7 @@ TestCase {
   property var fakeModel: ({
     tabs: ["S"], tab: 0, cursor: 0, count: 3,
     rows: function () { return theRows },
-    busy: false, message: "", queued: 0, indexStale: false, neverApplied: false,
+    busy: false, message: "", queued: 0, queueError: "", queueTab: false, indexStale: false, neverApplied: false,
     showingLog: false, applyLog: "", applying: false
   })
 
@@ -71,5 +71,30 @@ TestCase {
       verify(summary.width >= 0,
              theRows[n].flags.length + " flag(s): width must never be negative")
     }
+  }
+
+  function footerText() {
+    var out = []
+    function walk(it) {
+      if (!it) return
+      if (it.hasOwnProperty("text") && /queue|queued/.test(String(it.text))) out.push(String(it.text))
+      for (var i = 0; i < it.children.length; i++) walk(it.children[i])
+    }
+    walk(card)
+    return out.join("|")
+  }
+
+  // #60: unknown is not zero.
+  function test_footer_says_when_the_queue_is_unknown() {
+    fakeModel.queued = -1; fakeModel.queueError = "boom"
+    card.model = null; card.model = fakeModel
+    verify(footerText().indexOf("queue unknown -- boom") >= 0, footerText())
+    fakeModel.queueError = ""
+    card.model = null; card.model = fakeModel
+    verify(footerText().indexOf("reading queue") >= 0, footerText())
+    verify(footerText().indexOf("nothing queued") < 0, footerText())
+    fakeModel.queued = 0
+    card.model = null; card.model = fakeModel
+    verify(footerText().indexOf("nothing queued") >= 0, footerText())
   }
 }

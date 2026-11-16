@@ -25,7 +25,7 @@ QtObject {
   readonly property string script:
     Qt.resolvedUrl("bin/nixarchy-pkg").toString().replace(/^file:\/\//, "")
 
-  readonly property var tabs: ["Apps", "Services", "Selection", "Options", "Drafts", "Flakes"]
+  readonly property var tabs: ["Apps", "Services", "Selection", "Options", "Drafts", "Flakes", "Queue"]
   property int tab: 0
   readonly property string tabName: tabs[tab]
 
@@ -44,7 +44,34 @@ QtObject {
   property bool inspecting: false
 
   property int cursor: 0
-  property int queued: 0
+  // -1 is "not known": no answer yet, or the last one was an error. 0 is
+  // the truth that nothing is queued, and the two must not be confused.
+  property int queued: -1
+  property var pendingData: null
+  property string queueError: ""
+  property var checkResult: null
+  property bool checkRunning: false
+  property string detailText: ""
+  // "" | "reading" | "armed". The pins an apply sends are frozen from a
+  // fresh read at arming time, so what is built is what was shown.
+  property string armingState: ""
+  property string armedKind: ""
+  property var armedPins: ({})
+  property string armedFingerprint: ""
+  property int _pendingWant: 0
+  property int _pendingRun: 0
+  property int _armWant: 0
+  property bool _pendingAgain: false
+  // False from a pending run's start until its answer is absorbed, so a
+  // rerun never starts before the answer it follows (exit and stdout come
+  // in either order).
+  property bool _pendingAbsorbed: true
+  // A check's answer counts only while its run is the current one; check()
+  // and cancelCheck() both move _checkToken on.
+  property int _checkToken: 0
+  property int _checkRun: 0
+  property string _afterCheck: ""
+  property var _deferredArgs: []
   property bool neverApplied: false
   property bool indexStale: false
   property bool busy: false
@@ -76,6 +103,8 @@ QtObject {
   // Menu.qml restores the flakeref to the field on ESC, on purpose, so the
   // two cancellations cannot share one notification (#43).
   signal namingAbandoned()
+  // The terminal apply really started (it may wait for a running check).
+  signal terminalStarted()
 
   // ---- what the current tab shows -------------------------------------
 
@@ -86,6 +115,7 @@ QtObject {
   readonly property bool searching: query.length > 0
   readonly property bool indexTab: tab === 2 || tab === 3
   readonly property bool flakeTab: tab === 5
+  readonly property bool queueTab: tab === 6
 
   function rows() {
     if (indexTab && searching) return results
@@ -96,6 +126,7 @@ QtObject {
       case 3: return state.options || []
       case 4: return state.drafts || []
       case 5: return flakeRows()
+      case 6: return queueRows()
     }
     return []
   }
@@ -143,6 +174,76 @@ QtObject {
     })
   }
 
+  // The Queue tab. The model builds every text; the view only draws it.
+  function queueRows() {
+    var out = []
+    var cr = checkResult
+    if (cr) {
+      var t
+      if (cr.verdict === "evaluates") {
+        t = "evaluates \u2713"
+        if (cr.dryRun)
+          t += " -- " + cr.dryRun.build + " to build, " + cr.dryRun.fetch
+             + " to fetch (" + cr.dryRun.downloadMiB + " MiB)"
+        if (cr.dryRunError) t += " -- dry run: " + cr.dryRunError
+        var bl = cr.blocked || []
+        for (var b = 0; b < bl.length; b++)
+          t += " -- apply will stop: " + (bl[b].label || bl[b]) + " was edited in the flake"
+      } else if (cr.verdict === "fails") {
+        t = "fails: " + (cr.summary || "")
+        if (cr.at) t += " (" + cr.at.file + (cr.at.line !== null && cr.at.line !== undefined ? ":" + cr.at.line : "") + ", as checked)"
+      } else if (cr.verdict === "superseded") {
+        t = "superseded -- press c again"
+      } else {
+        t = "could not check: " + (cr.reason || "")
+      }
+      out.push({ kind: "check", verdict: cr.verdict, text: t, path: null, detail: cr.error || cr.reason || "" })
+    } else if (checkRunning) {
+      out.push({ kind: "check", verdict: "running", text: "checking\u2026 (about a minute) -- ESC cancels", path: null, detail: "" })
+    }
+    var pd = pendingData
+    if (!pd) return out
+    var files = pd.files || []
+    var i
+    for (i = 0; i < files.length; i++) {
+      var f = files[i]
+      if (f.conflict === "overwrite")
+        out.push({ kind: "conflict", path: null, detail: f.hunk || "",
+                   text: f.label + " was edited in the flake -- apply will keep a copy and overwrite it" })
+      else if (f.conflict === "blocks")
+        out.push({ kind: "conflict", path: null, detail: f.hunk || "",
+                   text: f.label + " was edited in the flake -- apply will stop" })
+    }
+    if (pd.writing === true)
+      out.push({ kind: "writing", path: null, detail: "",
+                 text: "a write is in progress or was interrupted -- the queue may be out of date" })
+    var verbs = { on: "on", off: "off", added: "added", removed: "removed", modified: "changed" }
+    var changes = pd.changes || []
+    for (i = 0; i < changes.length; i++) {
+      var c = changes[i]
+      var name = String(c.marker).replace(/^[^:]*:/, "")
+      var where = c.file + ".nix" + (typeof c.lineNo === "number" ? ":" + c.lineNo : "")
+      var live = (c.change === "on" || c.change === "added" || c.change === "modified")
+      out.push({ kind: "change", detail: c.line || "",
+                 text: name + " " + (verbs[c.change] || c.change) + " (" + where + ")",
+                 path: live && pd.sources && pd.sources[c.file] ? pd.sources[c.file] : null })
+    }
+    for (i = 0; i < files.length; i++) {
+      var g = files[i]
+      if (g.explained !== false) continue
+      var what = g.status === "new" ? "new"
+               : g.status === "dropped" ? "no longer imported"
+               : g.unmarked > 0 ? g.unmarked + " lines changed"
+               : "whitespace or comments changed"
+      out.push({ kind: "file", text: g.label + ": " + what, detail: g.hunk || "",
+                 path: g.status === "dropped" ? null : (g.path || null) })
+    }
+    var dr = (pd.unpinned && pd.unpinned.drafts) || []
+    out.push({ kind: "note", path: null, detail: "",
+               text: "not pinned: the flake's own files" + (dr.length > 0 ? ", and drafts: " + dr.join(", ") : "") })
+    return out
+  }
+
   function filtered(list) {
     if (!searching) return list
     var q = query.toLowerCase()
@@ -162,32 +263,40 @@ QtObject {
 
   function disarm() {
     if (armedChannel !== "") { armedChannel = ""; message = "" }
-    if (armedApply !== "") { armedApply = ""; _applyArmTimer.stop(); message = "" }
+    if (armingState !== "" || armedKind !== "" || armedApply !== "") {
+      armingState = ""; armedKind = ""; armedPins = ({}); armedFingerprint = ""
+      armedApply = ""; _applyArmTimer.stop(); message = ""
+    }
   }
 
   // `a` rebuilds the whole system, so it takes two presses, the way
-  // SHIFT+RETURN does above: the first says what will happen, the second
-  // does it (#27). A stray `a` -- one typed while the keyboard was not
-  // where it looked -- once asked for a full apply. "here" is the panel's
-  // own apply, "terminal" the SHIFT+A route.
+  // SHIFT+RETURN does above (#27). The first press reads the queue afresh
+  // and freezes what it will send; the second does it. "here" is the
+  // panel's own apply, "terminal" the SHIFT+A route. armedApply mirrors
+  // armedKind only while armed, which is what Menu.qml's cancel reads.
   property string armedApply: ""
   property Timer _applyArmTimer: Timer {
     interval: 5000
     onTriggered: root.disarm()
   }
 
-  // True when this press is the second one and the apply should run.
+  // True when this press is the confirming one. armedPins stay set for
+  // apply() / applyInTerminal() to read, and they disarm().
   function armApply(kind) {
-    if (armedApply === kind) {
-      armedApply = ""; _applyArmTimer.stop(); message = ""
+    if (armingState === "armed" && kind === armedKind) {
+      _applyArmTimer.stop()
+      armingState = ""; armedApply = ""; message = ""
       return true
     }
+    if (armingState === "reading") { message = "still reading the queue"; return false }
+    if (queued === -1 && queueError) { message = "queue unknown -- open the Queue tab and press r"; return false }
     disarm()
-    armedApply = kind
-    message = (kind === "terminal" ? "SHIFT+A again" : "a again")
-      + " to rebuild the system"
-      + (kind === "terminal" ? " in a terminal" : "")
-      + " \u2014 any other key cancels"
+    armingState = "reading"
+    armedKind = kind
+    message = "reading the queue\u2026"
+    refreshPending()
+    _armWant = _pendingWant
+    // So a read that never answers cannot leave "reading" up for good.
     _applyArmTimer.restart()
     return false
   }
@@ -290,17 +399,74 @@ QtObject {
   }
 
   property Process _pending: Process {
+    onExited: root._pendingRerun()
     stdout: StdioCollector {
-      onStreamFinished: {
-        try {
-          var data = JSON.parse(text)
-          if (data.ok) {
-            root.queued = data.count || 0
-            root.neverApplied = data.neverApplied === true
-          }
-        } catch (e) { /* a count is not worth a message */ }
-      }
+      onStreamFinished: root._absorbPending(text)
     }
+  }
+
+  // Invalidation and arming hang off this answer, not off refreshed():
+  // _absorb emits refreshed() before the pending read has returned.
+  function _absorbPending(text) {
+    _pendingAbsorbed = true
+    var data
+    try { data = JSON.parse(text) } catch (e) { data = null }
+    if (data === null || typeof data !== "object") data = { ok: false }
+    if (data.ok === true) {
+      pendingData = data
+      queued = (typeof data.total === "number") ? data.total : -1
+      neverApplied = data.neverApplied === true
+      queueError = ""
+    } else {
+      queued = -1
+      queueError = data.error || "could not read the queue"
+    }
+
+    if (checkResult && checkResult.fingerprint && data.fingerprint
+        && checkResult.fingerprint !== data.fingerprint)
+      checkResult = null
+
+    if (armingState === "reading" && _pendingRun >= _armWant) {
+      if (data.ok !== true) {
+        disarm()
+        message = queueError
+      } else if (data.writing === true) {
+        disarm()
+        message = "a write is in progress -- try again in a moment"
+      } else {
+        var cr = checkResult
+        armedPins = (cr && cr.verdict === "evaluates" && cr.fingerprint === data.fingerprint)
+          ? cr.pins : data.pins
+        armedFingerprint = data.fingerprint
+        armingState = "armed"
+        armedApply = armedKind
+        var n = 0, fl = data.files || []
+        for (var i = 0; i < fl.length; i++) if (fl[i].conflict) n++
+        message = (armedKind === "terminal" ? "SHIFT+A again" : "a again")
+          + " to rebuild: " + data.total + (data.total === 1 ? " change" : " changes")
+          + (n ? " -- " + n + " edited in the flake" : "") + " -- any other key cancels"
+        _applyArmTimer.restart()
+      }
+    } else if (armingState === "armed" && data.fingerprint !== armedFingerprint) {
+      disarm()
+      message = "the queue changed -- review it again"
+    }
+    _pendingRerun()
+  }
+
+  // Starting a running Process is a no-op, so a read asked for meanwhile
+  // runs once this one has both exited and been absorbed.
+  function _pendingRerun() {
+    if (!_pendingAgain || _pending.running || !_pendingAbsorbed) return
+    _pendingAgain = false
+    _pendingStart()
+  }
+
+  function _pendingStart() {
+    _pendingRun = _pendingWant
+    _pendingAbsorbed = false
+    _pending.command = [script, "pending"]
+    _pending.running = true
   }
 
   function refresh() {
@@ -310,8 +476,56 @@ QtObject {
   }
 
   function refreshPending() {
-    _pending.command = [script, "pending"]
-    _pending.running = true
+    _pendingWant++
+    if (_pending.running || !_pendingAbsorbed) { _pendingAgain = true; return }
+    _pendingStart()
+  }
+
+  // ---- the check -------------------------------------------------------
+
+  property Process _check: Process {
+    onExited: function (code, status) {
+      root.checkRunning = false
+      if (root._afterCheck !== "") {
+        var after = root._afterCheck
+        root._afterCheck = ""
+        if (after === "here") root._startApply(root._deferredArgs)
+        else root._startTerminal(root._deferredArgs)
+      }
+    }
+    stdout: StdioCollector {
+      onStreamFinished: {
+        if (root._checkRun !== root._checkToken) return
+        var data = null
+        try { data = JSON.parse(text) } catch (e) { data = null }
+        if (data === null || typeof data !== "object" || data.ok === false)
+          root.checkResult = { verdict: "unknown",
+                               reason: (data && data.error) || "the check did not answer" }
+        else {
+          if (root.pendingData && data.fingerprint
+              && (data.verdict === "evaluates" || data.verdict === "fails")
+              && data.fingerprint !== root.pendingData.fingerprint)
+            data.verdict = "superseded"
+          root.checkResult = data
+        }
+      }
+    }
+  }
+
+  function check(dry) {
+    if (checkRunning || applying) return
+    _check.command = dry ? [script, "check", "--dry-run"] : [script, "check"]
+    checkResult = null
+    checkRunning = true
+    _checkRun = ++_checkToken
+    _check.running = true
+  }
+
+  function cancelCheck() {
+    if (!checkRunning) return
+    _checkToken++
+    checkResult = null
+    _check.running = false
   }
 
   // Typing is debounced, because a keystroke costs a grep over 138k rows
@@ -618,6 +832,9 @@ QtObject {
       message = busy ? "still writing \u2014 try again in a moment" : ""
       return
     }
+    var args = [script, "apply"]
+    for (var p in armedPins) args.push("--pin", p + "=" + armedPins[p])
+    disarm()
     _applyDone = false
     // Something on screen at once: evaluation can be silent for tens of
     // seconds before the first line of the build arrives.
@@ -625,7 +842,12 @@ QtObject {
     logDetached = false
     applying = true
     message = ""
-    _apply.command = [script, "apply"]
+    if (checkRunning) { _afterCheck = "here"; _deferredArgs = args; cancelCheck() }
+    else _startApply(args)
+  }
+
+  function _startApply(args) {
+    _apply.command = args
     _apply.running = true
   }
 
@@ -642,8 +864,18 @@ QtObject {
   function applyInTerminal() {
     if (applying) { message = "an apply is running \u2014 wait for it to finish"; return false }
     if (busy) { message = "still writing \u2014 try again in a moment"; return false }
-    _applyTerm.running = true
+    var cmd = ["omarchy-launch-floating-terminal-with-presentation", "nixarchy-apply"]
+    for (var p in armedPins) cmd.push("--expect-sha256=" + p + "=" + armedPins[p])
+    disarm()
+    if (checkRunning) { _afterCheck = "terminal"; _deferredArgs = cmd; cancelCheck() }
+    else _startTerminal(cmd)
     return true
+  }
+
+  function _startTerminal(cmd) {
+    _applyTerm.command = cmd
+    _applyTerm.running = true
+    terminalStarted()
   }
 
   // Detaching from the log leaves the build running: it is elevating,
