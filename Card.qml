@@ -48,7 +48,7 @@ Item {
     if (root.model && root.model.tab <= 1) {
       // Groups, blank line between: a missing field must not leave a gap.
       // The catalogue's label already ends "(Category)"; don't say it twice.
-      const cat = (r.label || "").indexOf(r.category) < 0 ? r.category : ""
+      const cat = r.category && (r.label || "").indexOf("(" + r.category + ")") < 0 ? r.category : ""
       return [[r.label, cat], [r.note], [r.line]]
              .map(g => g.filter(x => x).join("\n"))
              .filter(x => x).join("\n\n")

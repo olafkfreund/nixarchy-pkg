@@ -19,9 +19,9 @@ TestCase {
     { id: "two",  label: "steam", summary: "Digital distribution platform",
       flags: ["unfree", "curated:steam"],
       preview: "steam  1.0\nctrl-t tries it now\nversion:  1.0" },
-    { id: "one",  label: "one",   summary: "one flag here", flags: ["unfree"],
-      note: "a note" },
-    { id: "none", label: "plain", summary: "no flags here", flags: [] }
+    { id: "one",  label: "one (Terminal)", category: "Terminal",
+      summary: "one flag here", flags: ["unfree"], note: "a note" },
+    { id: "none", label: "Gamescope", category: "Game", summary: "no flags here", flags: [] }
   ]
   // A QtObject, so a test can set tab and cursor and Card sees it change.
   QtObject {
@@ -163,9 +163,10 @@ TestCase {
     checkSummaries()
     var img = find(lv.itemAtIndex(0), "QQuickImage")
     verify(img.visible, "tab 0 must reserve the icon column")
+    verify(img.source.toString() !== "", "a found icon is drawn")
     // A missing icon must not be requested at all: image://icon/ answers
     // with a checkerboard that reports itself Ready.
-    compare(img.source.toString(), "")
+    compare(find(lv.itemAtIndex(1), "QQuickImage").source.toString(), "")
     fakeModel.tab = 2
     checkSummaries()
     verify(!find(lv.itemAtIndex(0), "QQuickImage").visible,
@@ -178,7 +179,10 @@ TestCase {
     var pane = byName(card, "preview")
     fakeModel.cursor = 1
     tryCompare(pane, "visible", true)
-    compare(textOf(pane), "one\n\na note")
+    compare(textOf(pane), "one (Terminal)\n\na note", "a category the label shows is not repeated")
+    fakeModel.cursor = 2
+    tryCompare(pane, "visible", true)
+    compare(textOf(pane), "Gamescope\nGame", "a category that is only a substring is kept")
   }
 
   function test_preview_shows_and_filters() {

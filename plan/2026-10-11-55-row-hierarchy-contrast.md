@@ -188,6 +188,15 @@ spec: spec/2026-10-11-55-row-hierarchy-contrast.md
    - The composed preview drops `category` when the label already
      contains it, because catalogue labels read "Alacritty (Terminal)".
 
+5c. **Fixes from the final Opus review (session model, 2026-11-16).**
+   - The category is dropped only when the label contains "(<category>)",
+     not any substring ("Gamescope" keeps "Game").
+   - The test stub's `iconPath` finds one icon, so the test proves a found
+     icon is drawn as well as a missing one being skipped.
+   - Rebased onto main after #60: bare `Color.` became `Commons.Color.`
+     (Qt 6.12, #58), and a row name keeps #60's `rowColor` with
+     `Font.Medium`.
+
 6. **By eye, then screenshots (done by the session model with the user,
    not the coder).**
    - Install the branch build and open the menu on one dark and one light
