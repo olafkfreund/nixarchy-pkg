@@ -641,6 +641,11 @@ check "the fixture catalogue answers a boolean" \
 check "and says so for an option it lacks" \
   jq -e '.ok == false' <<<"$(fx opt describe t.nope)"
 check "port bounds are strings" jq -e '.min == "0" and .max == "65535"' <<<"$(fx opt describe t.port)"
+check "password has a file alternative" jq -e '.sensitive == true and .fileOption == "t.passwordFile"' <<<"$(fx opt describe t.password)"
+check "password file sibling is not sensitive" jq -e '.sensitive == false' <<<"$(fx opt describe t.passwordFile)"
+check "token has no file alternative" jq -e '.sensitive == true and .fileOption == null' <<<"$(fx opt describe t.token)"
+check "boolean token is not sensitive" jq -e '.sensitive == false' <<<"$(fx opt describe t.enableToken)"
+check "boolean is not sensitive" jq -e '.sensitive == false and .fileOption == null' <<<"$(fx opt describe t.bool)"
 check "signed integer bounds are strings" jq -e '.min == "-9223372036854775808" and .max == "9223372036854775807"' <<<"$(fx opt describe t.int)"
 
 CONFIG=$(fresh_config); export XDG_CONFIG_HOME="$CONFIG"
