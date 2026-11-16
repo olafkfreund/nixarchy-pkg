@@ -210,9 +210,23 @@ TestCase {
   }
 
   function test_preview_hidden_without_text() {
+    failOnWarning(/Binding loop detected/)
     var pane = byName(card, "preview")
     fakeModel.tab = 2
     fakeModel.cursor = 2
     tryCompare(pane, "visible", false)
+  }
+
+  function test_selection_tab_has_no_binding_loop() {
+    failOnWarning(/Binding loop detected/)
+    var scope = byName(card, "scope")
+    fakeModel.tab = 2
+    verify(scope.height > 0)
+    win.width = 300; wait(0)
+    var narrow = scope.height
+    win.width = 800; wait(0)
+    verify(narrow > scope.height, "the line wraps at 300 px")
+    fakeModel.tab = 0
+    compare(scope.height, 0)
   }
 }

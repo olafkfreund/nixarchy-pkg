@@ -126,17 +126,26 @@ Item {
   //
   // "selection" is the writers' own word, not a new one: nixarchy-pkg-remove
   // says "removed from your selection" and counts what is "still selected".
-  Text {
+  //
+  // An Item owns the height: a wrapping Text's implicitHeight depends on its
+  // own geometry, so binding its height to it loops (#57).
+  Item {
     id: scope
+    objectName: "scope"
     anchors { top: header.bottom; left: parent.left; right: parent.right }
-    visible: root.model && root.model.tab === 2 && !root.model.searching
-    height: visible ? implicitHeight + Style.space(6) : 0
-    text: "packages nixarchy manages \u2014 not everything installed"
-    textFormat: Text.PlainText
-    wrapMode: Text.Wrap
-    font.family: root.fontFamily
-    font.pixelSize: Style.font.title
-    color: root.dim
+    visible: Boolean(root.model && root.model.tab === 2 && !root.model.searching)
+    height: visible ? scopeText.implicitHeight + Style.space(6) : 0
+
+    Text {
+      id: scopeText
+      width: parent.width
+      text: "packages nixarchy manages \u2014 not everything installed"
+      textFormat: Text.PlainText
+      wrapMode: Text.Wrap
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.title
+      color: root.dim
+    }
   }
 
   // ---- the list -------------------------------------------------------
