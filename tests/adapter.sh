@@ -200,6 +200,26 @@ fresh_flake() {
   printf '%s' "$d"
 }
 
+# The machine channel. The flat `inputs.nixpkgs.url` form is read only where
+# the writer's own parse (the block-shaped line) finds nothing (#63 A5).
+FK=$(fresh_flake)
+printf '{\n  inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";\n  outputs = _: {};\n}\n' > "$FK/flake.nix"
+check "a flat nixpkgs url names the channel" \
+  jq -e '.channel == "unstable"' <<<"$(NIXARCHY_FLAKE="$FK" "$ADAPTER" state)"
+printf '{\n  inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-25.05";\n  inputs = {\n    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";\n  };\n}\n' > "$FK/flake.nix"
+check "the writer's line wins over a flat one" \
+  jq -e '.channel == "unstable"' <<<"$(NIXARCHY_FLAKE="$FK" "$ADAPTER" state)"
+
+# The panel names the directory it reads (#63 A6).
+FK=$(fresh_flake)
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" state)
+# shellcheck disable=SC2016
+check "state names the flake directory" \
+  jq -e --arg d "$FK" '.flakeDir == $d and .flakeFound == true' <<<"$out"
+out=$(NIXARCHY_FLAKE="$FLAKE_TMP/missing" "$ADAPTER" state)
+check "state says when there is no flake.nix" \
+  jq -e '.flakeFound == false' <<<"$out"
+
 # FIRST, because the whole design rests on it: a path assignment merges
 # with an attrset that already exists, so an input can be declared by
 # appending one top-level line rather than editing the inputs block.
@@ -210,10 +230,7 @@ check "a path assignment merges with an existing attrset" \
 FK=$(fresh_flake)
 out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake add lib "path:$FLAKE_TMP/lib" 2>&1 || true)
 check "declares an input"            jq -e '.ok == true'          <<<"$out"
-check "shows the import rather than writing it" \
-                                     jq -e '.import == "inputs.lib.nixosModules.default"' <<<"$out"
-check "says it does not know the host file" \
-                                     jq -e '.importNote | length > 0' <<<"$out"
+check "does not guess an import" jq -e 'has("import") | not' <<<"$out"
 check "writes exactly one marked line" \
   test "$(grep -c '#@flake-input lib$' "$FK/flake.nix")" = 1
 check "leaves the existing inputs block alone" \

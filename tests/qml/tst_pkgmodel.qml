@@ -30,6 +30,9 @@ TestCase {
     m.checkRunning = false
     m.detailText = ""
     m.disarm()
+    m.pendingDeclare = null
+    m.armedFlake = ""
+    m.inspected = null
     m.armingState = ""
     m._pendingWant = 0
     m._pendingRun = 0
@@ -169,6 +172,47 @@ TestCase {
 
     compare(m.naming, false)
     compare(abandoned, 0, "ESC cancels without abandoning -- the field keeps the ref")
+  }
+
+  function test_declare_keeps_inspection_across_read_and_quotes_module() {
+    m.setTab(5)
+    m.inspected = { ref: "path:/tmp/x", ok: true, nixosModules: ["odd.${name}"] }
+    m.beginNaming()
+    compare(m.declareAs("tool"), true)
+    compare(m.inspected, null)
+    m._reader.deliver(JSON.stringify({ ok: true, apps: [], services: [] }))
+    verify(m.pendingDeclare !== null, "a read cannot consume the pending declaration")
+    m._writer.deliver(JSON.stringify({ ok: true, name: "tool", url: "path:/tmp/x", message: "declared" }))
+    compare(m.pendingDeclare, null)
+    compare(m.inspected.declaredAs, "tool")
+    compare(m.message, 'declared tool. To use it, add inputs.tool.nixosModules."odd.\\${name}" to the imports of the host that should have it -- this tool does not know which file that is')
+  }
+
+  function test_declare_late_answer_after_tab_switch() {
+    m.setTab(5)
+    m.inspected = { ref: "path:/tmp/x", ok: true, nixosModules: ["default"] }
+    m.beginNaming()
+    compare(m.declareAs("tool"), true)
+    m.query = "old"
+    m.results = [{ name: "old" }]
+    m.setTab(2)
+    compare(m.query, "")
+    compare(m.results.length, 0)
+    compare(m.pendingDeclare, null)
+    m._writer.deliver(JSON.stringify({ ok: true, name: "tool", url: "path:/tmp/x", message: "declared" }))
+    compare(m.inspected, null)
+    compare(m.message, "declared")
+  }
+
+  function test_other_write_cannot_claim_pending_declaration() {
+    m.setTab(5)
+    m.inspected = { ref: "path:/tmp/x", ok: true, nixosModules: ["default"] }
+    m.beginNaming()
+    compare(m.declareAs("tool"), true)
+    m._writer.deliver(JSON.stringify({ ok: true, name: "tool", url: "path:/tmp/other", message: "other write" }))
+    compare(m.pendingDeclare, null)
+    compare(m.inspected, null)
+    compare(m.message, "other write")
   }
 
   // #43: search and state shared one Process, and assigning .command while
@@ -468,5 +512,42 @@ TestCase {
     compare(m.rows().map(function (r) { return r.id }).join(), "x,z,y")
     compare(m.rows().map(function (r) { return r.section }).join("|"),
             "constructor|constructor|__proto__")
+  }
+
+  function test_setTab_clears_the_search() {
+    m.setTab(2)
+    m.query = "x"
+    m.results = [{ name: "x" }]
+    m.setTab(3)
+    compare(m.query, "")
+    compare(m.results.length, 0)
+  }
+
+  function test_armFlake_removes_on_the_second_press() {
+    m.setTab(5)
+    m.state = { flakeDir: "/f", flakeFound: true,
+                flakes: [{ name: "a", url: "u" }, { name: "b", url: "v" }] }
+    m.cursor = 1                     // row 0 is the directory head
+    verify(m.armFlake("remove"))
+    compare(m.armedFlake, "remove:a")
+    m.cursor = 2
+    verify(m.armFlake("remove"), "another row arms afresh")
+    compare(m.armedFlake, "remove:b")
+    m.disarm()
+    compare(m.armedFlake, "")
+    m.armFlake("remove")
+    m.armFlake("remove")
+    compare(m._writer.command.slice(1), ["flake", "remove", "b"])
+  }
+
+  function test_addFromOtherChannel_refuses_when_channel_unknown() {
+    m.setTab(2)
+    m.state = { channel: "custom", flakeDir: "/f" }
+    m.query = "vlc"
+    m.results = [{ name: "vlc" }]
+    m.addFromOtherChannel()
+    m.addFromOtherChannel()
+    compare(m._writer.running, false)
+    compare(m.armedChannel, "")
   }
 }

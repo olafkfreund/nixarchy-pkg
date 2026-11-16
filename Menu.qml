@@ -228,6 +228,11 @@ Item {
               && event.key !== Qt.Key_Alt && event.key !== Qt.Key_Meta
               && event.key !== Qt.Key_Super_L && event.key !== Qt.Key_Super_R)
             pkg.disarm()
+          if (pkg.armedFlake !== "" && event.key !== Qt.Key_Space && event.key !== Qt.Key_U
+              && event.key !== Qt.Key_Shift && event.key !== Qt.Key_Control
+              && event.key !== Qt.Key_Alt && event.key !== Qt.Key_Meta
+              && event.key !== Qt.Key_Super_L && event.key !== Qt.Key_Super_R)
+            pkg.disarm()
 
           // Naming an input: RETURN declares with the name in the field,
           // ESC goes back to the inspection with the flakeref restored.
@@ -292,7 +297,11 @@ Item {
             case Qt.Key_Space:
               // Space toggles only where a row has two states; in a search
               // field it is a space, so the field handles it first.
-              if (!search.activeFocus) { pkg.activate(); event.accepted = true; return }
+              if (!search.activeFocus) {
+                if (pkg.flakeTab) { if (!event.isAutoRepeat) pkg.armFlake("remove") }
+                else pkg.activate()
+                event.accepted = true; return
+              }
               break
           }
 
@@ -366,6 +375,7 @@ Item {
         Connections {
           target: pkg
           function onTabChanged() {
+            search.text = ""
             if (pkg.flakeTab) search.forceActiveFocus()
             else root.focusList()
           }
