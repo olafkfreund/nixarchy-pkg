@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 64
 intent: intent/2026-11-16-64-review-ui-docs.md
 ---
