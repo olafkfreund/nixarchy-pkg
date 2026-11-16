@@ -15,6 +15,9 @@ TestCase {
 
   function cleanup() {
     m.busy = false
+    m.reindexing = false
+    m._reindexAnswered = false
+    m._reindexer.running = false
     m.applying = false
     m.message = ""
     m._applyTerm.running = false
@@ -68,8 +71,44 @@ TestCase {
   // #59: reindex writes only the cache, so an apply does not block it.
   function test_reindex_not_refused_while_applying() {
     m.applying = true
+    compare(m.reindex(), true)
+    compare(m.reindexing, true)
+    compare(m.busy, false, "reindex does not occupy the writer")
+  }
+
+  function test_write_during_reindex_starts() {
+    compare(m.reindex(), true)
+    compare(m.write(["toggle", "app", "x"]), true)
+  }
+
+  function test_second_reindex_refused() {
+    compare(m.reindex(), true)
+    compare(m.reindex(), false)
+    compare(m.message, "already rebuilding the index")
+  }
+
+  function test_reindex_answer_sets_index_stale() {
+    m.indexStale = true
+    m._reader.running = false
+    m._absorb(JSON.stringify({ok:true, indexStale:false, message:"index rebuilt"}), false)
+    compare(m.indexStale, false)
+    compare(m._reader.running, false)
+  }
+
+  function test_reindex_death_is_reported() {
     m.reindex()
-    compare(m.busy, true, "the reindex started")
+    m._reindexer.finish(1)
+    compare(m.reindexing, false)
+    verify(m.message.indexOf("ended without answering") >= 0)
+  }
+
+  function test_reindex_answer_unblocks() {
+    m.reindex()
+    m._reindexer.deliver(JSON.stringify({ok:true, indexStale:false, message:"index rebuilt"}))
+    m._reindexer.finish(0)
+    compare(m.reindexing, false)
+    compare(m.indexStale, false)
+    compare(m.message, "index rebuilt")
   }
 
   // #59: the terminal apply must not start under a running write.
@@ -377,6 +416,17 @@ TestCase {
     m.results = []
   }
 
+  function test_catalogue_search_all_words_and_blank_query() {
+    var rows = [{ id: "alpha", label: "Beta", category: "tools" },
+                { id: "alpha", label: "Gamma", category: "tools" }]
+    m.query = "b a"
+    compare(m.filtered(rows).length, 1)
+    compare(m.filtered(rows)[0].label, "Beta")
+    m.query = "   "
+    compare(m.searching, false)
+    compare(m.filtered(rows).length, 2)
+  }
+
   // #75: whatever shrank the rows, the cursor must still name a row.
   function test_cancel_check_clamps_cursor() {
     m.setTab(6)
@@ -397,5 +447,26 @@ TestCase {
     verify(m.cursor >= 2)
     m.beginNaming()
     compare(m.cursor, 0)
+  }
+
+  function test_catalogue_rows_group_and_settings_last() {
+    m.state = { apps: [{ id: "a", category: "A" }, { id: "b", category: "B" },
+                       { id: "c", category: "A" },
+                       { id: "s.settings", category: "A", settings: true }] }
+    m.setTab(0)
+    compare(m.rows().map(function (r) { return r.id }).join(), "a,c,b,s.settings")
+    compare(m.rows().map(function (r) { return r.section }).join("|"),
+            "A|A|B|settings \u2014 edit in apps.nix")
+    compare(m.rowAt(3).settings, true)
+    m.cursor = 3
+    m.activate()
+    verify(m.message.indexOf("configures") >= 0, "it explains instead of toggling")
+    compare(m.busy, false, "and starts no write")
+
+    m.state = { apps: [{ id: "x", category: "constructor" }, { id: "y", category: "__proto__" },
+                       { id: "z", category: "constructor" }] }
+    compare(m.rows().map(function (r) { return r.id }).join(), "x,z,y")
+    compare(m.rows().map(function (r) { return r.section }).join("|"),
+            "constructor|constructor|__proto__")
   }
 }

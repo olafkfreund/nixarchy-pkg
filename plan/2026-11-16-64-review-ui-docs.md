@@ -289,6 +289,13 @@ Traps:
   `clip: true`), call `list.positionViewAtBeginning()` on tab change; check
   on razer.
 
+(Deviations, step 3, tests only: after a tab change the old section
+headers stay in the list's `contentItem` as hidden children, so the card test
+counts only visible headers. The fake model's `rows()` returns the same array
+on every tab, so the test reassigns `theRows = theRows.slice()` to rebuild
+the list as a real model would. The `positionViewAtBeginning()` trap is left
+to the live check.)
+
 ### 4. Multi-word search (codex)
 
 **Adapter** `bin/nixarchy-pkg`, `cmd_search`:
@@ -450,6 +457,11 @@ Traps:
   `pkg.reindex()`; no change there.
 
 ---
+
+(Deviation, step 5, from Codex's PR 2 review, confirmed live: with reindex
+off `busy`, the card showed neither the busy rule nor "working…" while the
+index rebuilt. `Card.qml`'s `waiting` and the footer's "working…" now
+include `model.reindexing`; `tst_card`'s busy-rule test covers it.)
 
 ## PR 3: `nix flake check` runs the adapter suite
 

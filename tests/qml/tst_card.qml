@@ -18,12 +18,12 @@ TestCase {
   when: windowShown
 
   property var theRows: [
-    { id: "two",  label: "steam", summary: "Digital distribution platform",
+    { id: "two",  section: "Alpha", label: "steam", summary: "Digital distribution platform",
       flags: ["unfree", "curated:steam"],
       preview: "steam  1.0\nctrl-t tries it now\nversion:  1.0" },
-    { id: "one",  label: "one (Terminal)", category: "Terminal",
+    { id: "one",  section: "Beta", label: "one (Terminal)", category: "Terminal",
       summary: "one flag here", flags: ["unfree"], note: "a note" },
-    { id: "none", label: "Gamescope", category: "Game", summary: "no flags here", flags: [] }
+    { id: "none", section: "Beta", label: "Gamescope", category: "Game", summary: "no flags here", flags: [] }
   ]
   // A QtObject, so a test can set tab and cursor and Card sees it change.
   QtObject {
@@ -35,6 +35,7 @@ TestCase {
     function rows() { return theRows }
     function rowAt(i) { return (i >= 0 && i < theRows.length) ? theRows[i] : null }
     property bool busy: false
+    property bool reindexing: false
     property string selCount: "2"
     property string queueCount: "?"
     function tabCount(i) { return i === 2 ? selCount : i === 6 ? queueCount : "" }
@@ -94,6 +95,7 @@ TestCase {
     fakeModel.tab = 0
     fakeModel.cursor = 0
     fakeModel.busy = false
+    fakeModel.reindexing = false
     fakeModel.inspecting = false
     fakeModel.checkRunning = false
     win.width = 800
@@ -144,6 +146,30 @@ TestCase {
       verify(summary.width >= 0,
              theRows[n].flags.length + " flag(s): width must never be negative")
     }
+  }
+
+  // Header Texts in the list's contentItem whose text is a section name.
+  function headers(lv) {
+    var n = 0, kids = lv.contentItem.children
+    for (var i = 0; i < kids.length; i++)
+      if (kids[i].visible && (kids[i].text === "Alpha" || kids[i].text === "Beta")) n++
+    return n
+  }
+
+  function test_sections_on_catalogue_tabs_only() {
+    var lv = find(card, "QQuickListView")
+    fakeModel.tab = 0
+    tryCompare(lv, "count", 3)
+    wait(50)
+    compare(headers(lv), 2, "Alpha and Beta, once each")
+    // The real model hands the list a new array on every tab change; the
+    // fake's rows() reads theRows, so reassign it to match.
+    fakeModel.tab = 2; theRows = theRows.slice()
+    wait(50)
+    compare(headers(lv), 0, "no headers on the Selection tab")
+    fakeModel.tab = 0; theRows = theRows.slice()
+    wait(50)
+    compare(headers(lv), 2, "and they come back")
   }
 
   function footerText() {
@@ -289,7 +315,7 @@ TestCase {
   function test_busy_rule_moves() {
     var segment = byName(card, "busySegment")
     Style.reduceMotion = false
-    for (var field of ["busy", "inspecting", "checkRunning"]) {
+    for (var field of ["busy", "reindexing", "inspecting", "checkRunning"]) {
       fakeModel[field] = true
       verify(segment.visible, field + " shows the segment")
       verify(card.busyAnimating, field + " starts motion")

@@ -82,6 +82,8 @@ QtObject {
   property bool neverApplied: false
   property bool indexStale: false
   property bool busy: false
+  property bool reindexing: false
+  property bool _reindexAnswered: false
   property string message: ""
 
   // The package a SHIFT+RETURN has been pressed once for. Arming is
@@ -119,7 +121,7 @@ QtObject {
   // Apps and Services are a finite catalogue, so there the query filters
   // what is already known rather than asking the index -- instant, and it
   // keeps the enabled state that a search row would not carry.
-  readonly property bool searching: query.length > 0
+  readonly property bool searching: query.trim().length > 0
   readonly property bool indexTab: tab === 2 || tab === 3
   readonly property bool flakeTab: tab === 5
   readonly property bool queueTab: tab === 6
@@ -127,8 +129,8 @@ QtObject {
   function rows() {
     if (indexTab && searching) return results
     switch (tab) {
-      case 0: return filtered(state.apps || [])
-      case 1: return filtered(state.services || [])
+      case 0: return catalogueRows(state.apps || [], "apps.nix")
+      case 1: return catalogueRows(state.services || [], "services.nix")
       case 2: return state.packages || []
       case 3: return state.options || []
       case 4: return state.drafts || []
@@ -257,12 +259,35 @@ QtObject {
 
   function filtered(list) {
     if (!searching) return list
-    var q = query.toLowerCase()
+    var words = query.trim().toLowerCase().split(/\s+/)
     return list.filter(function (r) {
-      return String(r.id || "").toLowerCase().indexOf(q) >= 0
-          || String(r.label || "").toLowerCase().indexOf(q) >= 0
-          || String(r.category || "").toLowerCase().indexOf(q) >= 0
+      var hay = (String(r.id || "") + " " + String(r.label || "") + " "
+                 + String(r.category || "")).toLowerCase()
+      return words.every(function (w) { return hay.indexOf(w) >= 0 })
     })
+  }
+
+  // Each row gains `section`, the header it is drawn under. Grouped by
+  // category in first-seen order, file order within a group: a ListView
+  // section is drawn at every change of value, so headers A, B, A would
+  // otherwise show A twice. Settings rows go last: they configure an app
+  // and cannot be turned on themselves.
+  function catalogueRows(list, file) {
+    // Object.create(null): a category called "constructor" must not find
+    // Object.prototype's.
+    var f = filtered(list), order = [], groups = Object.create(null), conf = []
+    f.forEach(function (r) {
+      if (r.settings === true) {
+        conf.push(Object.assign({}, r, { section: "settings \u2014 edit in " + file }))
+        return
+      }
+      var c = r.category || "other"
+      if (!groups[c]) { groups[c] = []; order.push(c) }
+      groups[c].push(Object.assign({}, r, { section: c }))
+    })
+    var out = []
+    order.forEach(function (c) { out = out.concat(groups[c]) })
+    return out.concat(conf)
   }
 
   function rowAt(i) {
@@ -374,6 +399,22 @@ QtObject {
     }
   }
 
+  // Reindex only writes the cache; its own process leaves the writer free.
+  // The answer carries indexStale, so no state read races with _reader.
+  property Process _reindexer: Process {
+    stdout: StdioCollector {
+      onStreamFinished: {
+        if (text.length > 0) root._reindexAnswered = true
+        root._absorb(text, false)
+      }
+    }
+    onExited: function (code, status) {
+      root.reindexing = false
+      if (code !== 0 && !root._reindexAnswered)
+        root.message = "the index rebuild ended without answering (exit " + code + ")"
+    }
+  }
+
   function _absorb(text, isWrite) {
     var data
     try {
@@ -399,6 +440,7 @@ QtObject {
     // answers {ok, indexStale, message} and nothing else, and absorbing
     // that as state emptied every tab until the menu was reopened.
     if (data.apps === undefined) {
+      if (data.indexStale !== undefined) root.indexStale = data.indexStale
       if (data.message) root.message = String(data.message)
       if (isWrite) root.refresh()
       return
@@ -576,8 +618,7 @@ QtObject {
 
   // True when the write started; false when one was already running.
   function write(args) {
-    // reindex writes only the search cache, so an apply does not block it.
-    if (applying && args[0] !== "reindex") { message = "an apply is running \u2014 wait for it to finish"; return false }
+    if (applying) { message = "an apply is running \u2014 wait for it to finish"; return false }
     if (busy) return false
     busy = true
     message = ""
@@ -784,7 +825,13 @@ QtObject {
   }
 
   function reindex() {
-    write(["reindex"])
+    if (reindexing) { message = "already rebuilding the index"; return false }
+    reindexing = true
+    _reindexAnswered = false
+    message = "rebuilding the search index (about 45 s)"
+    _reindexer.command = [script, "reindex"]
+    _reindexer.running = true
+    return true
   }
 
   // The one command here that changes the machine, and only ever on an

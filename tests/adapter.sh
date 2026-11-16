@@ -314,7 +314,7 @@ check "a flag without its value is a value, not silence" \
 check "and exits 0" test "$rc" = 0
 check "the same for --kind" jq -e '.ok == false' <<<"$("$ADAPTER" search git --kind)"
 STUBCACHE=$(mktemp -d); mkdir -p "$STUBCACHE/nixarchy"
-printf 'pkg\tfoo\tFoo thing [unfree]\tunfree\t\npkg\tbar\tBar thing [unfree]\t\t\npkg\tbaz\tBaz [broken]\tbroken\t\npkg\t-dash\tA dash\t\t\n' \
+printf 'pkg\tfoo\tFoo thing [unfree]\tunfree\t\npkg\tbar\tBar thing [unfree]\t\t\npkg\tbaz\tBaz [broken]\tbroken\t\npkg\t-dash\tA dash\t\t\npkg\topenssh\tSecure SHell server\t\t\npkg\tdropbear\tsmall ssh server\t\t\n' \
   > "$STUBCACHE/nixarchy/index.tsv"
 stub_search() { XDG_CACHE_HOME="$STUBCACHE" "$ADAPTER" search "$@"; }
 check "a query after -- may start with a dash" \
@@ -326,6 +326,20 @@ check "an index without the flag keeps its only warning" \
   jq -e '.rows | map(select(.name == "bar"))[0].summary == "Bar thing [unfree]"' <<<"$out"
 check "broken is said once too" \
   jq -e '.rows[0].summary == "Baz"' <<<"$(stub_search -- baz)"
+server_ssh=$(stub_search -- "server ssh")
+ssh_server=$(stub_search -- "ssh server")
+# shellcheck disable=SC2016  # $other is jq's variable.
+check "search words match in either order" jq -e --argjson other "$ssh_server" \
+  '.rows | map(.name) == ($other.rows | map(.name)) and (map(.name) | index("openssh") != null and index("dropbear") != null)' <<<"$server_ssh"
+# shellcheck disable=SC2016  # $other is jq's variable.
+check "spaces around a word keep its ranking" jq -e --argjson other "$(stub_search -- ssh)" \
+  '.rows | map(.name) == ($other.rows | map(.name))' <<<"$(stub_search -- "  ssh  ")"
+check "all search words must match" jq -e '.rows | length == 0' \
+  <<<"$(stub_search -- "ssh nothinglikethis")"
+check "a blank search is refused" jq -e '.ok == false' <<<"$(stub_search -- "   ")"
+for i in $(seq 5000); do printf 'pkg\tssh%s\tssh tool\t\t\n' "$i"; done > "$STUBCACHE/nixarchy/index.tsv"
+check "a truncated search still answers once in JSON" jq -e '.ok == true and (.rows | length == 1)' \
+  <<<"$(stub_search --limit 1 -- ssh)"
 rm -rf "$STUBCACHE"
 
 if [ -s "${XDG_CACHE_HOME:-$HOME/.cache}/nixarchy/index.tsv" ]; then
