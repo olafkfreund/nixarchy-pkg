@@ -91,13 +91,17 @@ break one, and evaluating a host costs minutes to prove more than is at stake.
 
 ## The part it will not do for you
 
-It shows you the import line:
+After a declare, if the inspection listed a module, the panel shows the
+import line and says plainly that it does not know which file that belongs
+in:
 
 ```
 inputs.nixvim.nixosModules.default
 ```
 
-and tells you, plainly, that it does not know which file that belongs in.
+From a terminal, `flake add` does not guess the line at all, because it has
+not looked at what the flake offers. It says so and points at `nixarchy-pkg
+flake show <ref>`.
 
 That is deliberate and it is the main design decision in this feature.
 `default` is a good guess at *which module* — across `nixvim`,
@@ -112,6 +116,17 @@ Writing a plausible guess into your configuration would be worse than writing
 nothing, because a bad line there fails the evaluation of your whole system
 rather than one package. So it hands you the line and says what it does not
 know.
+
+## Which flake, and removing an input
+
+The first row of the Flakes tab names the directory it reads: the
+`NIXARCHY_FLAKE` variable, or `/etc/nixos` when that is unset. This is the
+same directory `nixarchy-apply` uses. If there is no `flake.nix` there, the
+tab says so; the variable (`programs.nixarchy.flake` sets it) has to be set
+in the session the shell runs in, not only in a terminal.
+
+`SPACE` on a declared input asks first; `SPACE` again removes it, and any
+other key cancels. `RETURN` on a declared input does not remove it.
 
 ## Two refusals
 

@@ -20,6 +20,8 @@ TestCase {
     m._reindexer.running = false
     m.applying = false
     m.message = ""
+    m.index = null
+    m.indexStale = false
     m._applyTerm.running = false
     if (m.naming) m.cancelNaming()
     m.setTab(0)
@@ -30,6 +32,9 @@ TestCase {
     m.checkRunning = false
     m.detailText = ""
     m.disarm()
+    m.pendingDeclare = null
+    m.armedFlake = ""
+    m.inspected = null
     m.armingState = ""
     m._pendingWant = 0
     m._pendingRun = 0
@@ -149,6 +154,53 @@ TestCase {
     compare(m.state.apps.length, 1, "nor may an answer carrying neither")
   }
 
+  function test_index_line_texts() {
+    var now = 1793659612000
+    compare(m.indexLine(now), "index stale \u2014 r to rebuild")
+    m.index = { status: "missing", builtAt: null, changed: null }
+    compare(m.indexLine(now), "no search index \u2014 r to build it")
+    m.index = { status: "stale", builtAt: now / 1000 - 14 * 86400,
+                changed: ["nixpkgs"] }
+    compare(m.indexLine(now), "index built 14 days ago \u2014 r to rebuild \u2014 nixpkgs changed")
+    m.index.changed = ["nixpkgs", "options"]
+    compare(m.indexLine(now), "index built 14 days ago \u2014 r to rebuild \u2014 nixpkgs and options changed")
+    m.index.changed = ["nixpkgs", "options", "app list", "flatpaks", "new-package row"]
+    compare(m.indexLine(now), "index built 14 days ago \u2014 r to rebuild \u2014 nixpkgs and 4 more changed")
+    m.index.changed = null
+    compare(m.indexLine(now), "index built 14 days ago \u2014 r to rebuild")
+    m.index.builtAt = null
+    compare(m.indexLine(now), "index stale \u2014 r to rebuild")
+  }
+
+  function test_index_line_ages() {
+    var now = 1793659612000
+    var cases = [
+      [30, "just now"], [60, "1 minute ago"], [3600, "1 hour ago"],
+      [47 * 3600, "47 hours ago"], [14 * 86400, "14 days ago"],
+      [-10, "just now"]
+    ]
+    for (var i = 0; i < cases.length; i++) {
+      m.index = { status: "stale", builtAt: now / 1000 - cases[i][0], changed: null }
+      compare(m.indexLine(now), "index built " + cases[i][1] + " \u2014 r to rebuild")
+    }
+  }
+
+  function test_absorb_takes_index_from_any_answer() {
+    var stale = { status: "stale", builtAt: 1793659612, changed: ["nixpkgs"] }
+    m._absorb(JSON.stringify({ ok: false, indexStale: true, index: stale, error: "x" }), false)
+    compare(m.message, "x")
+    compare(m.indexStale, true)
+    compare(m.index.status, "stale")
+    compare(m.index.changed[0], "nixpkgs")
+
+    var fresh = { status: "fresh", builtAt: 1793659612, changed: null }
+    m._absorb(JSON.stringify({ ok: true, indexStale: false, index: fresh,
+                               message: "index rebuilt" }), false)
+    compare(m.message, "index rebuilt")
+    compare(m.indexStale, false)
+    compare(m.index.status, "fresh")
+  }
+
   // #43: a mode must not outlive the tab it belongs to. Left behind, naming
   // sent every keystroke into the input name and turned RETURN into a
   // declare against a ref from the tab the user had already left.
@@ -184,6 +236,65 @@ TestCase {
 
     compare(m.naming, false)
     compare(abandoned, 0, "ESC cancels without abandoning -- the field keeps the ref")
+  }
+
+  function test_declare_keeps_inspection_across_read_and_quotes_module() {
+    m.setTab(5)
+    m.inspected = { ref: "path:/tmp/x", ok: true, nixosModules: ["odd.${name}"] }
+    m.beginNaming()
+    compare(m.declareAs("tool"), true)
+    compare(m.inspected, null)
+    m._reader.deliver(JSON.stringify({ ok: true, apps: [], services: [] }))
+    verify(m.pendingDeclare !== null, "a read cannot consume the pending declaration")
+    m._writer.deliver(JSON.stringify({ ok: true, name: "tool", url: "path:/tmp/x", message: "declared" }))
+    compare(m.pendingDeclare, null)
+    compare(m.inspected.declaredAs, "tool")
+    var rows = m.flakeRows()
+    compare(rows.filter(function (r) { return r.kind === "declare" }).length, 0)
+    compare(rows.filter(function (r) { return r.kind === "module" })[0].label,
+            "inputs.tool.nixosModules.odd.${name}")
+    compare(m.message, 'declared tool. To use it, add inputs.tool.nixosModules."odd.\\${name}" to the imports of the host that should have it -- this tool does not know which file that is')
+  }
+
+  function test_new_inspection_discards_pending_declare() {
+    m.setTab(5)
+    m.inspected = { ref: "path:/tmp/old", ok: true, nixosModules: ["default"] }
+    m.beginNaming()
+    verify(m.declareAs("old"))
+    m.setQuery("path:/tmp/new")
+    m.inspect()
+    compare(m.pendingDeclare, null)
+    m._inspector.deliver(JSON.stringify({ ref: "path:/tmp/new", ok: true, nixosModules: ["new"] }))
+    m._writer.deliver(JSON.stringify({ ok: true, name: "old", url: "path:/tmp/old", message: "declared" }))
+    compare(m.inspected.ref, "path:/tmp/new")
+    compare(m.inspected.declaredAs, undefined)
+  }
+
+  function test_declare_late_answer_after_tab_switch() {
+    m.setTab(5)
+    m.inspected = { ref: "path:/tmp/x", ok: true, nixosModules: ["default"] }
+    m.beginNaming()
+    compare(m.declareAs("tool"), true)
+    m.query = "old"
+    m.results = [{ name: "old" }]
+    m.setTab(2)
+    compare(m.query, "")
+    compare(m.results.length, 0)
+    compare(m.pendingDeclare, null)
+    m._writer.deliver(JSON.stringify({ ok: true, name: "tool", url: "path:/tmp/x", message: "declared" }))
+    compare(m.inspected, null)
+    compare(m.message, "declared")
+  }
+
+  function test_other_write_cannot_claim_pending_declaration() {
+    m.setTab(5)
+    m.inspected = { ref: "path:/tmp/x", ok: true, nixosModules: ["default"] }
+    m.beginNaming()
+    compare(m.declareAs("tool"), true)
+    m._writer.deliver(JSON.stringify({ ok: true, name: "tool", url: "path:/tmp/other", message: "other write" }))
+    compare(m.pendingDeclare, null)
+    compare(m.inspected, null)
+    compare(m.message, "other write")
   }
 
   // #43: search and state shared one Process, and assigning .command while
@@ -597,5 +708,74 @@ TestCase {
     m._apply.stdout.feed('{"nixarchyPkgApply":{"ok":true,"message":"applied"}}')
     compare(m._optionsRefresh.running, true)
     compare(m._optionsRefresh.command.join(" "), m.script + " options refresh")
+  }
+
+  function test_setTab_clears_the_search() {
+    m.setTab(2)
+    m.query = "x"
+    m.results = [{ name: "x" }]
+    m.setTab(2)
+    compare(m.query, "x")
+    compare(m.results.length, 1)
+    m.setTab(3)
+    compare(m.query, "")
+    compare(m.results.length, 0)
+  }
+
+  function test_flake_with_no_inputs_has_only_the_head_row() {
+    m.setTab(5)
+    m.state = { flakeDir: "/f", flakeFound: true, flakes: [] }
+    compare(m.flakeRows().length, 1)
+    compare(m.flakeRows()[0].kind, "head")
+  }
+
+  function test_armFlake_removes_on_the_second_press() {
+    m.setTab(5)
+    m.state = { flakeDir: "/f", flakeFound: true,
+                flakes: [{ name: "a", url: "u" }, { name: "b", url: "v" }] }
+    m.cursor = 1                     // row 0 is the directory head
+    verify(m.armFlake("remove"))
+    compare(m.armedFlake, "remove:a")
+    m.cursor = 2
+    verify(m.armFlake("remove"), "another row arms afresh")
+    compare(m.armedFlake, "remove:b")
+    m.disarm()
+    compare(m.armedFlake, "")
+    m.armFlake("remove")
+    m.armFlake("remove")
+    compare(m._writer.command.slice(1), ["flake", "remove", "b"])
+  }
+
+  function test_flake_arm_cancel_keys() {
+    m.armedFlake = "remove:tool"
+    verify(m.keyCancelsFlakeArm(Qt.Key_U))
+    verify(!m.keyCancelsFlakeArm(Qt.Key_Space))
+    m.armedFlake = "update:tool"
+    verify(!m.keyCancelsFlakeArm(Qt.Key_U))
+    verify(!m.keyCancelsFlakeArm(Qt.Key_Space))
+    verify(m.keyCancelsFlakeArm(Qt.Key_Escape))
+  }
+
+  function test_flake_confirm_refused_while_busy_says_why() {
+    m.setTab(5)
+    m.state = { flakeDir: "/f", flakeFound: true,
+                flakes: [{ name: "tool", url: "u" }] }
+    m.cursor = 1
+    verify(m.armFlake("remove"))
+    m.busy = true
+    compare(m.armFlake("remove"), false)
+    compare(m.armedFlake, "")
+    compare(m.message, "another change is still running -- try again")
+  }
+
+  function test_addFromOtherChannel_refuses_when_channel_unknown() {
+    m.setTab(2)
+    m.state = { channel: "custom", flakeDir: "/f" }
+    m.query = "vlc"
+    m.results = [{ name: "vlc" }]
+    m.addFromOtherChannel()
+    m.addFromOtherChannel()
+    compare(m._writer.running, false)
+    compare(m.armedChannel, "")
   }
 }

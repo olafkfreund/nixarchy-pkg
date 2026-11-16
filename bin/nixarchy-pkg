@@ -355,14 +355,55 @@ searched() {
 # fields. The unfree and broken flags arrived in #493, and an index from
 # before it reports every package as free. The panel must be able to say
 # so rather than quietly dropping the warning.
-index_stale() {
-  local key
-  [ -s "$INDEX" ] || return 0
-  key=$(printf '%s\n' \
-    "$(searched nixpkgs)" "$(searched walk)" "$(searched optionsjson)" \
-    "$(searched appindex)" "$(searched apptable)" \
-    "$(searched flatpakrows)" "$(searched pkgnewrow)")
-  [ "$(cat "$STAMP" 2>/dev/null)" != "$key" ]
+#
+# The seven inputs nixarchy-search keys the index on, in its stamp_key
+# order; what each looks like; and what the panel calls it.
+INDEX_INPUTS=(nixpkgs walk optionsjson appindex apptable flatpakrows pkgnewrow)
+INDEX_GLOBS=('*-source' '*-pkg-index.nix' '*/options.json' '*-nixarchy-app-index.tsv'
+             '*-nixarchy-app-attrs.tsv' '*-nixarchy-flatpak-rows.tsv' '*-nixarchy-pkg-new-row.tsv')
+INDEX_NAMES=(nixpkgs 'index builder' options 'app list' 'app list' flatpaks 'new-package row')
+
+# index_recognised V0..V6 -- every value has its input's shape (options may be empty).
+index_recognised() {
+  local i=0 v
+  for v in "$@"; do
+    if ! { [ "$i" = 2 ] && [ -z "$v" ]; }; then
+      # shellcheck disable=SC2053  # the right side is a glob on purpose
+      [[ $v == ${INDEX_GLOBS[i]} ]] || return 1
+    fi
+    i=$((i + 1))
+  done
+  [ "$i" = 7 ]
+}
+
+# index_facts -- {status, builtAt, changed} as one JSON object.
+# status keeps the old staleness test byte for byte, so indexStale is
+# exactly `.status != "fresh"`.
+index_facts() {
+  local status built key i cur=() st=() names=()
+  if [ ! -s "$INDEX" ]; then
+    jq -nc '{status: "missing", builtAt: null, changed: null}'
+    return 0
+  fi
+  for i in "${INDEX_INPUTS[@]}"; do cur+=("$(searched "$i")"); done
+  key=$(printf '%s\n' "${cur[@]}")
+  if [ "$(cat "$STAMP" 2>/dev/null)" != "$key" ]; then status=stale; else status=fresh; fi
+  built=$(stat -c %Y "$INDEX" 2>/dev/null) || built=""
+  if [ "$status" = stale ] && command -v nixarchy-search >/dev/null 2>&1 && [ -r "$STAMP" ]; then
+    mapfile -t st <"$STAMP"
+    if [ "${#st[@]}" -eq 7 ] && index_recognised "${st[@]}" && index_recognised "${cur[@]}"; then
+      for i in 0 1 2 3 4 5 6; do
+        [ "${st[i]}" = "${cur[i]}" ] || names+=("${INDEX_NAMES[i]}")
+      done
+    fi
+  fi
+  jq -nc --arg status "$status" --arg built "$built" \
+    --args '{status: $status,
+             builtAt: (if $built == "" then null else ($built | tonumber) end),
+             changed: ($ARGS.positional
+                       | reduce .[] as $n ([]; if any(.[]; . == $n) then . else . + [$n] end)
+                       | if length == 0 then null else . end)}' \
+    ${names[@]+"${names[@]}"}
 }
 
 # One selection file's marked rows, as TSV for jq to pick up.
@@ -495,8 +536,9 @@ cmd_search() {
   case "$kind" in ''|pkg|opt|app) ;; *) die "--kind takes pkg, opt or app, not '$kind'" ;; esac
   [ -s "$INDEX" ] || die "no search index yet -- run: nixarchy-pkg reindex"
 
-  local stale=false rowsfile=""
-  index_stale && stale=true
+  local facts stale rowsfile=""
+  facts=$(index_facts)
+  stale=$(jq -r '.status != "fresh"' <<<"$facts")
   options_resolve
   [ -z "$OPT_DIR" ] || [ ! -f "$OPT_DIR/rows.tsv" ] || rowsfile=$OPT_DIR/rows.tsv
 
@@ -526,6 +568,7 @@ cmd_search() {
       ' "$INDEX" ${rowsfile:+"$rowsfile"} | sort -t"$(printf '\t')" -k1,1n -k2,2n | head -n "$limit" | cut -f3-
     ) \
     --argjson stale "$stale" \
+    --argjson index "$facts" \
     --argjson options "$OPT_JSON" \
     --arg query "$query" \
     '
@@ -533,6 +576,7 @@ cmd_search() {
     {
       ok: true,
       indexStale: $stale,
+      index: $index,
       options: $options,
       query: $query,
       rows: ($rows | lines | map(split("\t")) | map(
@@ -808,40 +852,70 @@ cmd_opt_describe() {
       end' "$oj"
 }
 
-# One physical line, whatever the editor allowed.
-#
-# nixarchy-opt-remove deletes the single line carrying the marker. A value
-# written across several lines leaves the earlier ones orphaned, so the
-# removal makes the file unparseable, its guard reverts, and the option can
-# never be taken out again except by hand. The multiline editor exists
-# because an example like services.postgresql.package's default is nine
-# lines, so newlines become spaces: Nix does not care about them, and the
-# remover does.
-#
-# Nothing else changes. This used to squeeze every run of spaces too, which
-# rewrote "a  b" as "a b" -- a value that parses and is not the one asked
-# for (#28). And where a newline DOES mean something -- inside a '' string,
-# or ending a # comment that would otherwise swallow the rest of the line --
-# the value is refused rather than quietly changed. A raw newline inside a
-# "..." string still becomes a space; telling that apart needs a Nix lexer.
-#
-# Returns 1 instead of dying: it runs inside $(...), where die's object
-# would become the value.
-# Two refusals, because the callers below must not tell someone who forged a
-# marker to put their value on one line (#41).
+# nixarchy-opt-remove needs each marked value on one physical line. Preserve
+# its meaning by re-emitting a string literal or comparing Nix parse trees.
 readonly MARKER_REFUSAL="a value cannot contain '#@' -- that is how this tool marks the options it wrote, and a value carrying one would make the panel name a different option than the one it changes. Nothing was changed."
-readonly FLAT_REFUSAL="a multi-line value with '' or # cannot be written on one line without changing its meaning -- put it on one line yourself. Nothing was changed."
+readonly FLAT_REFUSAL="that value changes meaning when written on one line -- a newline inside a string or after a # matters. Write it on one line, or as one string. Nothing was changed."
 flat_value() {
-  local v=$1
   # `#@` is this tool's marker and a value must not be able to forge one:
   # extras_tsv reads the FIRST marker on a line and nixarchy-opt-remove the
-  # LAST, so a forged one makes the panel name one option and delete
-  # another. 2, not 1, so the caller can say WHICH refusal this is (#41).
-  [[ $v == *'#@'* ]] && return 2
-  if [[ $v == *$'\n'* ]] && [[ $v == *"''"* || $v == *'#'* ]]; then
-    return 1
+  # LAST, so a forged one makes the panel name one option and delete another.
+  [[ $1 == *'#@'* ]] && die "$MARKER_REFUSAL"
+  return 0
+}
+
+# Use the same insertion point as cmd_opt_set, with no marker in the probe.
+same_tree() {
+  local v file why
+  local -a values=("$1" "$2")
+  local i=0
+  for v in "${values[@]}"; do
+    file="$WORK/probe-$i.nix"
+    if ! NIXARCHY_PKG_VALUE="$v" awk '
+      !ins && /^}[[:space:]]*$/ {
+        printf "\n  __nixarchy_probe = %s;\n", ENVIRON["NIXARCHY_PKG_VALUE"]
+        ins = 1
+      }
+      { print }
+      END { if (!ins) exit 1 }
+    ' "$APPS" > "$file"; then
+      die "$FLAT_REFUSAL"
+    fi
+    if ! nix-instantiate --parse "$file" > "$WORK/probe-$i.tree" 2> "$WORK/probe-$i.err" 9>&- 8>&-; then
+      if [ "$i" -eq 0 ]; then
+        why=$(awk '/^error:/ { print; exit }' "$WORK/probe-$i.err")
+        die "that value was refused, so nothing was changed. ${why:-nix could not parse the result}"
+      fi
+      return 1
+    fi
+    i=$((i + 1))
+  done
+  cmp -s "$WORK/probe-0.tree" "$WORK/probe-1.tree"
+}
+
+# Kept in a variable: an inline =~ pattern with quotes and spaces is misparsed by bash.
+readonly LITERAL_RE='^\(?"([^"\\]|\\.)*"( \+ "([^"\\]|\\.)*")*\)?$'
+
+# Rewrite the named value to one line without changing its meaning, or die.
+one_line() {
+  local v=${!1} p lit out
+  [[ $v == *$'\n'* ]] || return 0
+  p=$(nix-instantiate --parse -E "($v)" 2>/dev/null 9>&- 8>&-) || p=""
+  if [[ $p =~ $LITERAL_RE ]]; then
+    lit=$(nix-instantiate --eval --strict --json --readonly-mode \
+          --option pure-eval true --option restrict-eval true -E "$v" 2>/dev/null 9>&- 8>&-) ||
+      die "$FLAT_REFUSAL"
+    out=$(jq -r 'if type != "string" then error("not a string") else . end
+      | if test("[\u0000-\u0008\u000b\u000c\u000e-\u001f]") then error("control") else . end
+      | gsub("\\\\"; "\\\\") | gsub("\""; "\\\"") | gsub("\n"; "\\n")
+      | gsub("\t"; "\\t") | gsub("\r"; "\\r") | gsub("\\$\\{"; "\\${")
+      | "\"" + . + "\""' <<<"$lit" 2>/dev/null) || die "$FLAT_REFUSAL"
+    [[ $out == *'#@'* ]] && die "$MARKER_REFUSAL"
+  else
+    out=${v//$'\n'/ }
+    same_tree "$v" "$out" || die "$FLAT_REFUSAL"
   fi
-  printf '%s' "${v//$'\n'/ }"
+  printf -v "$1" '%s' "$out"
 }
 
 # Write a value for an option.
@@ -868,10 +942,7 @@ cmd_opt_set() {
     *[!a-zA-Z0-9._-]* | "" ) die "'$path' is not an option path" ;;
   esac
 
-  value=$(flat_value "$value") || case $? in
-    2) die "$MARKER_REFUSAL" ;;
-    *) die "$FLAT_REFUSAL" ;;
-  esac
+  flat_value "$value"
 
   if [ -z "${value//[[:space:]]/}" ]; then
     state_with true "kept the default for $path -- nothing written"
@@ -880,6 +951,7 @@ cmd_opt_set() {
 
   begin_write
   [ -f "$APPS" ] || die "no $APPS -- log in again to have it created"
+  one_line value
   if grep -q "#@opt ${path//./\\.}\$" "$APPS"; then
     die "$path is already in $APPS -- remove it first"
   fi
@@ -966,13 +1038,11 @@ cmd_opt_replace() {
     *[!a-zA-Z0-9._-]* | "" ) die "'$path' is not an option path" ;;
   esac
 
-  value=$(flat_value "$value") || case $? in
-    2) die "$MARKER_REFUSAL" ;;
-    *) die "$FLAT_REFUSAL" ;;
-  esac
+  flat_value "$value"
 
   begin_write
   [ -f "$APPS" ] || die "no $APPS -- log in again to have it created"
+  one_line value
   grep -q "#@opt ${path//./\\.}\$" "$APPS" ||
     die "$path is not in $APPS -- use 'opt set' to add it"
 
@@ -1273,19 +1343,12 @@ cmd_flake_add() {
   fi
   committed
 
-  # The import line is SHOWN, never written. `default` is the answer the
-  # flake itself gives to "which module" -- measured convention across
-  # nixvim, home-manager and sops-nix, all of which expose `default`
-  # beside a named alias. Every other choice is still open: which host,
-  # whether the module takes arguments, whether an option must be set to
-  # enable it. Knowing the attribute settles one of four, which is not
-  # permission to edit a file this tool does not own.
+  # The adapter has not inspected this flake's outputs, so it cannot name
+  # a module to import. `flake show` lets the caller see what it offers.
   jq -nc --arg name "$name" --arg ref "$ref" --arg warn "$warn" \
     '{ok: true, name: $name, url: $ref,
-      message: (("declared " + $name + " and locked it")
-                + (if $warn == "" then "" else " -- " + $warn end)),
-      import: ("inputs." + $name + ".nixosModules.default"),
-      importNote: "Add that to the imports of the host that should have it. This tool does not know which file that is."}'
+      message: (("declared " + $name + " and locked it -- run \u0027nixarchy-pkg flake show " + $ref + "\u0027 to see what it offers")
+                + (if $warn == "" then "" else " -- " + $warn end))}'
 }
 
 # Removal refuses rather than succeeds-and-breaks. Taking out a
@@ -1466,16 +1529,21 @@ pins_json() {
 # A copy pinned to a cited line cannot disagree with it; asking a second
 # opinion can.
 #
+# The flat `inputs.nixpkgs.url` form is read only where the writer's own
+# parse finds nothing, which is exactly where the writer says `custom`,
+# warns and proceeds; so the panel can never offer a channel the writer
+# refuses (#63, companion issue 1). The pipe to `head -1` is gone: it
+# would SIGPIPE under pipefail.
+#
 # Read from the URL, which is what an update resolves, not the lock,
-# which is only where it last landed. `custom` is a real answer: the
-# flat `inputs.nixpkgs.url` form and a reshaped flake both land there,
-# and the panel says so rather than guessing.
+# which is only where it last landed. `custom` is a real answer: a
+# reshaped flake lands there, and the panel says so rather than guessing.
 machine_channel() {
   local flakedir u
   flakedir="${NIXARCHY_FLAKE:-/etc/nixos}"
   [ -r "$flakedir/flake.nix" ] || { printf custom; return; }
-  u=$(sed -nE "s/^[[:space:]]*nixpkgs\.url[[:space:]]*=[[:space:]]*\"([^\"]+)\".*/\1/p" \
-    "$flakedir/flake.nix" | head -1)
+  u=$(sed -nE '/^[[:space:]]*nixpkgs\.url[[:space:]]*=[[:space:]]*"([^"]+)".*/{s//\1/p;q}' "$flakedir/flake.nix")
+  [ -n "$u" ] || u=$(sed -nE '/^[[:space:]]*inputs\.nixpkgs\.url[[:space:]]*=[[:space:]]*"([^"]+)".*/{s//\1/p;q}' "$flakedir/flake.nix")
   case "$u" in
     *nixos-unstable*) printf unstable ;;
     *nixos-[0-9][0-9].[0-9][0-9]*) printf stable ;;
@@ -2150,26 +2218,46 @@ cmd_apply() {
 # at all, so every package on a stale index reads as free.
 cmd_reindex() {
   need nixarchy-search
-  # nixarchy-search builds the index before it opens its picker, so asking
-  # it to reindex with no terminal does the work and then fails at the
-  # picker. That failure is expected and not worth reporting; whether the
-  # index came out fresh is, and index_stale answers it from the stamp.
-  NIXARCHY_IN_PICKER=1 nixarchy-search --reindex </dev/null >/dev/null 2>&1 || true
-  local stale=false opts
-  index_stale && stale=true
+  # nixarchy-search builds the index, then opens its picker; with no
+  # terminal the picker fails ("inappropriate ioctl for device") and the
+  # script still exits 0. So its status says nothing, and the stamp is the
+  # judge. stderr is kept for the reason when the index is still stale.
+  local err facts opts
+  err=$(NIXARCHY_IN_PICKER=1 nixarchy-search --reindex </dev/null 2>&1 >/dev/null 9>&- 8>&-) || :
+  facts=$(index_facts)
   # The options come from the host's own flake. Reported beside the index,
   # never as the index failing.
   opts=$("$SELF" options refresh </dev/null 2>/dev/null) || opts=""
   jq -e . >/dev/null 2>&1 <<<"$opts" || opts='{"ok":false,"error":"options refresh gave no answer"}'
-  jq -nc --argjson stale "$stale" --argjson opts "$opts" \
-    '{ok: ($stale | not), indexStale: $stale, options: $opts,
-      message: (if $stale then "the index is still stale -- run nixarchy search in a terminal to see why"
-                else "index rebuilt" end)}'
+  if jq -e '.status == "fresh"' <<<"$facts" >/dev/null; then
+    jq -nc --argjson index "$facts" --argjson options "$opts" \
+      '{ok: true, indexStale: false, index: $index, options: $options, message: "index rebuilt"}'
+    return 0
+  fi
+  err=$(tail -n 20 <<<"$err" | tail -c 65536)
+  jq -nc --arg err "$err" --argjson index "$facts" --argjson options "$opts" \
+    --arg log "$CACHE_DIR/index-errors.log" '
+    ($err | split("\n")
+          | map(sub("^\\s+"; "") | sub("\\s+$"; ""))
+          | map(select(length > 0
+              and (startswith("Building the search index.") | not)
+              and (startswith("indexing nixpkgs (this takes") | not)
+              and (startswith("no option index: documentation.nixos.enable is off") | not)
+              and (. != "system, so there is no options.json to read.")
+              and (. != "inappropriate ioctl for device")
+              and (startswith("evaluation warning:") | not)))
+          | .[-8:]) as $d
+    | ([$d[] | select(startswith("indexing nixpkgs failed;") | not)] | last) as $why
+    | {ok: false, indexStale: true, index: $index, options: $options, detail: $d,
+       error: ("the search index is still \($index.status): "
+               + ($why // "nixarchy-search gave no reason")
+               + " -- see " + $log)}'
 }
 
 cmd_state() {
-  local stale=false
-  index_stale && stale=true
+  local facts stale
+  facts=$(index_facts)
+  stale=$(jq -r '.status != "fresh"' <<<"$facts")
   options_resolve
 
   # Process substitution swallows a callee's exit status, so a read that
@@ -2195,12 +2283,15 @@ cmd_state() {
     --rawfile extras <(extras_tsv) \
     --rawfile labels <(labels_tsv) \
     --argjson stale "$stale" \
+    --argjson index "$facts" \
     --argjson options "$OPT_JSON" \
     --arg appsFile "$APPS" \
     --arg servicesFile "$SERVICES" \
     --arg unreadable "$unread_msg" \
     --argjson rfiles "$rfiles" \
     --arg channel "$(machine_channel)" \
+    --arg flakeDir "${NIXARCHY_FLAKE:-/etc/nixos}" \
+    --argjson flakeFound "$([ -r "${NIXARCHY_FLAKE:-/etc/nixos}/flake.nix" ] && echo true || echo false)" \
     --rawfile flakes <(cmd_flake_list) \
     '
     def lines: split("\n") | map(select(length > 0));
@@ -2211,11 +2302,14 @@ cmd_state() {
     {
       ok: true,
       indexStale: $stale,
+      index: $index,
       # `options` below is the rows set in apps.nix, so where the option
       # list came from is optionsInfo.
       optionsInfo: $options,
       files: { apps: $appsFile, services: $servicesFile },
       channel: $channel,
+      flakeDir: $flakeDir,
+      flakeFound: $flakeFound,
       # Absent when every file read, so an ordinary state carries no
       # message. ok stays true: one unreadable file must not cost the user
       # the tabs that were fine, or the panel they would fix it from (#41).

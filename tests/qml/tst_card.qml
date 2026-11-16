@@ -40,6 +40,8 @@ TestCase {
     property string queueCount: "?"
     function tabCount(i) { return i === 2 ? selCount : i === 6 ? queueCount : "" }
     property bool inspecting: false
+    property bool flakeTab: tab === 5
+    property string query: ""
     property bool checkRunning: false
     property string message: ""
     property int queued: 0
@@ -48,6 +50,7 @@ TestCase {
     property bool indexStale: false
     property string optionsStatus: ""
     property bool optionsError: false
+    function indexLine(now) { return "index built 14 days ago \u2014 r to rebuild \u2014 nixpkgs and 4 more changed" }
     property bool neverApplied: false
     property bool showingLog: false
     property string applyLog: ""
@@ -197,6 +200,37 @@ TestCase {
     fakeModel.queued = 0
     card.model = null; card.model = fakeModel
     verify(footerText().indexOf("nothing queued") >= 0, footerText())
+  }
+
+  function test_index_line_fits_between_neighbours() {
+    fakeModel.indexStale = true
+    fakeModel.queued = 12
+    fakeModel.neverApplied = true
+    fakeModel.busy = false
+    card.model = null; card.model = fakeModel
+    try {
+      for (var width of [800, 480]) {
+        win.width = width
+        wait(0)
+        var texts = elidables(card, [])
+        var queue = null, index = null, keys = null
+        for (var i = 0; i < texts.length; i++) {
+          if (texts[i].text.indexOf("12 changes queued") === 0) queue = texts[i]
+          if (texts[i].text.indexOf("index built 14 days ago") === 0) index = texts[i]
+          if (texts[i].text === "? keys   a apply   esc close") keys = texts[i]
+        }
+        verify(queue !== null && index !== null && keys !== null, "footer texts at " + width + " px")
+        compare(queue.parent, index.parent)
+        compare(index.parent, keys.parent)
+        verify(queue.x + queue.width <= index.x, "queue and index overlap at " + width + " px")
+        verify(index.x + index.width <= keys.x, "index and keys overlap at " + width + " px")
+      }
+    } finally {
+      fakeModel.indexStale = false
+      fakeModel.queued = 0
+      fakeModel.neverApplied = false
+      win.width = 800
+    }
   }
 
   function test_dim_is_fg_at_lower_alpha() {
@@ -396,6 +430,25 @@ TestCase {
   function test_header_fits() {
     var h = byName(card, "header")
     verify(h.implicitWidth <= h.width, "the tab row fits at 800 px")
+  }
+
+  function test_flake_head_only_shows_hint() {
+    var savedRows = theRows
+    try {
+      fakeModel.tab = 5
+      fakeModel.query = "github:owner/repo"
+      theRows = [{ kind: "head", label: "flake: /f" }]
+      var hint = byName(card, "emptyHint")
+      tryCompare(hint, "visible", true)
+      compare(hint.text, "RETURN to see what \u201cgithub:owner/repo\u201d offers")
+      fakeModel.inspecting = true
+      compare(hint.text, "looking at \u201cgithub:owner/repo\u201d\u2026")
+    } finally {
+      fakeModel.inspecting = false
+      fakeModel.query = ""
+      fakeModel.tab = 0
+      theRows = savedRows
+    }
   }
 
   // ---- #75: the row you see selected is the row a key acts on ----------
@@ -612,7 +665,7 @@ TestCase {
     fakeModel.indexStale = true
     fakeModel.optionsStatus = "options: reading your flake\u2026"
     try {
-      var q = byName(card, "queueStatus"), s = byName(card, "indexStaleStatus")
+      var q = byName(card, "queueStatus"), s = byName(card, "indexAge")
       var o = byName(card, "optionsStatus"), h = byName(card, "hints")
       verify(q && s && o && h && s.visible && o.visible)
       var right = function (it) { return it.mapToItem(card, it.width, 0).x }
@@ -623,6 +676,46 @@ TestCase {
     } finally {
       fakeModel.indexStale = false
       fakeModel.optionsStatus = ""
+    }
+  }
+
+  // #66 + #69: queue status, index age and key hints share one footer line
+  // and never overlap, even with a long reason on the left.
+  function test_footer_parts_do_not_overlap() {
+    fakeModel.queued = -1
+    fakeModel.queueError = "an earlier write was interrupted (/home/u/.config/nixarchy/apps.nix). To put back what was there before, run: nixarchy-pkg recover."
+    fakeModel.indexStale = true
+    try {
+      var st = byName(card, "queueStatus"), ia = byName(card, "indexAge"), h = byName(card, "hints")
+      verify(st && ia && h && ia.visible)
+      var right = function (it) { return it.mapToItem(card, it.width, 0).x }
+      var left = function (it) { return it.mapToItem(card, 0, 0).x }
+      verify(right(st) <= left(ia), "queue status ends before the index age")
+      verify(right(ia) <= left(h), "index age ends before the hints")
+    } finally {
+      fakeModel.queueError = ""; fakeModel.queued = 0; fakeModel.indexStale = false
+    }
+  }
+
+  // #62 + #66 + #69: queue status, index age, options status and hints all
+  // at once, at 800 px, with a long queue reason: none overlaps another.
+  function test_all_four_footer_parts_do_not_overlap() {
+    fakeModel.queued = -1
+    fakeModel.queueError = "an earlier write was interrupted (/home/u/.config/nixarchy/apps.nix). To put back what was there before, run: nixarchy-pkg recover."
+    fakeModel.indexStale = true
+    fakeModel.optionsStatus = "options: reading your flake\u2026"
+    try {
+      var q = byName(card, "queueStatus"), ia = byName(card, "indexAge")
+      var o = byName(card, "optionsStatus"), h = byName(card, "hints")
+      verify(q && ia && o && h && ia.visible && o.visible)
+      var right = function (it) { return it.mapToItem(card, it.width, 0).x }
+      var left = function (it) { return it.mapToItem(card, 0, 0).x }
+      verify(right(q) <= left(ia), "queue ends before the index age")
+      verify(right(ia) <= left(o), "index age ends before the options status")
+      verify(right(o) <= left(h), "options status ends before the hints")
+    } finally {
+      fakeModel.queueError = ""; fakeModel.queued = 0
+      fakeModel.indexStale = false; fakeModel.optionsStatus = ""
     }
   }
 }

@@ -377,8 +377,11 @@ Item {
 
     // An empty list is a question, not a blank. It says which one.
     Text {
+      objectName: "emptyHint"
       anchors.centerIn: parent
-      visible: list.count === 0
+      visible: list.count === 0 || (root.model && root.model.flakeTab
+               && list.count === 1 && root.model.rowAt(0)
+               && root.model.rowAt(0).kind === "head")
       width: parent.width - Style.space(40)
       horizontalAlignment: Text.AlignHCenter
       wrapMode: Text.Wrap
@@ -527,10 +530,11 @@ Item {
       height: Style.font.title + Style.space(10)
 
       Text {
+        id: queueText
         objectName: "queueStatus"
         anchors {
           left: parent.left; leftMargin: Style.space(10)
-          right: staleText.visible ? staleText.left : optionsText.visible ? optionsText.left : hints.left
+          right: indexAge.visible ? indexAge.left : optionsText.visible ? optionsText.left : hints.left
           rightMargin: Style.space(14)
           verticalCenter: parent.verticalCenter
         }
@@ -557,17 +561,20 @@ Item {
       // package on it reads as free. Said plainly, with the key that fixes
       // it, rather than left for the user to discover after a rebuild.
       Text {
-        id: staleText
-        objectName: "indexStaleStatus"
+        id: indexAge
+        objectName: "indexAge"
+        // Between the queue status and the options status (or the hints);
+        // the queue status stops where this begins.
         anchors {
           right: optionsText.visible ? optionsText.left : hints.left; rightMargin: Style.space(14)
           verticalCenter: parent.verticalCenter
         }
-        visible: root.model && root.model.indexStale
-        text: "index stale \u2014 r to rebuild"
-        textFormat: Text.PlainText
+        width: Math.min(implicitWidth, parent.width * 0.35)
         elide: Text.ElideRight
-        width: Math.min(implicitWidth, parent.width * 0.27)
+        visible: root.model && root.model.indexStale
+        text: root.model && typeof root.model.indexLine === "function"
+              ? root.model.indexLine(Date.now()) : "index stale \u2014 r to rebuild"
+        textFormat: Text.PlainText
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
         color: Commons.Color.urgent
@@ -586,7 +593,7 @@ Item {
         text: root.model ? String(root.model.optionsStatus || "") : ""
         textFormat: Text.PlainText
         elide: Text.ElideRight
-        width: Math.min(implicitWidth, parent.width * 0.27)
+        width: Math.min(implicitWidth, parent.width * 0.2)
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
         color: root.model && root.model.optionsError ? Commons.Color.urgent : root.dim
