@@ -292,6 +292,15 @@ numbers were #60's; every site was found by content and matched.)
 - `git diff main --stat` touches only `tests/adapter.sh` (plus this plan).
 - PR links intent, spec and plan.
 
+(Deviation, step 3, by the owner's direction: the razer run was done in a
+disposable `nixarchy-desktop` microVM instead. The guest has no
+`options.json`, so the run put a copy of `nixarchy-search` naming the host's
+`options.json` first on PATH; result "all passed", exit 0, under
+`setsid -w … </dev/null`. The no-escape hash check and both negative checks
+ran on p620: identical hashes; `devenv` chosen with 0 failures; exactly one
+FAIL, "no app row the tests can round-trip", and none of the four guarded
+names.)
+
 ## Tests
 
 | Command | Expected |
