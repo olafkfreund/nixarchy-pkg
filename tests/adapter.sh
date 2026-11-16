@@ -27,6 +27,8 @@ not() { ! "$@"; }
 # The adapter keeps its lock and recovery data under XDG_STATE_HOME. Never
 # the real one.
 XDG_STATE_HOME=$(mktemp -d); export XDG_STATE_HOME
+# A HOME for catalogue toggles only (ctoggle), so no writer reaches ~.
+THOME=$(mktemp -d)
 
 # A selection of this machine's own catalogue, in a directory that is thrown
 # away afterwards.
@@ -41,6 +43,38 @@ fresh_config() {
   printf '%s' "$dir"
 }
 
+# Host-gated services: toggling one can prompt, or write outside the
+# throwaway dirs (openssh: ~/.ssh/authorized_keys). Never toggled here.
+# Add any service whose nixarchy-service-enable branch has a gate.
+readonly GATED_SERVICES=" openssh "
+
+# The first app that round-trips: an id the writers accept ([a-z0-9_-],
+# nixarchy-app-enable:23), written off as `# <id>.enable = true;` -- so
+# neither a `.settings` row nor an on-by-default app (`# <id>.enable =
+# false;`, which toggles off to a live `false`). LC_ALL=C: template notes
+# carry UTF-8 that `.` will not match in every locale. `q`, not `| head`:
+# under pipefail a reader that stops early can kill the script.
+pick_app() {
+  LC_ALL=C sed -nE '/^[[:space:]]*#[[:space:]]*(programs\.nixarchy\.apps\.)?([a-z0-9_-]+)\.enable = true;[[:space:]]+#@ \2([[:space:]].*)?$/{s//\2/p;q;}' "$1"
+}
+
+# Services name their own options (virtualisation.podman.enable,
+# hardware.graphics.enable32Bit, ...), so any `# <option> = true;  #@ <id>`.
+pick_service() {
+  local id
+  LC_ALL=C sed -nE 's/^[[:space:]]*#[[:space:]]*[A-Za-z0-9_.-]+ = true;[[:space:]]+#@ ([a-z0-9_-]+)([[:space:]].*)?$/\1/p' "$1" |
+    { while read -r id; do
+        case "$GATED_SERVICES" in *" $id "*) continue ;; esac
+        printf '%s\n' "$id"; break
+      done
+      cat >/dev/null; }   # drain, so sed never writes to a closed pipe
+}
+
+# A catalogue toggle: no terminal to prompt on, and a HOME of its own.
+# A prefix assignment (XDG_CONFIG_HOME=... ctoggle ...) reaches the adapter:
+# bash exports it for the duration of the function call.
+ctoggle() { HOME="$THOME" setsid -w "$ADAPTER" toggle "$@" </dev/null; }
+
 # The catalogue sections build from this machine's own templates, so they
 # only run on a nixarchy box. The rest -- flake, search, apply, the mode and
 # symlink checks, and the source-shape greps -- build their own fixtures or
@@ -53,6 +87,21 @@ fresh_config() {
 HAVE_CATALOGUE=true
 [ -d "$TEMPLATES" ] || { HAVE_CATALOGUE=false
   echo "note: $TEMPLATES not present; catalogue sections will be skipped"; }
+
+# The ids the catalogue cases toggle, chosen from this catalogue, never
+# named here: a named one (brave) vanished from the catalogue and took
+# eleven checks with it (#68).
+APP="" SVC="" CAN_TOGGLE=false
+if $HAVE_CATALOGUE; then
+  probe=$(fresh_config)
+  APP=$(pick_app "$probe/nixarchy/apps.nix")
+  SVC=$(pick_service "$probe/nixarchy/services.nix")
+  rm -rf "$probe"
+  echo "note: catalogue cases use app '${APP:-none}', service '${SVC:-none}'; never toggled:$GATED_SERVICES"
+  CAN_TOGGLE=true
+  [ -n "$APP" ] || { fail "no app row the tests can round-trip (every row is a settings row, on by default, or not in the '# <id>.enable = true;  #@ <id>' shape)"; CAN_TOGGLE=false; }
+  [ -n "$SVC" ] || { fail "no service row the tests can round-trip (every row is gated, or not in the '# <option> = true;  #@ <id>' shape)"; CAN_TOGGLE=false; }
+fi
 
 if $HAVE_CATALOGUE; then
 echo "state"
@@ -1475,6 +1524,6 @@ check "exits 0 on an unknown command" test "$rc" = 0
 check "says so in the object"         jq -e '.ok == false and (.error | length > 0)' <<<"$out"
 
 echo
-rm -rf "$XDG_STATE_HOME"
+rm -rf "$XDG_STATE_HOME" "$THOME"
 if [ "$fails" -gt 0 ]; then echo "$fails failed"; exit 1; fi
 echo "all passed"
