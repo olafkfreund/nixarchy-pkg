@@ -55,11 +55,19 @@ beside the existing `fakeModel` card. Do not change the existing tests.
 
 ```qml
 PkgModel { id: realModel }
-Card { id: realCard; width: 800; height: 400; model: realModel; visible: true }
+Card { id: realCard; width: 800; height: 400; model: realModel; visible: false }
 ```
 
-Put it inside the existing `win` Window, like `card` (the window is how
-`tst_card` shows its subjects). Helpers:
+Put it inside the existing `win` Window, like `card`. It is **hidden by
+default**: a visible second card on top would take the pointer from the
+existing hover tests (`tst_card.qml:253`, `:272`). Each new test sets
+`realCard.visible = true` first and `false` in a `try/finally`.
+
+The fake model gains `function rowAt(i) { return (i >= 0 && i < theRows.length) ? theRows[i] : null }`
+beside `rows()` (`tst_card.qml:35`): after fix 2, every Card calls
+`model.rowAt()`, and the fake would otherwise throw.
+
+Helpers:
 - `realList()` = `find(realCard, "QQuickListView")`.
 - `st(n, onIndex, extra)` builds the state JSON: `n` apps with ids
   `a0..a{n-1}`, `label`, `category: "Utility"`, `kind: "app"`, and
@@ -73,9 +81,11 @@ A write is `verify(realModel.write(["toggle", "app", "a2"]))` followed by
 `realModel._writer.deliver(st(...))`. That is the stub's `deliver()`; never
 call `finish()` first (Process stub order). Use `wait(50)` after a deliver.
 
-Must fail on main (each asserts `realList().currentIndex === realModel.cursor`
-and `realCard.currentRow.id === "a" + realModel.cursor`, plus its own
-expectation):
+Must fail on main. Each asserts `realList().currentIndex === realModel.cursor`
+and that the preview shows the row at the cursor:
+`compare(JSON.stringify(realCard.currentRow), JSON.stringify(realModel.rowAt(realModel.cursor)))`.
+Queue and Flakes rows have no `id`, so compare whole rows, not ids. Each also
+checks its own expectation:
 1. `test_real_write_same_count`: `cursor = 2`, write, deliver
    `st(6, 2)`. `cursor` is 2, the list is 2, and `currentRow.enabled` is true
    (the new content).
@@ -88,8 +98,11 @@ expectation):
    `tst_pkgmodel`'s `pend()` helper builds (copy that helper). Set
    `realModel.checkRunning = true` and `realModel.checkResult = { verdict:
    "evaluates", fingerprint: "f1" }` so `queueRows()` has the check row first.
-   Put `cursor` on the last row, then `cancelCheck()`. `cursor` is less than
-   `count`, and the list and preview agree. Then the same with the result
+   Put `cursor` on the last row, then `cancelCheck()` **and**
+   `realModel._check.finish(143)`. Only the check's exit clears `checkRunning`
+   (`PkgModel.qml:495`), and the stub emits `exited` only from `finish()`, so
+   without it the row never goes. `cursor` is less than `count`, and the list
+   and preview agree. Then the same with the result
    invalidated: deliver a pending answer with `fingerprint: "f2"`
    (`PkgModel.qml`, `checkResult.fingerprint !== data.fingerprint`).
 5. `test_real_naming_shrinks_flakes`: `setTab(5)`, set
@@ -113,7 +126,7 @@ Regression tests (they pass on main and must keep passing):
 
 **`tst_pkgmodel.qml`**, the clamp without a view:
 - `test_cancel_check_clamps_cursor`: the same setup as 4 on `m`, then
-  `cancelCheck()`. `m.cursor <= m.count - 1`.
+  `cancelCheck()` and `m._check.finish(143)`. `m.cursor <= m.count - 1`.
 - `test_naming_clamps_cursor`: the same setup as 5, then `beginNaming()`.
   `m.cursor === 0`.
 - Reset anything new in `cleanup()`: `inspected`, `checkResult` and
