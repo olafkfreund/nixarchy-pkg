@@ -756,6 +756,52 @@ cmd_draft() {
 # or path` deliberately fall through to the scaffold, because their value
 # is not one prompted word and a form that pretended otherwise would write
 # plausible-looking wrong configuration.
+opt_meta() {
+  local path=$1 scope=${2:-system} oj="" source=system
+  options_resolve
+  if [ -n "$OPT_DIR" ] && [ -f "$OPT_DIR/$scope.json" ]; then
+    oj=$OPT_DIR/$scope.json; source=flake
+  elif [ "$scope" = system ]; then
+    oj=$(searched optionsjson)
+  fi
+  if [ -z "$oj" ] || [ ! -f "$oj" ]; then printf 'null\n'; return 0; fi
+  jq --arg p "$path" --arg scope "$scope" --arg source "$source" '
+    def literal: if type == "object" then (.text // tostring) else tojson end;
+    def alt: "\"(?:[^\"\\\\]|\\\\.)*\"|-?[0-9]+";
+    def bounds:
+      gsub("[()]"; "") | gsub("^(null or |list of )+"; "") as $t
+      | if $t | test("^[0-9]+ bit unsigned integer; between -?[0-9]+ and -?[0-9]+|^integer between -?[0-9]+ and -?[0-9]+") then
+          [$t | capture("between (?<lo>-?[0-9]+) and (?<hi>-?[0-9]+)") | .lo, .hi]
+        elif $t | startswith("positive integer") then ["1", "9223372036854775807"]
+        elif $t | startswith("unsigned integer") then ["0", "9223372036854775807"]
+        elif $t | startswith("signed integer") then ["-9223372036854775808", "9223372036854775807"]
+        else [null, null] end;
+    .[$p] as $o
+    | if $o == null then null else
+        ($o.type // "") as $t
+        | ($t | test("^one of (?:" + alt + ")(?:, (?:" + alt + "))*$")) as $listed
+        | ($t | bounds) as $b
+        | {
+            ok: true, path: $p, scope: $scope, source: $source, type: $t,
+            description: ($o.description // ""), readOnly: ($o.readOnly // false),
+            declarations: ($o.declarations // []),
+            default: (if $o.default == null then "" else ($o.default | literal) end),
+            example: (if $o.example == null then "" else ($o.example | literal) end),
+            widget: if $t == "boolean" then "boolean" elif $listed then "enum"
+              elif ($t | test("^(signed integer|unsigned integer|positive integer|integer between|[0-9]+ bit unsigned integer)")) then "integer"
+              elif ($t | test("^(string|path|absolute path)([,[:space:]]|$)")) then "string"
+              else "scaffold" end,
+            item: (if $t | startswith("list of ") then
+              if ($b[0] != null) then "integer" elif ($t | test("string")) then "string" else null end
+              else null end),
+            nullable: ($t | startswith("null or ")),
+            min: $b[0], max: $b[1],
+            choices: (if $listed then [ $t | ltrimstr("one of ") | scan(alt) ] else [] end),
+            choicesUnavailable: (($t | startswith("one of ")) and ($listed | not))
+          }
+      end' "$oj" 2>/dev/null || printf 'null\n'
+}
+
 cmd_opt_describe() {
   local path="" scope=system
   while [ $# -gt 0 ]; do
@@ -768,10 +814,7 @@ cmd_opt_describe() {
   [ -n "$path" ] || die "usage: nixarchy-pkg opt describe [--scope system|user] <path>"
   case "$scope" in system|user) ;; *) die "--scope takes system or user, not '$scope'" ;; esac
   options_resolve
-  local oj="" source=system
-  if [ -n "$OPT_DIR" ] && [ -f "$OPT_DIR/$scope.json" ]; then
-    oj=$OPT_DIR/$scope.json; source=flake
-  elif [ "$scope" = user ]; then
+  if [ "$scope" = user ] && { [ -z "$OPT_DIR" ] || [ ! -f "$OPT_DIR/user.json" ]; }; then
     local why="no options were read from your flake yet"
     if [ -n "$OPT_DIR" ]; then
       why=$(jq -r --arg u "$(id -un)" 'if .homeManager != true then "this host has no Home Manager (home-manager.users) in its configuration"
@@ -779,9 +822,14 @@ cmd_opt_describe() {
         else "no Home Manager options were read for " + $u end' "$OPT_DIR/meta.json")
     fi
     die "no Home Manager options for $(id -un) -- $why"
-  else
-    oj=$(searched optionsjson)
-    [ -n "$oj" ] && [ -f "$oj" ] || die "no options.json on this system -- it builds no manual"
+  fi
+  local meta; meta=$(opt_meta "$path" "$scope")
+  if [ "$meta" = null ]; then
+    if [ "$scope" = system ] && [ -z "$(searched optionsjson)" ] && [ -z "$OPT_DIR" ]; then
+      die "no options.json on this system -- it builds no manual"
+    fi
+    jq -n --arg p "$path" '{ok:false, error:("no such option: " + $p)}'
+    return
   fi
 
   # What apps.nix already says about it, so the form can open on the value
@@ -814,50 +862,9 @@ cmd_opt_describe() {
     [[ $found == *$'\n'* ]] && cvalue=${found#*$'\n'}
   fi
 
-  jq --arg p "$path" --arg cstate "$cstate" --arg cvalue "$cvalue" --arg scope "$scope" --arg source "$source" '
-    def literal: if type == "object" then (.text // tostring) else tojson end;
-    # One enum alternative this form can offer and write back verbatim: a
-    # quoted string (escapes allowed) or an integer. Non-capturing, because
-    # scan() returns the groups instead of the match when there are any.
-    def alt: "\"(?:[^\"\\\\]|\\\\.)*\"|-?[0-9]+";
-    .[$p] as $o
-    | if $o == null then {ok: false, error: ("no such option: " + $p)}
-      else
-        ($o.type // "") as $t
-        # All the alternatives or none: `one of 6, 7, 8` used to yield an
-        # empty dropdown and `one of "foo", 7` half of one (#28). A type
-        # whose list is prose, or mixes in anything else, is written as
-        # Nix in the scaffold instead.
-        | ($t | test("^one of (?:" + alt + ")(?:, (?:" + alt + "))*$")) as $listed
-        | {
-            ok: true,
-            path: $p,
-            scope: $scope,
-            source: $source,
-            type: $t,
-            description: ($o.description // ""),
-            readOnly: ($o.readOnly // false),
-            declarations: ($o.declarations // []),
-            default: (if $o.default == null then "" else ($o.default | literal) end),
-            example: (if $o.example == null then "" else ($o.example | literal) end),
-            widget:
-              if   $t == "boolean" then "boolean"
-              elif $listed then "enum"
-              elif ($t | test("^(signed integer|unsigned integer|positive integer)")
-                    or ($t | test("^[0-9]+ bit unsigned integer"))) then "integer"
-              elif ($t | test("^(string|path|absolute path)([,[:space:]]|$)")) then "string"
-              else "scaffold" end,
-            # For an enum, the alternatives as the panel should offer them,
-            # quotes included: they are written into the file verbatim.
-            choices:
-              (if $listed then [ $t | ltrimstr("one of ") | scan(alt) ] else [] end),
-            choicesUnavailable: (($t | startswith("one of ")) and ($listed | not)),
-            current:
-              (if $cstate == "set" then {state: "set", value: $cvalue}
-               elif $cstate == "scaffold" then {state: "scaffold"}
-               else {state: "absent"} end)
-          }
-      end' "$oj"
+  jq --arg cstate "$cstate" --arg cvalue "$cvalue" \
+    '. + {current: (if $cstate == "set" then {state:"set", value:$cvalue}
+      elif $cstate == "scaffold" then {state:"scaffold"} else {state:"absent"} end)}' <<<"$meta"
 }
 
 # nixarchy-opt-remove needs each marked value on one physical line. Preserve
@@ -926,6 +933,53 @@ one_line() {
   printf -v "$1" '%s' "$out"
 }
 
+# Compare decimal literals without Bash's signed, fixed-width arithmetic.
+decimal_lt() {
+  local a=$1 b=$2
+  [ "$a" = -0 ] && a=0
+  [ "$b" = -0 ] && b=0
+  if [[ $a == -* && $b != -* ]]; then return 0; fi
+  if [[ $a != -* && $b == -* ]]; then return 1; fi
+  if [[ $a == -* ]]; then
+    a=${a#-}; b=${b#-}
+    if [ ${#a} -ne ${#b} ]; then [ ${#a} -gt ${#b} ]; return; fi
+    # shellcheck disable=SC2071 # Decimal digits are compared lexically after equal-length checks.
+    [[ $a > $b ]]; return
+  fi
+  if [ ${#a} -ne ${#b} ]; then [ ${#a} -lt ${#b} ]; return; fi
+  # shellcheck disable=SC2071 # Decimal digits are compared lexically after equal-length checks.
+  [[ $a < $b ]]
+}
+
+check_literal() {
+  local path=$1 value=$2 meta min max integer_type item nullable v
+  local -a fields
+  meta=$(opt_meta "$path")
+  [ "$meta" != null ] || return 0
+  mapfile -t fields < <(jq -r '[.min // "", .max // "",
+    (.type | test("^(null or )?(signed integer|unsigned integer|positive integer|integer between|[0-9]+ bit unsigned integer)")),
+    .item // "", .nullable] | .[]' <<<"$meta")
+  min=${fields[0]} max=${fields[1]} integer_type=${fields[2]} item=${fields[3]} nullable=${fields[4]}
+  [ "$integer_type" = true ] || [ "$item" = integer ] || return 0
+  [ "$value" = null ] && [ "$nullable" = true ] && return 0
+  if [ "$item" = integer ]; then
+    [[ $value =~ ^\[[[:space:]]*(-?[0-9]+([[:space:]]+-?[0-9]+)*[[:space:]]*)?\]$ ]] || return 0
+    value=${value#\[}; value=${value%\]}
+  elif [[ ! $value =~ ^-?[0-9]+$ ]]; then
+    return 0
+  fi
+  for v in $value; do
+    if [[ $v =~ ^-?0[0-9]+$ ]]; then
+      die "write $path as a plain number, without leading zeros. Nothing was changed."
+    fi
+    [[ $v =~ ^-?(0|[1-9][0-9]*)$ ]] || continue
+    if { [ -n "$min" ] && decimal_lt "$v" "$min"; } ||
+       { [ -n "$max" ] && decimal_lt "$max" "$v"; }; then
+      die "$path takes $min to $max; $v is outside that. Nothing was changed."
+    fi
+  done
+}
+
 # Write a value for an option.
 #
 # The line is byte-exact and that is not style: nixarchy-opt-remove walks
@@ -960,6 +1014,7 @@ cmd_opt_set() {
   begin_write
   [ -f "$APPS" ] || die "no $APPS -- log in again to have it created"
   one_line value
+  check_literal "$path" "$value"
   if grep -q "#@opt ${path//./\\.}\$" "$APPS"; then
     die "$path is already in $APPS -- remove it first"
   fi
@@ -1051,6 +1106,7 @@ cmd_opt_replace() {
   begin_write
   [ -f "$APPS" ] || die "no $APPS -- log in again to have it created"
   one_line value
+  check_literal "$path" "$value"
   grep -q "#@opt ${path//./\\.}\$" "$APPS" ||
     die "$path is not in $APPS -- use 'opt set' to add it"
 

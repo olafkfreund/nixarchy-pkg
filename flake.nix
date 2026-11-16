@@ -89,18 +89,16 @@
             touch "$out"
           '';
 
-          # qmllint proves the QML parses. It cannot prove the panel
-          # behaves, and #43's four defects were behaviour -- a stale write
-          # closing a form the user had reopened, a mode surviving a tab
-          # change, a shared Process dropping a read, and a writer that
-          # could die leaving the panel refusing every later write (#50).
-          #
-          # PkgModel is the data layer and imports no qs.* at all, so it
-          # runs here against inert stubs that spawn nothing and decide
-          # nothing: the tests hand it a canned answer or a death and assert
-          # what the MODEL did. Card is not covered -- the harness cannot
-          # drive a ListView delegate's nested content faithfully, and a
-          # measurement it cannot be trusted to make is worse than none.
+          # qmllint proves the QML parses. These tests assert what
+          # PkgModel, Card, OptionForm, Panel and Menu do through inert
+          # stubs that spawn nothing and decide nothing: tests hand them
+          # a canned answer or a death. Menu uses PanelWindow as plain
+          # items with three layer-shell lines removed. Drawing, the
+          # host types' real behaviour and compositor are not covered.
+          # #43's four defects were behaviour: a stale write closing a
+          # reopened form, a mode surviving a tab change, a shared
+          # Process dropping a read, and a writer dying during a write
+          # (#50).
           qml-tests =
             pkgs.runCommand "nixarchy-pkg-qml-tests" { nativeBuildInputs = [ pkgs.qt6.qtdeclarative ]; }
               ''
@@ -122,6 +120,27 @@
                 cp ${./OptionForm.qml} OptionForm.qml
                 cp ${./tests/qml/tst_optionform.qml} tst_optionform.qml
                 qmltestrunner -input tst_optionform.qml \
+                  -import "$PWD/imports" \
+                  -import "${pkgs.qt6.qtdeclarative}/lib/qt-6/qml"
+                cp ${./Panel.qml} Panel.qml
+                cp ${./tests/qml/tst_panel.qml} tst_panel.qml
+                qmltestrunner -input tst_panel.qml \
+                  -import "$PWD/imports" \
+                  -import "${pkgs.qt6.qtdeclarative}/lib/qt-6/qml"
+                cp ${./Menu.qml} Menu.src
+                # WlrLayershell is an attached type of the host's C++ plugin and no QML file
+                # can stand in for one. Remove exactly its three known assignments, which
+                # carry no logic; any other use, or a changed line, fails here rather than
+                # passing unseen. (`! grep` would not: set -e ignores a negated command.)
+                [ "$(grep -c WlrLayershell Menu.src)" = 3 ]
+                grep -Fxv \
+                  -e '    WlrLayershell.namespace: "nixarchy-pkg-menu"' \
+                  -e '    WlrLayershell.layer: WlrLayer.Overlay' \
+                  -e '    WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive' \
+                  Menu.src > Menu.qml
+                [ "$(grep -c WlrLayershell Menu.qml)" = 0 ]
+                cp ${./tests/qml/tst_menu.qml} tst_menu.qml
+                qmltestrunner -input tst_menu.qml \
                   -import "$PWD/imports" \
                   -import "${pkgs.qt6.qtdeclarative}/lib/qt-6/qml"
                 touch "$out"
