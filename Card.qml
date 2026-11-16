@@ -382,8 +382,11 @@ Item {
 
     // An empty list is a question, not a blank. It says which one.
     Text {
+      objectName: "emptyHint"
       anchors.centerIn: parent
-      visible: list.count === 0
+      visible: list.count === 0 || (root.model && root.model.flakeTab
+               && list.count === 1 && root.model.rowAt(0)
+               && root.model.rowAt(0).kind === "head")
       width: parent.width - Style.space(40)
       horizontalAlignment: Text.AlignHCenter
       wrapMode: Text.Wrap

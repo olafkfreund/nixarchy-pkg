@@ -40,6 +40,8 @@ TestCase {
     property string queueCount: "?"
     function tabCount(i) { return i === 2 ? selCount : i === 6 ? queueCount : "" }
     property bool inspecting: false
+    property bool flakeTab: tab === 5
+    property string query: ""
     property bool checkRunning: false
     property string message: ""
     property int queued: 0
@@ -454,6 +456,25 @@ TestCase {
   function test_header_fits() {
     var h = byName(card, "header")
     verify(h.implicitWidth <= h.width, "the tab row fits at 800 px")
+  }
+
+  function test_flake_head_only_shows_hint() {
+    var savedRows = theRows
+    try {
+      fakeModel.tab = 5
+      fakeModel.query = "github:owner/repo"
+      theRows = [{ kind: "head", label: "flake: /f" }]
+      var hint = byName(card, "emptyHint")
+      tryCompare(hint, "visible", true)
+      compare(hint.text, "RETURN to see what \u201cgithub:owner/repo\u201d offers")
+      fakeModel.inspecting = true
+      compare(hint.text, "looking at \u201cgithub:owner/repo\u201d\u2026")
+    } finally {
+      fakeModel.inspecting = false
+      fakeModel.query = ""
+      fakeModel.tab = 0
+      theRows = savedRows
+    }
   }
 
   // ---- #75: the row you see selected is the row a key acts on ----------

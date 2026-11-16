@@ -1283,19 +1283,12 @@ cmd_flake_add() {
   fi
   committed
 
-  # The import line is SHOWN, never written. `default` is the answer the
-  # flake itself gives to "which module" -- measured convention across
-  # nixvim, home-manager and sops-nix, all of which expose `default`
-  # beside a named alias. Every other choice is still open: which host,
-  # whether the module takes arguments, whether an option must be set to
-  # enable it. Knowing the attribute settles one of four, which is not
-  # permission to edit a file this tool does not own.
+  # The adapter has not inspected this flake's outputs, so it cannot name
+  # a module to import. `flake show` lets the caller see what it offers.
   jq -nc --arg name "$name" --arg ref "$ref" --arg warn "$warn" \
     '{ok: true, name: $name, url: $ref,
-      message: (("declared " + $name + " and locked it")
-                + (if $warn == "" then "" else " -- " + $warn end)),
-      import: ("inputs." + $name + ".nixosModules.default"),
-      importNote: "Add that to the imports of the host that should have it. This tool does not know which file that is."}'
+      message: (("declared " + $name + " and locked it -- run \u0027nixarchy-pkg flake show " + $ref + "\u0027 to see what it offers")
+                + (if $warn == "" then "" else " -- " + $warn end))}'
 }
 
 # Removal refuses rather than succeeds-and-breaks. Taking out a
@@ -1476,16 +1469,21 @@ pins_json() {
 # A copy pinned to a cited line cannot disagree with it; asking a second
 # opinion can.
 #
+# The flat `inputs.nixpkgs.url` form is read only where the writer's own
+# parse finds nothing, which is exactly where the writer says `custom`,
+# warns and proceeds; so the panel can never offer a channel the writer
+# refuses (#63, companion issue 1). The pipe to `head -1` is gone: it
+# would SIGPIPE under pipefail.
+#
 # Read from the URL, which is what an update resolves, not the lock,
-# which is only where it last landed. `custom` is a real answer: the
-# flat `inputs.nixpkgs.url` form and a reshaped flake both land there,
-# and the panel says so rather than guessing.
+# which is only where it last landed. `custom` is a real answer: a
+# reshaped flake lands there, and the panel says so rather than guessing.
 machine_channel() {
   local flakedir u
   flakedir="${NIXARCHY_FLAKE:-/etc/nixos}"
   [ -r "$flakedir/flake.nix" ] || { printf custom; return; }
-  u=$(sed -nE "s/^[[:space:]]*nixpkgs\.url[[:space:]]*=[[:space:]]*\"([^\"]+)\".*/\1/p" \
-    "$flakedir/flake.nix" | head -1)
+  u=$(sed -nE '/^[[:space:]]*nixpkgs\.url[[:space:]]*=[[:space:]]*"([^"]+)".*/{s//\1/p;q}' "$flakedir/flake.nix")
+  [ -n "$u" ] || u=$(sed -nE '/^[[:space:]]*inputs\.nixpkgs\.url[[:space:]]*=[[:space:]]*"([^"]+)".*/{s//\1/p;q}' "$flakedir/flake.nix")
   case "$u" in
     *nixos-unstable*) printf unstable ;;
     *nixos-[0-9][0-9].[0-9][0-9]*) printf stable ;;
@@ -2103,6 +2101,8 @@ cmd_state() {
     --arg unreadable "$unread_msg" \
     --argjson rfiles "$rfiles" \
     --arg channel "$(machine_channel)" \
+    --arg flakeDir "${NIXARCHY_FLAKE:-/etc/nixos}" \
+    --argjson flakeFound "$([ -r "${NIXARCHY_FLAKE:-/etc/nixos}/flake.nix" ] && echo true || echo false)" \
     --rawfile flakes <(cmd_flake_list) \
     '
     def lines: split("\n") | map(select(length > 0));
@@ -2116,6 +2116,8 @@ cmd_state() {
       index: $index,
       files: { apps: $appsFile, services: $servicesFile },
       channel: $channel,
+      flakeDir: $flakeDir,
+      flakeFound: $flakeFound,
       # Absent when every file read, so an ordinary state carries no
       # message. ok stays true: one unreadable file must not cost the user
       # the tabs that were fine, or the panel they would fix it from (#41).

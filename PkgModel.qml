@@ -49,6 +49,7 @@ QtObject {
   // was asked about something it does not have yet.
   property var inspected: null
   property bool inspecting: false
+  property var pendingDeclare: null
 
   property int cursor: 0
   // -1 is "not known": no answer yet, or the last one was an error. 0 is
@@ -160,7 +161,7 @@ QtObject {
       var mods = inspected.nixosModules || []
       if (mods.length > 0) {
         for (var i = 0; i < mods.length; i++)
-          rows.push({ kind: "module", label: "nixosModules." + mods[i] })
+          rows.push({ kind: "module", label: (inspected.declaredAs ? "inputs." + inspected.declaredAs + "." : "") + "nixosModules." + mods[i] })
       } else {
         rows.push({ kind: "note", label: "no nixosModules" })
       }
@@ -174,14 +175,20 @@ QtObject {
       var op = inspected.opaque || []
       for (var j = 0; j < op.length; j++)
         rows.push({ kind: "note", label: op[j] + " \u2014 exists, contents cannot be read" })
-      rows.push({ kind: "declare", label: "declare this as an input" })
+      if (!inspected.declaredAs)
+        rows.push({ kind: "declare", label: "declare this as an input" })
       return rows
     }
     var have = state.flakes || []
-    if (have.length === 0) return []
-    return have.map(function (f) {
+    if (state.flakeDir === undefined) return []   // no answer yet
+    var out = [{ kind: "head", label: "flake: " + state.flakeDir }]
+    if (state.flakeFound === false)
+      out.push({ kind: "note", label: "no flake.nix here. The panel and nixarchy-apply both use"
+                + " NIXARCHY_FLAKE (programs.nixarchy.flake sets it); it must be set in the"
+                + " session the shell runs in, not only in a terminal." })
+    return out.concat(have.map(function (f) {
       return { kind: "declared", label: f.name, url: f.url, name: f.name }
-    })
+    }))
   }
 
   // The Queue tab. The model builds every text; the view only draws it.
@@ -301,8 +308,13 @@ QtObject {
   // cursor must still name a row (#75).
   onCountChanged: if (cursor > Math.max(0, count - 1)) cursor = Math.max(0, count - 1)
 
+  // "remove:<name>" or "update:<name>" while a flake row waits for its
+  // second press.
+  property string armedFlake: ""
+
   function disarm() {
     if (armedChannel !== "") { armedChannel = ""; message = "" }
+    if (armedFlake !== "") { armedFlake = ""; message = "" }
     if (armingState !== "" || armedKind !== "" || armedApply !== "") {
       armingState = ""; armedKind = ""; armedPins = ({}); armedFingerprint = ""
       armedApply = ""; _applyArmTimer.stop(); message = ""
@@ -348,6 +360,7 @@ QtObject {
   }
 
   function setTab(i) {
+    var next = Math.max(0, Math.min(tabs.length - 1, i))
     disarm()
     invalidateInspection()
     // A mode must not outlive the tab it belongs to. Left behind, naming
@@ -355,9 +368,10 @@ QtObject {
     // early while it is on -- and turned RETURN into a declare against a
     // ref from the tab the user had already left (#43).
     if (naming) { cancelNaming(); namingAbandoned() }
-    tab = Math.max(0, Math.min(tabs.length - 1, i))
+    if (next !== tab) { query = ""; results = [] }
+    pendingDeclare = null
+    tab = next
     cursor = 0
-    if (indexTab && searching) runSearch()
   }
 
   // ---- talking to the adapter -----------------------------------------
@@ -430,6 +444,9 @@ QtObject {
     // not; take them before any branch returns.
     if (data.indexStale !== undefined) root.indexStale = data.indexStale
     if (data.index !== undefined) root.index = data.index
+    if (isWrite && pendingDeclare
+        && (data.ok !== true || data.name !== pendingDeclare.name || data.url !== pendingDeclare.ref))
+      pendingDeclare = null
     if (data.ok === false && data.error) {
       root.message = String(data.error)
       return
@@ -445,6 +462,25 @@ QtObject {
     // that as state emptied every tab until the menu was reopened.
     if (data.apps === undefined) {
       if (data.message) root.message = String(data.message)
+      if (pendingDeclare && data.ok === true
+          && data.name === pendingDeclare.name && data.url === pendingDeclare.ref) {
+        var saved = pendingDeclare
+        pendingDeclare = null
+        if (saved.offers !== null && saved.offers.ok !== false) {
+          inspected = Object.assign({}, saved.offers, { declaredAs: data.name })
+          cursor = 0
+          var mods = saved.offers.nixosModules || []
+          if (mods.length > 0) {
+            var m = mods.indexOf("default") >= 0 ? "default" : mods[0]
+            message = "declared " + data.name + ". To use it, add inputs." + data.name
+                    + ".nixosModules." + attrName(m)
+                    + " to the imports of the host that should have it -- this tool does not know which file that is"
+          }
+        }
+        if (saved.nonFlake)
+          message = "declared " + data.name + " as a non-flake source -- use it as inputs."
+                  + data.name + " (a path)"
+      }
       if (isWrite) root.refresh()
       return
     }
@@ -661,11 +697,12 @@ QtObject {
         // A declared input is the only flake row that acts. The rest are
         // there to be read, and a key that silently did nothing would be
         // worse than one that says why.
-        if (row.kind === "declared") write(["flake", "remove", row.name])
+        if (row.kind === "declared") message = "SPACE twice removes " + row.name
         else if (row.kind === "declare") { if (host && host.startNaming) host.startNaming() }
         else if (row.kind === "module")
           message = "paste this into the imports of the host that should have it: "
-                  + "inputs." + suggestInputName(inspected ? inspected.ref : "") + "." + row.label
+                  + (inspected && inspected.declaredAs ? row.label
+                     : "inputs." + suggestInputName(inspected ? inspected.ref : "") + "." + row.label)
                   + " \u2014 this tool does not know which file that is"
         break
     }
@@ -693,23 +730,67 @@ QtObject {
     var other = mine === "unstable" ? "stable"
               : mine === "stable"   ? "unstable" : ""
 
+    // Nothing to arm: there is no "other" channel to name, and sending a
+    // plain add from here would be the RETURN key under another name.
+    if (other === "") {
+      message = row.name + " -- cannot tell which channel this machine follows from "
+        + (state.flakeDir || "the flake") + "/flake.nix, so there is no \"other\" channel"
+        + " to add from -- RETURN adds it from this one"
+      return
+    }
+
     if (armedChannel === row.name) {
       armedChannel = ""
-      // No flag when the channel is unknown: the writer says the same
-      // thing better, and refuses if it turns out to be the one we are on.
-      write(other === "" ? ["pkg", "add", row.name]
-                         : ["pkg", "add", "--" + other, row.name])
+      write(["pkg", "add", "--" + other, row.name])
       return
     }
 
     armedChannel = row.name
-    message = row.name + (other === ""
-        ? " \u2014 cannot tell which channel this machine follows, so I cannot"
-          + " tell you which one this would come from."
-        : " from the " + other + " channel.")
+    message = row.name + " from the " + other + " channel."
       + " It brings its own closure: the two channels share no store paths,"
       + " even at the same version. unfree and broken are not known for that"
       + " channel. SHIFT+RETURN again to add it."
+  }
+
+  // Two presses, like the channel add: the first says what will happen,
+  // the second does it. Anything that moves the list disarms.
+  function armFlake(kind) {            // "remove" | "update"
+    var row = rowAt(cursor)
+    if (!flakeTab || !row || row.kind !== "declared") return false
+    var key = kind + ":" + row.name
+    if (armedFlake === key) {
+      armedFlake = ""; message = ""
+      var started = write(kind === "remove" ? ["flake", "remove", row.name]
+                                            : ["flake", "update", row.name])
+      if (!started && busy && !applying)
+        message = "another change is still running -- try again"
+      return started
+    }
+    disarm()
+    if (kind === "update" && (row.follows || row.locked === false)) {
+      message = row.name + (row.follows ? " follows " + row.follows + "; update that one"
+                                        : " is not locked yet; the next apply locks it")
+      return false
+    }
+    if (kind === "remove" && row.mine === false) {
+      message = row.name + " was not declared by this tool -- edit flake.nix to remove it"
+      return false
+    }
+    armedFlake = key
+    message = kind === "remove"
+      ? "remove " + row.name + " from flake.nix? SPACE again removes it, any other key cancels"
+      : "update " + row.name + "? It changes what the next apply builds"
+        + ((row.name === "nixpkgs" || row.name === "nixarchy") ? " -- the whole system" : "")
+        + ". u again updates it, any other key cancels"
+    return true
+  }
+
+  function keyCancelsFlakeArm(key) {
+    return armedFlake !== "" && key !== Qt.Key_Space
+      && !(armedFlake.indexOf("update:") === 0 && key === Qt.Key_U)
+      && key !== Qt.Key_Shift && key !== Qt.Key_Control
+      && key !== Qt.Key_Alt && key !== Qt.Key_Meta
+      && key !== Qt.Key_Super_L && key !== Qt.Key_Super_R
   }
 
   // Ask what a flakeref contains. Nothing is written; `nix flake show`
@@ -717,6 +798,7 @@ QtObject {
   // before they commit to running somebody else's build code.
   function inspect() {
     if (!flakeTab || query.length === 0 || inspecting) return
+    pendingDeclare = null
     inspecting = true
     _inspectRun = _inspectToken
     message = "looking at " + query + "\u2026"
@@ -782,6 +864,12 @@ QtObject {
     return name
   }
 
+  function attrName(s) {
+    s = String(s)
+    return /^[A-Za-z_][A-Za-z0-9_'-]*$/.test(s) ? s
+      : '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\$\{/g, "\\${") + '"'
+  }
+
   // Name mode: RETURN on "declare this as an input" puts the suggestion in
   // the field for the person to confirm or change. The adapter validates
   // whatever comes back; this only pre-fills it.
@@ -806,6 +894,7 @@ QtObject {
       if (!applying) message = "still writing \u2014 try again in a moment"
       return false
     }
+    pendingDeclare = { name: String(name), ref: namingRef, offers: inspected, nonFlake: false }
     naming = false
     invalidateInspection()
     return true
@@ -813,11 +902,13 @@ QtObject {
 
   // Back to the inspection; the ref to put back in the field.
   function cancelNaming() {
+    pendingDeclare = null
     naming = false
     return namingRef
   }
 
   function clearInspection() {
+    pendingDeclare = null
     if (inspected === null) return false
     invalidateInspection()
     message = ""
