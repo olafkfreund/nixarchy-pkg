@@ -70,6 +70,12 @@ QtObject {
   property int _pendingRun: 0
   property int _armWant: 0
   property bool _pendingAgain: false
+  property bool _readerAgain: false
+  property bool _readerAbsorbed: true
+  property bool _optionsAgain: false
+  property bool _optionsAbsorbed: true
+  property bool _searchAgain: false
+  property bool _searchAbsorbed: true
   // False from a pending run's start until its answer is absorbed, so a
   // rerun never starts before the answer it follows (exit and stdout come
   // in either order).
@@ -82,6 +88,22 @@ QtObject {
   property var _deferredArgs: []
   property bool neverApplied: false
   property bool indexStale: false
+  // Where the option list came from: "flake" (the host's own flake, read by
+  // `options refresh`), "system" (the NixOS manual: today's index), or ""
+  // before any answer. Kept like indexStale.
+  property string optionsSource: ""
+  property bool optionsStale: false
+  property string optionsError: ""
+  readonly property bool optionsReading: _optionsRefresh.running || reindexing
+  readonly property string optionsStatus: {
+    if (optionsReading) return "options: reading your flake\u2026"
+    if (optionsError !== "") return "options: " + optionsError
+    if (optionsSource === "system") return "options: system manual"
+    if (optionsSource === "flake" && optionsStale) return "options: your flake (stale)"
+    return ""
+  }
+  // One automatic refresh per panel session for a stale cache found on opening.
+  property bool _optionsAuto: false
   property var index: null
   property bool busy: false
   property bool reindexing: false
@@ -380,8 +402,13 @@ QtObject {
   // cannot swallow the result of a toggle you pressed while it ran.
   property Process _reader: Process {
     stdout: StdioCollector {
-      onStreamFinished: root._absorb(text, false)
+      onStreamFinished: {
+        root._absorb(text, false)
+        root._readerAbsorbed = true
+        root._readerRerun()
+      }
     }
+    onRunningChanged: root._readerRerun()
   }
 
   // Search reads on its own channel. Sharing _reader with refresh() meant
@@ -392,8 +419,13 @@ QtObject {
   // this file has its own Process for exactly this reason.
   property Process _searcher: Process {
     stdout: StdioCollector {
-      onStreamFinished: root._absorb(text, false)
+      onStreamFinished: {
+        root._absorb(text, false)
+        root._searchAbsorbed = true
+        root._searchRerun()
+      }
     }
+    onRunningChanged: root._searchRerun()
   }
 
   property Process _writer: Process {
@@ -430,6 +462,56 @@ QtObject {
     }
   }
 
+  // The `options` object of search and reindex, or `optionsInfo` of state.
+  // A refresh failure arrives as {ok:false, error} (reindex carries one).
+  function _absorbOptions(o, refreshAnswer) {
+    if (o === undefined || o === null || typeof o !== "object") return
+    if (o.ok === false) {
+      root.optionsError = String(o.error || "could not read the options")
+      return
+    }
+    if (o.source === undefined) return
+    root.optionsSource = String(o.source)
+    root.optionsStale = o.stale === true
+    if (refreshAnswer && o.ok === true) root.optionsError = ""
+  }
+
+  // A stale cache found on opening is refreshed once, in the background.
+  function _optionsAutoRefresh() {
+    if (root._optionsAuto || !root.optionsStale || root.optionsSource !== "flake") return
+    root._optionsAuto = true
+    root.refreshOptions()
+  }
+
+  function refreshOptions() {
+    if (_optionsRefresh.running || !_optionsAbsorbed) { _optionsAgain = true; return }
+    _optionsAbsorbed = false
+    _optionsRefresh.command = [script, "options", "refresh"]
+    _optionsRefresh.running = true
+  }
+
+  function _optionsRerun() {
+    if (!_optionsAgain || _optionsRefresh.running || !_optionsAbsorbed) return
+    _optionsAgain = false
+    refreshOptions()
+  }
+
+  property Process _optionsRefresh: Process {
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var data = null
+        try { data = JSON.parse(text) } catch (e) { data = null }
+        if (data === null || typeof data !== "object")
+          data = { ok: false, error: "could not read the adapter" }
+        root._absorbOptions(data, true)
+        if (data.ok === true && root.tab === 3 && root.searching) root.runSearch()
+        root._optionsAbsorbed = true
+        root._optionsRerun()
+      }
+    }
+    onRunningChanged: root._optionsRerun()
+  }
+
   function _absorb(text, isWrite) {
     var data
     try {
@@ -448,11 +530,13 @@ QtObject {
         && (data.ok !== true || data.name !== pendingDeclare.name || data.url !== pendingDeclare.ref))
       pendingDeclare = null
     if (data.ok === false && data.error) {
+      root._absorbOptions(data.options, true)
       root.message = String(data.error)
       return
     }
     if (data.rows !== undefined) {
       root.results = data.rows
+      root._absorbOptions(data.options)
       root.cursor = 0
       return
     }
@@ -461,6 +545,7 @@ QtObject {
     // answers {ok, indexStale, index, message} (and detail on failure), and absorbing
     // that as state emptied every tab until the menu was reopened.
     if (data.apps === undefined) {
+      root._absorbOptions(data.options, true)
       if (data.message) root.message = String(data.message)
       if (pendingDeclare && data.ok === true
           && data.name === pendingDeclare.name && data.url === pendingDeclare.ref) {
@@ -485,6 +570,8 @@ QtObject {
       return
     }
     root.state = data
+    root._absorbOptions(data.optionsInfo)
+    root._optionsAutoRefresh()
     if (data.message) root.message = String(data.message)
     if (isWrite) root.refreshPending()
     root.cursor = Math.min(root.cursor, Math.max(0, root.count - 1))
@@ -568,12 +655,20 @@ QtObject {
   }
 
   function refresh() {
-    _reader.command = [script, "state"]
-    _reader.running = true
     refreshPending()
     // A write changes what an option row says (set, current), so a search
     // on the Options tab is asked again rather than left showing the past.
     if (tab === 3 && searching) runSearch()
+    if (_reader.running || !_readerAbsorbed) { _readerAgain = true; return }
+    _readerAbsorbed = false
+    _reader.command = [script, "state"]
+    _reader.running = true
+  }
+
+  function _readerRerun() {
+    if (!_readerAgain || _reader.running || !_readerAbsorbed) return
+    _readerAgain = false
+    refresh()
   }
 
   function refreshPending() {
@@ -650,11 +745,19 @@ QtObject {
 
   function runSearch() {
     if (!indexTab || !searching) { results = []; return }
+    if (_searcher.running || !_searchAbsorbed) { _searchAgain = true; return }
+    _searchAbsorbed = false
     // `--` last, so a query starting with a dash is a query (#30).
     _searcher.command = [script, "search",
                          "--kind", tab === 2 ? "pkg" : "opt",
                          "--limit", "60", "--", query]
     _searcher.running = true
+  }
+
+  function _searchRerun() {
+    if (!_searchAgain || _searcher.running || !_searchAbsorbed) return
+    _searchAgain = false
+    runSearch()
   }
 
   // True when the write started; false when one was already running.
@@ -954,7 +1057,7 @@ QtObject {
     if (reindexing) { message = "already rebuilding the index"; return false }
     reindexing = true
     _reindexAnswered = false
-    message = "rebuilding the search index (about 45 s)"
+    message = "rebuilding the search index and reading your flake (may take several minutes)"
     _reindexer.command = [script, "reindex"]
     _reindexer.running = true
     return true
@@ -997,6 +1100,8 @@ QtObject {
           root._logLine(done.ok ? "\u2014 applied \u2014"
                                 : "\u2014 failed: " + String(done.message || "") + " \u2014")
           root.refresh()
+          // The flake just changed: read its options again, off to the side.
+          if (done.ok) root.refreshOptions()
           return
         }
         root._logLine(trimmed)

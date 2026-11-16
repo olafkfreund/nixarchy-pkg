@@ -13,6 +13,22 @@ does not carry, which is most of them.
 `/` searches. Each row shows the option's path and its type, read from
 nixpkgs' own `options.json` rather than guessed.
 
+## Where the options come from
+
+The list is read from your own flake: the options of the host you are on,
+including those your modules declare and the `programs.nixarchy.*` ones. It
+is read when the index is rebuilt (`r`) and after every apply, in the
+background, and cached.
+
+- The footer says `options: system manual` until that has happened. The
+  list is then NixOS's manual, which does not know your own modules.
+- `options: reading your flake…` means a read is running.
+- Editing a module without applying is not seen until the next apply or
+  reindex.
+- On a git flake, files you have not `git add`ed are invisible, exactly as
+  they are to the rebuild.
+- A cache built for another flake, host or user is never used.
+
 ## Setting one
 
 `RETURN` opens a form built from the option's declared type. Not a text box
