@@ -367,4 +367,25 @@ TestCase {
     m.beginNaming()
     compare(m.cursor, 0)
   }
+
+  function test_catalogue_rows_group_and_settings_last() {
+    m.state = { apps: [{ id: "a", category: "A" }, { id: "b", category: "B" },
+                       { id: "c", category: "A" },
+                       { id: "s.settings", category: "A", settings: true }] }
+    m.setTab(0)
+    compare(m.rows().map(function (r) { return r.id }).join(), "a,c,b,s.settings")
+    compare(m.rows().map(function (r) { return r.section }).join("|"),
+            "A|A|B|settings \u2014 edit in apps.nix")
+    compare(m.rowAt(3).settings, true)
+    m.cursor = 3
+    m.activate()
+    verify(m.message.indexOf("configures") >= 0, "it explains instead of toggling")
+    compare(m.busy, false, "and starts no write")
+
+    m.state = { apps: [{ id: "x", category: "constructor" }, { id: "y", category: "__proto__" },
+                       { id: "z", category: "constructor" }] }
+    compare(m.rows().map(function (r) { return r.id }).join(), "x,z,y")
+    compare(m.rows().map(function (r) { return r.section }).join("|"),
+            "constructor|constructor|__proto__")
+  }
 }

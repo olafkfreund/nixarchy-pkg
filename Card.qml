@@ -201,6 +201,22 @@ Item {
     preferredHighlightEnd: height * 0.75
     highlightRangeMode: ListView.ApplyRange
 
+    // Category headers on Apps and Services. A section takes no model index,
+    // so cursor, rowAt and count are unaffected.
+    section.property: root.model && root.model.tab < 2 ? "section" : ""
+    section.delegate: Text {
+      required property string section
+      width: ListView.view ? ListView.view.width : 0
+      height: Math.round(Style.font.title * 2)
+      verticalAlignment: Text.AlignBottom
+      leftPadding: Style.space(10)
+      text: section
+      textFormat: Text.PlainText
+      elide: Text.ElideRight
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.title
+      color: root.dim
+    }
 
     delegate: Rectangle {
       required property int index
@@ -350,8 +366,7 @@ Item {
                              - Style.space(10) * ((flags.visible ? 3 : 2)
                                                   + (icon.visible ? 1 : 0)))
           elide: Text.ElideRight
-          text: modelData.summary || modelData.note || modelData.type
-                || modelData.line || modelData.category || ""
+          text: modelData.summary || modelData.note || modelData.type || ""
           textFormat: Text.PlainText
           font.family: root.fontFamily
           font.pixelSize: Style.font.title

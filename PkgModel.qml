@@ -127,8 +127,8 @@ QtObject {
   function rows() {
     if (indexTab && searching) return results
     switch (tab) {
-      case 0: return filtered(state.apps || [])
-      case 1: return filtered(state.services || [])
+      case 0: return catalogueRows(state.apps || [], "apps.nix")
+      case 1: return catalogueRows(state.services || [], "services.nix")
       case 2: return state.packages || []
       case 3: return state.options || []
       case 4: return state.drafts || []
@@ -259,6 +259,29 @@ QtObject {
           || String(r.label || "").toLowerCase().indexOf(q) >= 0
           || String(r.category || "").toLowerCase().indexOf(q) >= 0
     })
+  }
+
+  // Each row gains `section`, the header it is drawn under. Grouped by
+  // category in first-seen order, file order within a group: a ListView
+  // section is drawn at every change of value, so headers A, B, A would
+  // otherwise show A twice. Settings rows go last: they configure an app
+  // and cannot be turned on themselves.
+  function catalogueRows(list, file) {
+    // Object.create(null): a category called "constructor" must not find
+    // Object.prototype's.
+    var f = filtered(list), order = [], groups = Object.create(null), conf = []
+    f.forEach(function (r) {
+      if (r.settings === true) {
+        conf.push(Object.assign({}, r, { section: "settings \u2014 edit in " + file }))
+        return
+      }
+      var c = r.category || "other"
+      if (!groups[c]) { groups[c] = []; order.push(c) }
+      groups[c].push(Object.assign({}, r, { section: c }))
+    })
+    var out = []
+    order.forEach(function (c) { out = out.concat(groups[c]) })
+    return out.concat(conf)
   }
 
   function rowAt(i) {

@@ -289,6 +289,13 @@ Traps:
   `clip: true`), call `list.positionViewAtBeginning()` on tab change; check
   on razer.
 
+(Deviations, step 3, tests only: after a tab change the old section
+headers stay in the list's `contentItem` as hidden children, so the card test
+counts only visible headers. The fake model's `rows()` returns the same array
+on every tab, so the test reassigns `theRows = theRows.slice()` to rebuild
+the list as a real model would. The `positionViewAtBeginning()` trap is left
+to the live check.)
+
 ### 4. Multi-word search (codex)
 
 **Adapter** `bin/nixarchy-pkg`, `cmd_search`:
