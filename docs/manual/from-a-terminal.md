@@ -129,13 +129,49 @@ without copying or building and sets `nixarchyPkgApply.message` to:
 a file changed since you reviewed it -- nothing was copied or built; look at the queue again
 ```
 
+## The search index
+
+`state`, `search` and `reindex` carry an `index` object next to `indexStale`:
+
+| Field | Meaning |
+| --- | --- |
+| `status` | `fresh`, `stale` or `missing` |
+| `builtAt` | When `index.tsv` was last written, in Unix seconds; `null` when `status` is `missing` or the file's time cannot be read |
+| `changed` | The names of what changed since the index was built, or `null` when not known |
+
+`indexStale` is `true` whenever `status` is not `fresh`. `changed` is a list
+only when the index is stale, `nixarchy-search` is on `PATH`, and the stamp
+and the current inputs are both recognised. The names, in this order and
+without duplicates, are:
+
+| Name | Input |
+| --- | --- |
+| `nixpkgs` | the nixpkgs source |
+| `index builder` | the script that walks nixpkgs |
+| `options` | `options.json` |
+| `app list` | the app index or the app table |
+| `flatpaks` | the Flatpak rows |
+| `new-package row` | the new-package row |
+
+`reindex` answers one object either way. On success:
+
+```json
+{"ok": true, "indexStale": false, "index": {"status": "fresh", ...}, "message": "index rebuilt"}
+```
+
+When the index is still stale afterwards, `ok` is `false`, `error` is one line
+(`the search index is still stale: <reason> -- see <cache>/index-errors.log`),
+and `detail` is an array of the last lines `nixarchy-search` wrote, up to 8,
+without its progress messages and evaluation warnings.
+
 ## What is stable and what is not
 
 This page makes the output an interface, so it should say which parts.
 
-**Relied on:** `ok` on every object, and `error` when `ok` is false. The
+**Relied on:** `ok` on every object, and `error` when `ok` is false (a
+failed `reindex` included). The
 top-level keys of `state` — `apps`, `services`, `packages`, `options`,
-`drafts`, `files`, `channel`, `indexStale`. The `count`, `total`, `changes`,
+`drafts`, `files`, `channel`, `indexStale`, `index`. The `count`, `total`, `changes`,
 `files`, `fingerprint`, `pins`, `sources` and `unpinned` of `pending`, and the
 `verdict`, `fingerprint`, `pins`, `unpinned`, `blocked` and `note` of `check`.
 Those are the shape, and changing them would be a breaking change.
