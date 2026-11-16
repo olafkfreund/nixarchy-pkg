@@ -37,7 +37,8 @@ RETURN                     -> On the Flakes tab with a flakeref typed, ask
 RETURN                     -> On "declare this as an input", name it: the
                               field suggests the repository's name. RETURN
                               declares it in your system flake and locks it,
-                              ESC goes back. On a declared input, remove it
+                              ESC goes back
+SPACE                      -> On a declared input, twice: remove it
 ESCAPE                     -> Step back out of what you are looking at,
                               before it clears the field
 -- Act ----------------------------
