@@ -165,10 +165,12 @@ TestCase {
   function test_o_armed_cancelled_by_a_non_moving_key() {
     fresh()
     pkg.armingState = "armed"; pkg.armedKind = "here"; pkg.armedApply = "here"
-    keyClick(Qt.Key_Slash)
-    compare(pkg.armedApply, ""); compare(pkg.armingState, "")
-    pkg.armingState = "reading"
+    verify(keys.activeFocus && !search.activeFocus)
     keyClick(Qt.Key_Question)
+    compare(pkg.armedApply, ""); compare(pkg.armingState, "")
+    menu.keysOpen = false
+    pkg.armingState = "reading"
+    keyClick(Qt.Key_Slash)
     compare(pkg.armingState, "")
   }
   function test_p_naming_return() {
@@ -208,12 +210,31 @@ TestCase {
   }
   function test_s_reopens_fresh() {
     fresh()
-    keyClick(Qt.Key_Right); compare(pkg.tab, 1)
-    keyClick(Qt.Key_Slash); keyClick(Qt.Key_X)
     menu.close()
     verify(!keys.visible); compare(menu.opened, false)
+    search.text = "x"; pkg.setQuery("x")
+    menu.keysOpen = true; pkg.detailText = "detail"; pkg.message = "message"
+    compare(pkg.tab, 0); compare(pkg.query, "x")
     menu.open("{}"); wait(30)
-    compare(pkg.tab, 0); compare(search.text, ""); compare(menu.keysOpen, false)
+    compare(pkg.tab, 0); compare(search.text, ""); compare(pkg.query, "")
+    compare(menu.keysOpen, false); compare(pkg.detailText, ""); compare(pkg.message, "")
     verify(keys.activeFocus); verify(!search.activeFocus)
+
+    menu.close()
+    pkg.setQuery("orphan")
+    compare(search.text, ""); compare(pkg.query, "orphan")
+    menu.open("{}"); wait(30)
+    compare(pkg.query, "")
+
+    menu.close()
+    pkg.setTab(1); compare(pkg.tab, 1)
+    menu.open("{}"); wait(30)
+    compare(pkg.tab, 0)
+  }
+  function test_t_shift_a_starts_terminal_apply() {
+    fresh()
+    verify(keys.activeFocus && !search.activeFocus)
+    keyClick(Qt.Key_A, Qt.ShiftModifier)
+    compare(pkg.armingState, "reading"); compare(pkg.armedKind, "terminal")
   }
 }
