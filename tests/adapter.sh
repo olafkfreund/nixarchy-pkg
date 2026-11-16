@@ -27,6 +27,8 @@ not() { ! "$@"; }
 # The adapter keeps its lock and recovery data under XDG_STATE_HOME. Never
 # the real one.
 XDG_STATE_HOME=$(mktemp -d); export XDG_STATE_HOME
+# A HOME for catalogue toggles only (ctoggle), so no writer reaches ~.
+THOME=$(mktemp -d)
 
 # A selection of this machine's own catalogue, in a directory that is thrown
 # away afterwards.
@@ -41,6 +43,38 @@ fresh_config() {
   printf '%s' "$dir"
 }
 
+# Host-gated services: toggling one can prompt, or write outside the
+# throwaway dirs (openssh: ~/.ssh/authorized_keys). Never toggled here.
+# Add any service whose nixarchy-service-enable branch has a gate.
+readonly GATED_SERVICES=" openssh "
+
+# The first app that round-trips: an id the writers accept ([a-z0-9_-],
+# nixarchy-app-enable:23), written off as `# <id>.enable = true;` -- so
+# neither a `.settings` row nor an on-by-default app (`# <id>.enable =
+# false;`, which toggles off to a live `false`). LC_ALL=C: template notes
+# carry UTF-8 that `.` will not match in every locale. `q`, not `| head`:
+# under pipefail a reader that stops early can kill the script.
+pick_app() {
+  LC_ALL=C sed -nE '/^[[:space:]]*#[[:space:]]*(programs\.nixarchy\.apps\.)?([a-z0-9_-]+)\.enable = true;[[:space:]]+#@ \2([[:space:]].*)?$/{s//\2/p;q;}' "$1"
+}
+
+# Services name their own options (virtualisation.podman.enable,
+# hardware.graphics.enable32Bit, ...), so any `# <option> = true;  #@ <id>`.
+pick_service() {
+  local id
+  LC_ALL=C sed -nE 's/^[[:space:]]*#[[:space:]]*[A-Za-z0-9_.-]+ = true;[[:space:]]+#@ ([a-z0-9_-]+)([[:space:]].*)?$/\1/p' "$1" |
+    { while read -r id; do
+        case "$GATED_SERVICES" in *" $id "*) continue ;; esac
+        printf '%s\n' "$id"; break
+      done
+      cat >/dev/null; }   # drain, so sed never writes to a closed pipe
+}
+
+# A catalogue toggle: no terminal to prompt on, and a HOME of its own.
+# A prefix assignment (XDG_CONFIG_HOME=... ctoggle ...) reaches the adapter:
+# bash exports it for the duration of the function call.
+ctoggle() { HOME="$THOME" setsid -w "$ADAPTER" toggle "$@" </dev/null; }
+
 # The catalogue sections build from this machine's own templates, so they
 # only run on a nixarchy box. The rest -- flake, search, apply, the mode and
 # symlink checks, and the source-shape greps -- build their own fixtures or
@@ -53,6 +87,21 @@ fresh_config() {
 HAVE_CATALOGUE=true
 [ -d "$TEMPLATES" ] || { HAVE_CATALOGUE=false
   echo "note: $TEMPLATES not present; catalogue sections will be skipped"; }
+
+# The ids the catalogue cases toggle, chosen from this catalogue, never
+# named here: a named one (brave) vanished from the catalogue and took
+# eleven checks with it (#68).
+APP="" SVC="" CAN_TOGGLE=false
+if $HAVE_CATALOGUE; then
+  probe=$(fresh_config)
+  APP=$(pick_app "$probe/nixarchy/apps.nix")
+  SVC=$(pick_service "$probe/nixarchy/services.nix")
+  rm -rf "$probe"
+  echo "note: catalogue cases use app '${APP:-none}', service '${SVC:-none}'; never toggled:$GATED_SERVICES"
+  CAN_TOGGLE=true
+  [ -n "$APP" ] || { fail "no app row the tests can round-trip (every row is a settings row, on by default, or not in the '# <id>.enable = true;  #@ <id>' shape)"; CAN_TOGGLE=false; }
+  [ -n "$SVC" ] || { fail "no service row the tests can round-trip (every row is gated, or not in the '# <option> = true;  #@ <id>' shape)"; CAN_TOGGLE=false; }
+fi
 
 if $HAVE_CATALOGUE; then
 echo "state"
@@ -289,15 +338,19 @@ fi
 if $HAVE_CATALOGUE; then
 echo "writers"
 CONFIG=$(fresh_config); export XDG_CONFIG_HOME="$CONFIG"
-on=$("$ADAPTER" toggle app brave)
-check "toggling on reports enabled" jq -e '.apps[] | select(.id=="brave") | .enabled' <<<"$on"
-check "the file really changed"     grep -qE '^[[:space:]]*brave\.enable = true;  #@ brave$' "$CONFIG/nixarchy/apps.nix"
-off=$("$ADAPTER" toggle app brave)
-check "toggling off reports disabled" jq -e '.apps[] | select(.id=="brave") | .enabled | not' <<<"$off"
-svc=$("$ADAPTER" toggle service openssh)
-check "services use their own file" jq -e '.services[] | select(.id=="openssh") | .enabled' <<<"$svc"
 check "an unknown id is a value"    jq -e '.ok == false' <<<"$("$ADAPTER" toggle app nosuchapp)"
-check "an unknown kind is a value"  jq -e '.ok == false' <<<"$("$ADAPTER" toggle widget brave)"
+# shellcheck disable=SC2016  # $id is jq's, bound by --arg
+if $CAN_TOGGLE; then
+on=$(ctoggle app "$APP")
+check "toggling on reports enabled" jq -e --arg id "$APP" '.apps[] | select(.id==$id) | .enabled' <<<"$on"
+# $APP is [a-z0-9_-]+ (pick_app), so it is safe inside a regex.
+check "the file really changed"     grep -qE "^[[:space:]]*(programs\.nixarchy\.apps\.)?$APP\.enable = true;[[:space:]]+#@ $APP([[:space:]]|\$)" "$CONFIG/nixarchy/apps.nix"
+off=$(ctoggle app "$APP")
+check "toggling off reports disabled" jq -e --arg id "$APP" '.apps[] | select(.id==$id) | .enabled | not' <<<"$off"
+svc=$(ctoggle service "$SVC")
+check "services use their own file" jq -e --arg id "$SVC" '.services[] | select(.id==$id) | .enabled' <<<"$svc"
+check "an unknown kind is a value"  jq -e '.ok == false' <<<"$(ctoggle widget "$APP")"
+fi
 
 added=$("$ADAPTER" pkg add ripgrep)
 check "pkg add lands in the list"   jq -e '.packages | map(.attr) | index("ripgrep")' <<<"$added"
@@ -420,13 +473,14 @@ check "a machine that never applied says so" jq -e '.neverApplied' <<<"$("$ADAPT
 mkdir -p "$FLAKE/nixarchy"
 for part in apps services advanced; do cp "$CONFIG/nixarchy/$part.nix" "$FLAKE/nixarchy/$part.nix"; done
 check "a matching flake has nothing queued" jq -e '.count == 0' <<<"$("$ADAPTER" pending)"
-"$ADAPTER" toggle app brave >/dev/null
+if $CAN_TOGGLE; then
+ctoggle app "$APP" >/dev/null
 # A toggle is one choice, though the diff sees a line leave and a line arrive.
 check "a toggle counts once"   jq -e '.count == 1 and .changes[0].change == "on"' <<<"$("$ADAPTER" pending)"
 "$ADAPTER" pkg add ripgrep >/dev/null
 # #@pkgs-begin / #@pkgs-end are scaffolding pkg-add creates, not choices.
 check "a package counts once"  jq -e '.count == 2' <<<"$("$ADAPTER" pending)"
-"$ADAPTER" toggle app brave >/dev/null
+ctoggle app "$APP" >/dev/null
 check "toggling back drops it" jq -e '.count == 1' <<<"$("$ADAPTER" pending)"
 # A row that is commented out on both sides is not a queued change, however
 # much its text moved. Topping a catalogue up appends commented rows, and
@@ -434,6 +488,7 @@ check "toggling back drops it" jq -e '.count == 1' <<<"$("$ADAPTER" pending)"
 # was none.
 printf '\n    # newthing.enable = true;  #@ newthing\n' >> "$CONFIG/nixarchy/apps.nix"
 check "a commented row is not a change" jq -e '.count == 1' <<<"$("$ADAPTER" pending)"
+fi
 rm -rf "$CONFIG" "$FLAKE"; unset NIXARCHY_FLAKE
 
 else
@@ -999,10 +1054,11 @@ cp "$PCFG/nixarchy"/*.nix "$PBASE/nixarchy/"
 pending() { XDG_CONFIG_HOME="$PCFG" NIXARCHY_FLAKE="$PBASE" "$ADAPTER" pending; }
 
 check "nothing queued is nothing"   jq -e '.count == 0' <<<"$(pending)"
-XDG_CONFIG_HOME="$PCFG" "$ADAPTER" toggle service openssh >/dev/null
+if $CAN_TOGGLE; then
+XDG_CONFIG_HOME="$PCFG" ctoggle service "$SVC" >/dev/null
 check "one file, one change"        jq -e '.count == 1' <<<"$(pending)"
 check "and it names that file"      jq -e '[.changes[].file] == ["services"]' <<<"$(pending)"
-XDG_CONFIG_HOME="$PCFG" "$ADAPTER" toggle app brave >/dev/null
+XDG_CONFIG_HOME="$PCFG" ctoggle app "$APP" >/dev/null
 check "two files, two changes"      jq -e '.count == 2' <<<"$(pending)"
 check "and both files are named"    jq -e '[.changes[].file] | sort == ["apps", "services"]' <<<"$(pending)"
 # A file that exists and cannot be read is not an empty one: it used to be
@@ -1012,6 +1068,7 @@ check "an unreadable file is an error, not an empty file" \
                                     jq -e '.ok == false' <<<"$(pending)"
 chmod 600 "$PCFG/nixarchy/services.nix"
 check "and it recovers once readable" jq -e '.ok == true and .count == 2' <<<"$(pending)"
+fi
 rm -rf "$PCFG" "$PBASE"
 
 # The shape that caused it, so the next one is caught before it ships.
@@ -1118,9 +1175,11 @@ check "a regex where an id belongs is refused here" jq -e '.ok == false' <<<"$ou
 check "by this tool, in its own words" \
   jq -e '.error | contains("is not a valid app id")' <<<"$out"
 check "and nothing was toggled"  test "$(md5sum < "$APPSNIX")" = "$before"
-realid=$(grep -oE '#@ [a-z0-9-]+' "$APPSNIX" | head -1 | awk '{print $2}')
+if $CAN_TOGGLE; then
+realid=$APP   # $APPSNIX is a fresh copy of the same template the probe read
 check "a real id still toggles" \
-  jq -e '.ok == true' <<<"$("$ADAPTER" toggle app "$realid" 2>&1 || true)"
+  jq -e '.ok == true' <<<"$(ctoggle app "$realid" 2>&1 || true)"
+fi
 rm -rf "$CONFIG"
 
 else
@@ -1475,6 +1534,10 @@ check "exits 0 on an unknown command" test "$rc" = 0
 check "says so in the object"         jq -e '.ok == false and (.error | length > 0)' <<<"$out"
 
 echo
-rm -rf "$XDG_STATE_HOME"
+# ctoggle's HOME: a writer that wrote there would have written into ~.
+check "no catalogue toggle wrote into HOME" \
+  test -z "$(find "$THOME" -mindepth 1 -print -quit)"
+find "$THOME" -mindepth 1 -printf '  in the scratch HOME: %P\n'
+rm -rf "$XDG_STATE_HOME" "$THOME"
 if [ "$fails" -gt 0 ]; then echo "$fails failed"; exit 1; fi
 echo "all passed"
