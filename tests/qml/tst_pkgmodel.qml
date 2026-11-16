@@ -15,6 +15,9 @@ TestCase {
 
   function cleanup() {
     m.busy = false
+    m.reindexing = false
+    m._reindexAnswered = false
+    m._reindexer.running = false
     m.applying = false
     m.message = ""
     m._applyTerm.running = false
@@ -68,8 +71,44 @@ TestCase {
   // #59: reindex writes only the cache, so an apply does not block it.
   function test_reindex_not_refused_while_applying() {
     m.applying = true
+    compare(m.reindex(), true)
+    compare(m.reindexing, true)
+    compare(m.busy, false, "reindex does not occupy the writer")
+  }
+
+  function test_write_during_reindex_starts() {
+    compare(m.reindex(), true)
+    compare(m.write(["toggle", "app", "x"]), true)
+  }
+
+  function test_second_reindex_refused() {
+    compare(m.reindex(), true)
+    compare(m.reindex(), false)
+    compare(m.message, "already rebuilding the index")
+  }
+
+  function test_reindex_answer_sets_index_stale() {
+    m.indexStale = true
+    m._reader.running = false
+    m._absorb(JSON.stringify({ok:true, indexStale:false, message:"index rebuilt"}), false)
+    compare(m.indexStale, false)
+    compare(m._reader.running, false)
+  }
+
+  function test_reindex_death_is_reported() {
     m.reindex()
-    compare(m.busy, true, "the reindex started")
+    m._reindexer.finish(1)
+    compare(m.reindexing, false)
+    verify(m.message.indexOf("ended without answering") >= 0)
+  }
+
+  function test_reindex_answer_unblocks() {
+    m.reindex()
+    m._reindexer.deliver(JSON.stringify({ok:true, indexStale:false, message:"index rebuilt"}))
+    m._reindexer.finish(0)
+    compare(m.reindexing, false)
+    compare(m.indexStale, false)
+    compare(m.message, "index rebuilt")
   }
 
   // #59: the terminal apply must not start under a running write.

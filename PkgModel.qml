@@ -82,6 +82,8 @@ QtObject {
   property bool neverApplied: false
   property bool indexStale: false
   property bool busy: false
+  property bool reindexing: false
+  property bool _reindexAnswered: false
   property string message: ""
 
   // The package a SHIFT+RETURN has been pressed once for. Arming is
@@ -394,6 +396,22 @@ QtObject {
     }
   }
 
+  // Reindex only writes the cache; its own process leaves the writer free.
+  // The answer carries indexStale, so no state read races with _reader.
+  property Process _reindexer: Process {
+    stdout: StdioCollector {
+      onStreamFinished: {
+        if (text.length > 0) root._reindexAnswered = true
+        root._absorb(text, false)
+      }
+    }
+    onExited: function (code, status) {
+      root.reindexing = false
+      if (code !== 0 && !root._reindexAnswered)
+        root.message = "the index rebuild ended without answering (exit " + code + ")"
+    }
+  }
+
   function _absorb(text, isWrite) {
     var data
     try {
@@ -419,6 +437,7 @@ QtObject {
     // answers {ok, indexStale, message} and nothing else, and absorbing
     // that as state emptied every tab until the menu was reopened.
     if (data.apps === undefined) {
+      if (data.indexStale !== undefined) root.indexStale = data.indexStale
       if (data.message) root.message = String(data.message)
       if (isWrite) root.refresh()
       return
@@ -591,8 +610,7 @@ QtObject {
 
   // True when the write started; false when one was already running.
   function write(args) {
-    // reindex writes only the search cache, so an apply does not block it.
-    if (applying && args[0] !== "reindex") { message = "an apply is running \u2014 wait for it to finish"; return false }
+    if (applying) { message = "an apply is running \u2014 wait for it to finish"; return false }
     if (busy) return false
     busy = true
     message = ""
@@ -799,7 +817,13 @@ QtObject {
   }
 
   function reindex() {
-    write(["reindex"])
+    if (reindexing) { message = "already rebuilding the index"; return false }
+    reindexing = true
+    _reindexAnswered = false
+    message = "rebuilding the search index (about 45 s)"
+    _reindexer.command = [script, "reindex"]
+    _reindexer.running = true
+    return true
   }
 
   // The one command here that changes the machine, and only ever on an
