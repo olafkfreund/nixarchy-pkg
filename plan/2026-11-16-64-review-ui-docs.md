@@ -458,6 +458,11 @@ Traps:
 
 ---
 
+(Deviation, step 5, from Codex's PR 2 review, confirmed live: with reindex
+off `busy`, the card showed neither the busy rule nor "working…" while the
+index rebuilt. `Card.qml`'s `waiting` and the footer's "working…" now
+include `model.reindexing`; `tst_card`'s busy-rule test covers it.)
+
 ## PR 3: `nix flake check` runs the adapter suite
 
 ### 6. Offline guards and the `adapter` check (coder)

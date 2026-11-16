@@ -26,7 +26,7 @@ Item {
   readonly property color hoverBackground: Qt.rgba(selectedBg.r, selectedBg.g, selectedBg.b, selectedBg.a * 0.5)
   // Alpha 0 of the same colour, not "transparent": a fade to #00000000 passes through grey.
   readonly property color restBackground: Qt.rgba(selectedBg.r, selectedBg.g, selectedBg.b, 0)
-  readonly property bool waiting: Boolean(model && (model.busy || model.inspecting || model.checkRunning))
+  readonly property bool waiting: Boolean(model && (model.busy || model.reindexing || model.inspecting || model.checkRunning))
   property real busyProgress: 0
   readonly property bool busyAnimating: busyAnim.running
   NumberAnimation on busyProgress {
@@ -565,7 +565,7 @@ Item {
           right: parent.right; rightMargin: Style.space(10)
           verticalCenter: parent.verticalCenter
         }
-        text: root.model && root.model.busy ? "working\u2026" : "? keys   a apply   esc close"
+        text: root.model && (root.model.busy || root.model.reindexing) ? "working\u2026" : "? keys   a apply   esc close"
         textFormat: Text.PlainText
         font.family: root.fontFamily
         font.pixelSize: Style.font.title

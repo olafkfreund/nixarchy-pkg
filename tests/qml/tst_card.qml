@@ -35,6 +35,7 @@ TestCase {
     function rows() { return theRows }
     function rowAt(i) { return (i >= 0 && i < theRows.length) ? theRows[i] : null }
     property bool busy: false
+    property bool reindexing: false
     property string selCount: "2"
     property string queueCount: "?"
     function tabCount(i) { return i === 2 ? selCount : i === 6 ? queueCount : "" }
@@ -94,6 +95,7 @@ TestCase {
     fakeModel.tab = 0
     fakeModel.cursor = 0
     fakeModel.busy = false
+    fakeModel.reindexing = false
     fakeModel.inspecting = false
     fakeModel.checkRunning = false
     win.width = 800
@@ -313,7 +315,7 @@ TestCase {
   function test_busy_rule_moves() {
     var segment = byName(card, "busySegment")
     Style.reduceMotion = false
-    for (var field of ["busy", "inspecting", "checkRunning"]) {
+    for (var field of ["busy", "reindexing", "inspecting", "checkRunning"]) {
       fakeModel[field] = true
       verify(segment.visible, field + " shows the segment")
       verify(card.busyAnimating, field + " starts motion")
