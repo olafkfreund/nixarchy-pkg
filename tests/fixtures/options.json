@@ -1,0 +1,272 @@
+{
+  "t.bool": {
+    "type": "boolean",
+    "description": "Whether to {option}`t.bool` be on.\n\n::: {.note}\nThis is a note.\n:::\n",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": false
+  },
+  "t.enum": {
+    "type": "one of \"a\", \"b\"",
+    "description": "Test option t.enum.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": null
+  },
+  "t.port": {
+    "type": "16 bit unsigned integer; between 0 and 65535 (both inclusive)",
+    "description": "Test option t.port.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": 22
+  },
+  "t.u32": {
+    "type": "32 bit unsigned integer; between 0 and 4294967295 (both inclusive)",
+    "description": "Test option t.u32.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": null
+  },
+  "t.uint": {
+    "type": "unsigned integer, meaning >=0",
+    "description": "Test option t.uint.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": null
+  },
+  "t.pos": {
+    "type": "positive integer, meaning >0",
+    "description": "Test option t.pos.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": null
+  },
+  "t.int": {
+    "type": "signed integer",
+    "description": "Test option t.int.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": null
+  },
+  "t.range": {
+    "type": "integer between 300 and 399 (both inclusive)",
+    "description": "Test option t.range.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": null
+  },
+  "t.neg": {
+    "type": "integer between -9 and 0 (both inclusive)",
+    "description": "Test option t.neg.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": null
+  },
+  "t.str": {
+    "type": "string",
+    "description": "Test option t.str.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": ""
+  },
+  "t.nonEmpty": {
+    "type": "non-empty string",
+    "description": "Test option t.nonEmpty.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": null
+  },
+  "t.abs": {
+    "type": "absolute path",
+    "description": "Test option t.abs.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": null
+  },
+  "t.noColon": {
+    "type": "string, not containing newlines or colons",
+    "description": "Test option t.noColon.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": null
+  },
+  "t.lines": {
+    "type": "strings concatenated with \"\\n\"",
+    "description": "Test option t.lines.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": null
+  },
+  "t.pattern": {
+    "type": "string matching the pattern [a-z]+",
+    "description": "Test option t.pattern.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": null
+  },
+  "t.nullStr": {
+    "type": "null or string",
+    "description": "Test option t.nullStr.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": {
+      "_type": "literalExpression",
+      "text": "null"
+    }
+  },
+  "t.nullPort": {
+    "type": "null or 16 bit unsigned integer; between 0 and 65535 (both inclusive)",
+    "description": "Test option t.nullPort.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": {
+      "_type": "literalExpression",
+      "text": "null"
+    }
+  },
+  "t.ports": {
+    "type": "list of 16 bit unsigned integer; between 0 and 65535 (both inclusive)",
+    "description": "Test option t.ports.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": null
+  },
+  "t.strs": {
+    "type": "list of string",
+    "description": "Test option t.strs.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": []
+  },
+  "t.absList": {
+    "type": "list of absolute path",
+    "description": "Test option t.absList.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": null
+  },
+  "t.pkg": {
+    "type": "package",
+    "description": "Test option t.pkg.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": null
+  },
+  "t.nullPkg": {
+    "type": "null or package",
+    "description": "Test option t.nullPkg.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": {
+      "_type": "literalExpression",
+      "text": "null"
+    }
+  },
+  "t.attrs": {
+    "type": "attribute set of string",
+    "description": "Test option t.attrs.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": null
+  },
+  "users.users.<name>.shell": {
+    "type": "null or package",
+    "description": "Test option users.users.<name>.shell.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": {
+      "_type": "literalExpression",
+      "text": "null"
+    }
+  },
+  "users.users.<name>.hashedPassword": {
+    "type": "null or (string, not containing newlines or colons)",
+    "description": "Test option users.users.<name>.hashedPassword.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": {
+      "_type": "literalExpression",
+      "text": "null"
+    }
+  },
+  "users.users.<name>.hashedPasswordFile": {
+    "type": "null or string",
+    "description": "Test option users.users.<name>.hashedPasswordFile.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": {
+      "_type": "literalExpression",
+      "text": "null"
+    }
+  },
+  "fileSystems.<name>.options": {
+    "type": "list of string",
+    "description": "Test option fileSystems.<name>.options.",
+    "readOnly": false,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": null
+  },
+  "t.ro": {
+    "type": "boolean",
+    "description": "Test option t.ro.",
+    "readOnly": true,
+    "declarations": [
+      "tests/fixtures/options.json"
+    ],
+    "default": null
+  }
+}

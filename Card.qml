@@ -534,10 +534,11 @@ Item {
       height: Style.font.title + Style.space(10)
 
       Text {
+        id: queueText
         objectName: "queueStatus"
         anchors {
           left: parent.left; leftMargin: Style.space(10)
-          right: hints.left; rightMargin: Style.space(14)
+          right: indexAge.visible ? indexAge.left : hints.left; rightMargin: Style.space(14)
           verticalCenter: parent.verticalCenter
         }
         // A long reason (an interrupted write names its files and both
@@ -563,9 +564,19 @@ Item {
       // package on it reads as free. Said plainly, with the key that fixes
       // it, rather than left for the user to discover after a rebuild.
       Text {
-        anchors { horizontalCenter: parent.horizontalCenter; verticalCenter: parent.verticalCenter }
+        id: indexAge
+        objectName: "indexAge"
+        // Against the hints, at most two fifths of the footer; the queue
+        // status stops where this begins.
+        anchors {
+          right: hints.left; rightMargin: Style.space(14)
+          verticalCenter: parent.verticalCenter
+        }
+        width: Math.min(implicitWidth, parent.width * 0.4)
+        elide: Text.ElideRight
         visible: root.model && root.model.indexStale
-        text: "index stale \u2014 r to rebuild"
+        text: root.model && typeof root.model.indexLine === "function"
+              ? root.model.indexLine(Date.now()) : "index stale \u2014 r to rebuild"
         textFormat: Text.PlainText
         font.family: root.fontFamily
         font.pixelSize: Style.font.title

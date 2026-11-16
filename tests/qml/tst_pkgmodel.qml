@@ -20,6 +20,8 @@ TestCase {
     m._reindexer.running = false
     m.applying = false
     m.message = ""
+    m.index = null
+    m.indexStale = false
     m._applyTerm.running = false
     if (m.naming) m.cancelNaming()
     m.setTab(0)
@@ -137,6 +139,53 @@ TestCase {
 
     m._absorb(JSON.stringify({ ok: true, indexStale: false, message: "index rebuilt" }), false)
     compare(m.state.apps.length, 1, "nor may an answer carrying neither")
+  }
+
+  function test_index_line_texts() {
+    var now = 1793659612000
+    compare(m.indexLine(now), "index stale \u2014 r to rebuild")
+    m.index = { status: "missing", builtAt: null, changed: null }
+    compare(m.indexLine(now), "no search index \u2014 r to build it")
+    m.index = { status: "stale", builtAt: now / 1000 - 14 * 86400,
+                changed: ["nixpkgs"] }
+    compare(m.indexLine(now), "index built 14 days ago \u2014 r to rebuild \u2014 nixpkgs changed")
+    m.index.changed = ["nixpkgs", "options"]
+    compare(m.indexLine(now), "index built 14 days ago \u2014 r to rebuild \u2014 nixpkgs and options changed")
+    m.index.changed = ["nixpkgs", "options", "app list", "flatpaks", "new-package row"]
+    compare(m.indexLine(now), "index built 14 days ago \u2014 r to rebuild \u2014 nixpkgs and 4 more changed")
+    m.index.changed = null
+    compare(m.indexLine(now), "index built 14 days ago \u2014 r to rebuild")
+    m.index.builtAt = null
+    compare(m.indexLine(now), "index stale \u2014 r to rebuild")
+  }
+
+  function test_index_line_ages() {
+    var now = 1793659612000
+    var cases = [
+      [30, "just now"], [60, "1 minute ago"], [3600, "1 hour ago"],
+      [47 * 3600, "47 hours ago"], [14 * 86400, "14 days ago"],
+      [-10, "just now"]
+    ]
+    for (var i = 0; i < cases.length; i++) {
+      m.index = { status: "stale", builtAt: now / 1000 - cases[i][0], changed: null }
+      compare(m.indexLine(now), "index built " + cases[i][1] + " \u2014 r to rebuild")
+    }
+  }
+
+  function test_absorb_takes_index_from_any_answer() {
+    var stale = { status: "stale", builtAt: 1793659612, changed: ["nixpkgs"] }
+    m._absorb(JSON.stringify({ ok: false, indexStale: true, index: stale, error: "x" }), false)
+    compare(m.message, "x")
+    compare(m.indexStale, true)
+    compare(m.index.status, "stale")
+    compare(m.index.changed[0], "nixpkgs")
+
+    var fresh = { status: "fresh", builtAt: 1793659612, changed: null }
+    m._absorb(JSON.stringify({ ok: true, indexStale: false, index: fresh,
+                               message: "index rebuilt" }), false)
+    compare(m.message, "index rebuilt")
+    compare(m.indexStale, false)
+    compare(m.index.status, "fresh")
   }
 
   // #43: a mode must not outlive the tab it belongs to. Left behind, naming

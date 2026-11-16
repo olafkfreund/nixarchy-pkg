@@ -83,6 +83,7 @@ QtObject {
   property var _deferredArgs: []
   property bool neverApplied: false
   property bool indexStale: false
+  property var index: null
   property bool busy: false
   property bool reindexing: false
   property bool _reindexAnswered: false
@@ -450,6 +451,10 @@ QtObject {
       root.message = "could not read the adapter"
       return
     }
+    // Index facts ride on state, search and reindex answers alike, failed or
+    // not; take them before any branch returns.
+    if (data.indexStale !== undefined) root.indexStale = data.indexStale
+    if (data.index !== undefined) root.index = data.index
     if (isWrite && pendingDeclare
         && (data.ok !== true || data.name !== pendingDeclare.name || data.url !== pendingDeclare.ref))
       pendingDeclare = null
@@ -459,16 +464,14 @@ QtObject {
     }
     if (data.rows !== undefined) {
       root.results = data.rows
-      if (data.indexStale !== undefined) root.indexStale = data.indexStale
       root.cursor = 0
       return
     }
     // A state object, from `state` or from any writer -- recognised by
     // carrying the catalogue rather than by which command was run. reindex
-    // answers {ok, indexStale, message} and nothing else, and absorbing
+    // answers {ok, indexStale, index, message} (and detail on failure), and absorbing
     // that as state emptied every tab until the menu was reopened.
     if (data.apps === undefined) {
-      if (data.indexStale !== undefined) root.indexStale = data.indexStale
       if (data.message) root.message = String(data.message)
       if (pendingDeclare && data.ok === true
           && data.name === pendingDeclare.name && data.url === pendingDeclare.ref) {
@@ -493,7 +496,6 @@ QtObject {
       return
     }
     root.state = data
-    if (data.indexStale !== undefined) root.indexStale = data.indexStale
     if (data.message) root.message = String(data.message)
     if (isWrite) root.refreshPending()
     root.cursor = Math.min(root.cursor, Math.max(0, root.count - 1))
@@ -944,6 +946,36 @@ QtObject {
     cursor = 0
     refreshed()
     return true
+  }
+
+  // The footer's index line. `now` in ms (Date.now()), passed in so a test
+  // can fix it.
+  function indexLine(now) {
+    var ix = index
+    if (!ix) return "index stale \u2014 r to rebuild"
+    if (ix.status === "missing") return "no search index \u2014 r to build it"
+    var parts = [typeof ix.builtAt === "number"
+                 ? "index built " + _ago(now / 1000 - ix.builtAt)
+                 : "index stale"]
+    // The key first: the footer elides from the end, and the key is what to do.
+    parts.push("r to rebuild")
+    if (ix.changed && ix.changed.length > 0) parts.push(_names(ix.changed) + " changed")
+    return parts.join(" \u2014 ")
+  }
+  function _ago(s) {
+    s = Math.max(0, s)
+    if (s < 60) return "just now"
+    var m = Math.floor(s / 60)
+    if (m < 60) return m + (m === 1 ? " minute" : " minutes") + " ago"
+    var h = Math.floor(m / 60)
+    if (h < 48) return h + (h === 1 ? " hour" : " hours") + " ago"
+    var d = Math.floor(h / 24)
+    return d + (d === 1 ? " day" : " days") + " ago"
+  }
+  function _names(n) {
+    if (n.length === 1) return n[0]
+    if (n.length === 2) return n[0] + " and " + n[1]
+    return n[0] + " and " + (n.length - 1) + " more"
   }
 
   function reindex() {
