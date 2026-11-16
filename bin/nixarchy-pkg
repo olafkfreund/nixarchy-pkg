@@ -140,7 +140,7 @@ trap 'exit 143' TERM INT HUP
 # Every write starts here, after its argument-only checks.
 # begin_write recover  -- the one caller allowed past an interrupted write.
 begin_write() {
-  local mode=${1-} d
+  local mode=${1-} d p
   WRITING=true
   mkdir -p "$STATE_DIR/applied" "$TXN" ||
     die "cannot create $STATE_DIR (disk full?). Nothing was changed."
@@ -165,8 +165,29 @@ begin_write() {
   # write was final. Neither needs anything from the user.
   rm -rf "$TXN/new" "$TXN/done" 2>/dev/null || :
   if [ -e "$TXN/open" ] && [ "$mode" != recover ]; then
-    die "an earlier write was interrupted. To put back what was there before, run: $SELF recover. If the files look right as they are, run: $SELF recover --discard. Nothing was changed."
+    local paths=""
+    for p in "$TXN/open"/*.path; do [ -e "$p" ] && paths+=$(cat "$p")$'\n'; done
+    die "$(recovery_message "$paths") Nothing was changed."
   fi
+}
+
+# Prints guarded paths and returns 0 for a leftover write, 1 for none, or
+# 2 when a writer holds the lock (or the lock is missing).
+interrupted() {
+  [ -e "$TXN/open" ] || return 1
+  [ -e "$LOCK" ] || return 2
+  ( exec 6<"$LOCK" || exit 2
+    flock -s -n 6 || exit 2
+    [ -d "$TXN/open" ] || exit 1
+    cat "$TXN/open"/*.path 2>/dev/null; exit 0
+  )
+}
+
+recovery_message() {
+  local list=${1%$'\n'}
+  list=${list//$'\n'/, }
+  printf 'an earlier write was interrupted (%s). To put back what was there before, run: %s recover. If the files look right as they are, run: %s recover --discard.' \
+    "$list" "$SELF" "$SELF"
 }
 
 # guard FILE...  -- every file one write may change, in one call.
@@ -1450,9 +1471,17 @@ cmd_pending() {
   [ -d "$base/nixarchy" ] && never=false
   private_dir READDIR pkg-read
   export TMPDIR=$READDIR
-  [ -e "$TXN/open" ] && writing=true
+  local rpaths rrc=0
+  rpaths=$(interrupted) || rrc=$?
+  case $rrc in 0) die "$(recovery_message "$rpaths")" ;; 2) writing=true ;; esac
   snapshot_selection "$READDIR"
-  [ -e "$TXN/open" ] && writing=true
+  if [ -e "$TXN/open" ]; then
+    rrc=0; rpaths=$(interrupted) || rrc=$?
+    case $rrc in
+      0) die "$(recovery_message "$rpaths")" ;;
+      *) writing=true ;;   # 1: a live write committed during the probe
+    esac
+  fi
   : >"$READDIR/files.jsonl"
   : >"$READDIR/marked.jsonl"
   : >"$READDIR/changes.jsonl"
@@ -1883,6 +1912,16 @@ cmd_apply() {
       *) die "apply takes only --pin <part>=<sha256>, not '$1'" ;;
     esac
   done
+  local rpaths rrc=0 refuse=""
+  rpaths=$(interrupted) || rrc=$?
+  case $rrc in
+    0) refuse=$(recovery_message "$rpaths") ;;
+    2) refuse="a write is in progress or was interrupted -- try again in a moment" ;;
+  esac
+  if [ -n "$refuse" ]; then
+    jq -nc --arg m "$refuse" '{nixarchyPkgApply: {ok: false, exit: null, message: $m}}'
+    return 0
+  fi
   private_dir APPLYDIR pkg-apply
   export TMPDIR=$APPLYDIR
   flag=$APPLYDIR/mismatch
@@ -1943,6 +1982,12 @@ cmd_state() {
   [ -e "$SERVICES" ] && [ ! -r "$SERVICES" ] && unreadable+=("$SERVICES") || :
   local unread_msg=""
   [ ${#unreadable[@]} -gt 0 ] && unread_msg="could not read ${unreadable[*]} -- it exists but is not readable, so what it holds is not shown here" || :
+  local rpaths rrc=0 rfiles='[]'
+  rpaths=$(interrupted) || rrc=$?
+  if [ "$rrc" = 0 ]; then
+    unread_msg=${unread_msg:+$unread_msg -- }$(recovery_message "$rpaths")
+    rfiles=$(printf '%s' "$rpaths" | jq -Rsc 'split("\n") | map(select(length > 0))')
+  fi
 
   jq -n \
     --rawfile apps <(rows_tsv "$APPS" app) \
@@ -1953,6 +1998,7 @@ cmd_state() {
     --arg appsFile "$APPS" \
     --arg servicesFile "$SERVICES" \
     --arg unreadable "$unread_msg" \
+    --argjson rfiles "$rfiles" \
     --arg channel "$(machine_channel)" \
     --rawfile flakes <(cmd_flake_list) \
     '
@@ -1971,6 +2017,7 @@ cmd_state() {
       # the tabs that were fine, or the panel they would fix it from (#41).
     }
     + (if $unreadable == "" then {} else { message: $unreadable } end)
+    + (if $rfiles == [] then {} else { recovery: { files: $rfiles } } end)
     + {
       # What this tool declared in the system flake. Read from the same
       # command a terminal calls, so the two cannot disagree.
