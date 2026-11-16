@@ -100,27 +100,47 @@ mine, below under alternatives.
 
 ### Tests
 
-`tests/qml/tst_card.qml` gains a section that uses the **real** `PkgModel` (a
-second `Card` bound to a `PkgModel` instance). The fake model's rows binding
-is what hid the trigger, so these tests must not use it.
+`tests/qml/tst_card.qml` gains a section that uses the **real** `PkgModel`
+(a second `Card` bound to a `PkgModel` instance). The fake model's rows
+binding is what hid the trigger, so these tests must not use it. Each test
+checks the list (`currentIndex`) and the preview (`currentRow.id`, the new
+row's *content*) against `cursor`.
 
-- A write answer with the same count keeps `currentIndex` and `currentRow` on
-  `cursor`.
-- A write answer that shrinks below the cursor clamps it, and the list
-  follows.
+**Must fail on main** (the lead runs each against `git show main:Card.qml` /
+`PkgModel.qml` and records the failure):
+- A write answer with the same count and the cursor unchanged. The answer's
+  row at `cursor` carries new content (`enabled` flipped), and the preview
+  shows it.
+- The user moves during a write: toggle on row 2, `cursor = 4` before the
+  answer, deliver. The selection is row 4, not 2 and not 0.
+- Queue: the cursor on the last row, a check result present, then the check
+  is cancelled (`cancelCheck()`) and, separately, invalidated by a pending
+  answer with a new fingerprint (`:423-434`). `cursor` is in range, and the
+  list and preview agree with it.
+- Flakes: an inspection with several rows, the cursor past 0, then
+  `beginNaming()`. The cursor is on the note row, and the list and preview
+  agree.
+- The preview of a row scrolled out of the delegate buffer: a list long
+  enough that `cursor = count - 1` is outside `cacheBuffer` after
+  `positionViewAtBeginning()`. The test first asserts that the old
+  expression's `list.currentItem` is null in that state. If Qt keeps the
+  delegate, the test cannot show the bug, and the plan drops it rather than
+  keep a test that passes on broken code.
+
+**Regression tests** (they pass on main and must keep passing):
+- A write answer that shrinks the list below the cursor (`_absorb`'s clamp,
+  `:404`, already re-syncs).
 - Rows that empty and refill.
-- A tab change and a new query land on row 0 even when `cursor` was 0 and the
-  list was elsewhere.
-- The preview survives the selected row scrolling out: `cursor = count - 1` on
-  a long list, `positionViewAtBeginning()`, then `currentRow.id` is the last
-  row.
+- A tab change from row 3 lands on row 0, and the list and preview follow.
 
-`tests/qml/tst_pkgmodel.qml`:
-- `cancelCheck()` with the cursor on the last Queue row clamps it.
-- `beginNaming()` with the cursor past 0 clamps it to the note row.
+`tests/qml/tst_pkgmodel.qml`: the `onCountChanged` clamp on its own, for
+cancel and naming, without a view.
 
-Every new test is shown to fail on main (lead runs them against
-`git show main:Card.qml` / `PkgModel.qml`) and pass with the change.
+A search that changes from one non-empty query to another keeps the same
+`results` array until the answer arrives, so it triggers neither hook. That
+is fine: with change 1 nothing else moves the list off the cursor, so there
+is nothing for this path to repair. The answer then sets `cursor = 0` and
+swaps the array, and change 1 applies.
 
 **Live:** in a `nixarchy-desktop` microVM. Move to row 2 on Apps, press
 `SPACE`, and the highlight and preview stay on row 2. Then press `DOWN` three
