@@ -32,8 +32,12 @@ TestCase {
     m._pendingRun = 0
     m._armWant = 0
     m._pendingAgain = false
-    m._checkStopping = false
+    m._pendingAbsorbed = true
+    m._checkToken = 0
+    m._checkRun = 0
     m._afterCheck = ""
+    m._deferredArgs = []
+    m.neverApplied = false
     m._pending.running = false
     m._check.running = false
     m._apply.command = []
@@ -237,12 +241,55 @@ TestCase {
   }
 
   function test_cancelled_check_drops_its_result() {
-    m.checkRunning = true
+    m.check(false)
     m.cancelCheck()
     m._check.deliver(JSON.stringify({ ok: true, verdict: "evaluates", fingerprint: "f1" }))
     m._check.finish(0)
     compare(m.checkResult, null)
     compare(m.checkRunning, false)
+  }
+
+  // The real Process may report the exit before stdout is read.
+  function test_cancelled_check_drops_a_late_result() {
+    m.check(false)
+    m.cancelCheck()
+    m._check.finish(0)
+    m._check.deliver(JSON.stringify({ ok: true, verdict: "evaluates", fingerprint: "f1" }))
+    compare(m.checkResult, null)
+  }
+
+  function test_check_result_after_exit_still_counts() {
+    m.check(false)
+    m._check.finish(0)
+    m._check.deliver(JSON.stringify({ ok: true, verdict: "evaluates", fingerprint: "" }))
+    compare(m.checkResult.verdict, "evaluates")
+    compare(m.queueRows()[0].verdict, "evaluates")
+  }
+
+  // Only a verdict about a known selection can be out of date.
+  function test_unknown_check_is_not_superseded() {
+    m._pending.deliver(pend({}))
+    m.check(false)
+    m._check.deliver(JSON.stringify({ ok: true, verdict: "unknown", reason: "r", fingerprint: "old" }))
+    compare(m.checkResult.verdict, "unknown")
+    m.cancelCheck(); m._check.finish(0)
+    m.check(false)
+    m._check.deliver(JSON.stringify({ ok: true, verdict: "evaluates", fingerprint: "" }))
+    compare(m.checkResult.verdict, "evaluates")
+  }
+
+  // Exit before stdout: the rerun must wait for the answer, or the old
+  // answer would be counted as the fresh read.
+  function test_exit_before_answer_does_not_arm_on_the_old_read() {
+    m.refreshPending()
+    m.armApply("here")
+    m._pending.finish(0)
+    compare(m.armingState, "reading")
+    m._pending.deliver(pend({}))
+    compare(m.armingState, "reading", "the old read must not arm")
+    compare(m._pendingRun, m._armWant, "and the fresh read has started")
+    m._pending.deliver(pend({}))
+    compare(m.armingState, "armed")
   }
 
   function test_row_texts() {

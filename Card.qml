@@ -23,7 +23,7 @@ Item {
   // urgent, other check results stand out, notes recede.
   function rowColor(row) {
     if (!model || !model.queueTab) return fg
-    if (row.kind === "conflict" || (row.kind === "check" && row.text.indexOf("fails") === 0))
+    if (row.kind === "conflict" || (row.kind === "check" && row.verdict === "fails"))
       return Commons.Color.urgent
     if (row.kind === "check") return Commons.Color.accent
     if (row.kind === "note" || row.kind === "writing") return dim

@@ -62,7 +62,14 @@ QtObject {
   property int _pendingRun: 0
   property int _armWant: 0
   property bool _pendingAgain: false
-  property bool _checkStopping: false
+  // False from a pending run's start until its answer is absorbed, so a
+  // rerun never starts before the answer it follows (exit and stdout come
+  // in either order).
+  property bool _pendingAbsorbed: true
+  // A check's answer counts only while its run is the current one; check()
+  // and cancelCheck() both move _checkToken on.
+  property int _checkToken: 0
+  property int _checkRun: 0
   property string _afterCheck: ""
   property var _deferredArgs: []
   property bool neverApplied: false
@@ -190,9 +197,9 @@ QtObject {
       } else {
         t = "could not check: " + (cr.reason || "")
       }
-      out.push({ kind: "check", text: t, path: null, detail: cr.error || cr.reason || "" })
+      out.push({ kind: "check", verdict: cr.verdict, text: t, path: null, detail: cr.error || cr.reason || "" })
     } else if (checkRunning) {
-      out.push({ kind: "check", text: "checking\u2026 (about a minute) -- ESC cancels", path: null, detail: "" })
+      out.push({ kind: "check", verdict: "running", text: "checking\u2026 (about a minute) -- ESC cancels", path: null, detail: "" })
     }
     var pd = pendingData
     if (!pd) return out
@@ -282,7 +289,7 @@ QtObject {
       return true
     }
     if (armingState === "reading") { message = "still reading the queue"; return false }
-    if (queued === -1 && queueError) { message = "queue unknown -- press r"; return false }
+    if (queued === -1 && queueError) { message = "queue unknown -- open the Queue tab and press r"; return false }
     disarm()
     armingState = "reading"
     armedKind = kind
@@ -392,12 +399,7 @@ QtObject {
   }
 
   property Process _pending: Process {
-    onExited: function (code, status) {
-      if (!root._pendingAgain) return
-      root._pendingAgain = false
-      root._pendingRun = root._pendingWant
-      root._pending.running = true
-    }
+    onExited: root._pendingRerun()
     stdout: StdioCollector {
       onStreamFinished: root._absorbPending(text)
     }
@@ -406,6 +408,7 @@ QtObject {
   // Invalidation and arming hang off this answer, not off refreshed():
   // _absorb emits refreshed() before the pending read has returned.
   function _absorbPending(text) {
+    _pendingAbsorbed = true
     var data
     try { data = JSON.parse(text) } catch (e) { data = null }
     if (data === null || typeof data !== "object") data = { ok: false }
@@ -448,6 +451,22 @@ QtObject {
       disarm()
       message = "the queue changed -- review it again"
     }
+    _pendingRerun()
+  }
+
+  // Starting a running Process is a no-op, so a read asked for meanwhile
+  // runs once this one has both exited and been absorbed.
+  function _pendingRerun() {
+    if (!_pendingAgain || _pending.running || !_pendingAbsorbed) return
+    _pendingAgain = false
+    _pendingStart()
+  }
+
+  function _pendingStart() {
+    _pendingRun = _pendingWant
+    _pendingAbsorbed = false
+    _pending.command = [script, "pending"]
+    _pending.running = true
   }
 
   function refresh() {
@@ -458,11 +477,8 @@ QtObject {
 
   function refreshPending() {
     _pendingWant++
-    // Starting a running Process is a no-op: run again when it exits.
-    if (_pending.running) { _pendingAgain = true; return }
-    _pendingRun = _pendingWant
-    _pending.command = [script, "pending"]
-    _pending.running = true
+    if (_pending.running || !_pendingAbsorbed) { _pendingAgain = true; return }
+    _pendingStart()
   }
 
   // ---- the check -------------------------------------------------------
@@ -470,7 +486,6 @@ QtObject {
   property Process _check: Process {
     onExited: function (code, status) {
       root.checkRunning = false
-      if (root._checkStopping) { root._checkStopping = false; root.checkResult = null }
       if (root._afterCheck !== "") {
         var after = root._afterCheck
         root._afterCheck = ""
@@ -480,14 +495,16 @@ QtObject {
     }
     stdout: StdioCollector {
       onStreamFinished: {
-        if (root._checkStopping) return
+        if (root._checkRun !== root._checkToken) return
         var data = null
         try { data = JSON.parse(text) } catch (e) { data = null }
         if (data === null || typeof data !== "object" || data.ok === false)
           root.checkResult = { verdict: "unknown",
                                reason: (data && data.error) || "the check did not answer" }
         else {
-          if (root.pendingData && data.fingerprint !== root.pendingData.fingerprint)
+          if (root.pendingData && data.fingerprint
+              && (data.verdict === "evaluates" || data.verdict === "fails")
+              && data.fingerprint !== root.pendingData.fingerprint)
             data.verdict = "superseded"
           root.checkResult = data
         }
@@ -500,12 +517,14 @@ QtObject {
     _check.command = dry ? [script, "check", "--dry-run"] : [script, "check"]
     checkResult = null
     checkRunning = true
+    _checkRun = ++_checkToken
     _check.running = true
   }
 
   function cancelCheck() {
     if (!checkRunning) return
-    _checkStopping = true
+    _checkToken++
+    checkResult = null
     _check.running = false
   }
 
