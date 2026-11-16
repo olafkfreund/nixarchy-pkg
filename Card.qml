@@ -44,6 +44,7 @@ Item {
   // Queue rows say how much they matter: a conflict or a failed check is
   // urgent, other check results stand out, notes recede.
   function rowColor(row) {
+    if (row.kind === "declared" && row.mine === false) return dim
     if (!model || !model.queueTab) return fg
     if (row.kind === "conflict" || (row.kind === "check" && row.verdict === "fails"))
       return Commons.Color.urgent
@@ -266,12 +267,14 @@ Item {
           // Glyphs as \u escapes, so the source survives an editor or a
           // patch that mangles them.
           text: modelData.settings === true      ? "\u2261"
+              : modelData.set === true           ? "\u25a0"
+              : modelData.set === false          ? "\u25a1"
               : modelData.enabled === undefined  ? "\u00b7"
               : modelData.enabled                ? "\u25a0" : "\u25a1"
           textFormat: Text.PlainText
           font.family: root.fontFamily
           font.pixelSize: Style.font.heading
-          color: modelData.enabled ? Commons.Color.menu.selectedText : root.dim
+          color: modelData.set === true || modelData.enabled ? Commons.Color.menu.selectedText : root.dim
         }
 
         // The column is reserved while the picture loads or is missing, so
@@ -301,6 +304,7 @@ Item {
           // read" is a different and misleading statement -- so it takes
           // the width it needs.
           width: modelData.kind !== undefined
+                 && !(modelData.kind === "declared" && modelData.mine === false)
                  ? Math.min(implicitWidth, parent.width)
                  : Math.min(implicitWidth, parent.width * 0.42)
           elide: Text.ElideRight
@@ -372,7 +376,12 @@ Item {
                              - Style.space(10) * ((flags.visible ? 3 : 2)
                                                   + (icon.visible ? 1 : 0)))
           elide: Text.ElideRight
-          text: (modelData.version ? modelData.version + "  " : "")
+          text: modelData.kind === "declared" && modelData.mine === false
+              ? "(not written by this tool)"
+              : modelData.type !== undefined && modelData.type !== ""
+              ? (modelData.summary || "") + "  \u00b7  " + modelData.type
+                + (modelData.set === true && typeof modelData.current === "string" ? "  =  " + modelData.current : "")
+              : (modelData.version ? modelData.version + "  " : "")
                 + (modelData.summary || modelData.note || modelData.type || "")
           textFormat: Text.PlainText
           font.family: root.fontFamily

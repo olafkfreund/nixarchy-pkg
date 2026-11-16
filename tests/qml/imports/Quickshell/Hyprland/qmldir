@@ -1,0 +1,3 @@
+module Quickshell.Hyprland
+# Test-only singleton; no Hyprland connection loads.
+singleton Hyprland 1.0 Hyprland.qml

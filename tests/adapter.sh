@@ -235,6 +235,83 @@ check "a path assignment merges with an existing attrset" \
 
 # The build sandbox has no network or writable nix store; CI and developer machines run these.
 if [ "${NIXARCHY_PKG_TEST_OFFLINE:-0}" != 1 ]; then
+# A block input is visible even when this tool did not write it; follows
+# entries have no node, and a marked line can be absent from the lock.
+FK=$(fresh_flake)
+sed -i "s|github:nixos/nixpkgs/nixos-unstable|path:$FLAKE_TMP/lib|" "$FK/flake.nix"
+sed -i "/nixpkgs.url/a\\    tool = { url = \"path:$FLAKE_TMP/lib\"; };\n    alias.follows = \"nixpkgs\";" "$FK/flake.nix"
+nix flake lock "$FK" >/dev/null 2>&1
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake list)
+# shellcheck disable=SC2016  # jq receives $u, not the shell.
+check "block input is listed as unowned" jq -e --arg u "path:$FLAKE_TMP/lib" \
+  '.inputs | any(.name == "tool" and .mine == false and .url == $u and .inspectable)' <<<"$out"
+check "follows names its target" jq -e '.inputs | any(.name == "alias" and .follows == "nixpkgs")' <<<"$out"
+sed -i '/^}/i\\  inputs.unlocked.url = "path:/unlocked";  #@flake-input unlocked' "$FK/flake.nix"
+sed -i '/^}/i\\  inputs.unlocked.flake = false;  #@flake-input unlocked' "$FK/flake.nix"
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake list)
+check "marked input absent from lock keeps URL and is unlocked" jq -e \
+  '.inputs | any(.name == "unlocked" and .url == "path:/unlocked" and .mine and (.locked | not))' <<<"$out"
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake list)
+check "unlocked marked input is stale" jq -e '.stale == true' <<<"$out"
+check "state carries flake staleness" jq -e '.flakesStale == true' \
+  <<<"$(NIXARCHY_FLAKE="$FK" "$ADAPTER" state)"
+else echo "  skip: needs a writable nix store or the network (flake inputs)"; fi
+
+# These lock fixtures only read hand-written files, so they also run offline.
+FK=$(fresh_flake)
+jq -n --arg d "$FK" '{version: 7, root: "root", nodes: {
+  root: {inputs: {forge: "forge", relative: "relative"}},
+  forge: {original: {type: "github", owner: "o", repo: "r", ref: "ref"}},
+  relative: {original: {type: "path", path: "sub"}}}}' > "$FK/flake.lock"
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake list)
+# shellcheck disable=SC2016  # jq receives $d, not the shell.
+check "forge and relative path refs render" jq -e --arg d "$FK" \
+  '(.inputs | any(.name == "forge" and .url == "github:o/r/ref")) and
+   (.inputs | any(.name == "relative" and .url == ("path:" + $d + "/sub")))' <<<"$out"
+printf '  inputs.forge.url = "github:o/r/ref";  #@flake-input forge\n' >> "$FK/flake.nix"
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake list)
+check "marked input present in root is fresh despite newer flake.nix" jq -e '.stale == false' <<<"$out"
+sed -i '/#@flake-input forge/d' "$FK/flake.nix"
+
+printf '  inputs.pending.url = "path:/pending";  #@flake-input pending\n' >> "$FK/flake.nix"
+touch -d '+1 minute' "$FK/flake.lock"
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake list)
+check "marked input missing from root is stale despite newer lock" jq -e '.stale == true and (.inputs | any(.name == "pending" and (.locked | not)))' <<<"$out"
+rm "$FK/flake.lock"
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake list)
+marked_without_lock=$out
+sed -i '/#@flake-input pending/d' "$FK/flake.nix"
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake list)
+# shellcheck disable=SC2016  # jq receives $marked, not the shell.
+check "missing lock is stale only with marks" jq -e --argjson marked "$marked_without_lock" \
+  '.stale == false and $marked.stale == true' <<<"$out"
+
+jq -n '{version: 7, root: "root", nodes: {
+  root: {inputs: {gitlab: "gitlab", sourcehut: "sourcehut", git: "git", tarball: "tarball", file: "file", indirect: "indirect", unknown: "unknown"}},
+  gitlab: {original: {type: "gitlab", owner: "o", repo: "r", host: "h", ref: "a/b", rev: "r1", dir: "sub"}},
+  sourcehut: {original: {type: "sourcehut", owner: "o", repo: "r"}},
+  git: {original: {type: "git", url: "https://x/y?x=1", ref: "main", rev: "r2", dir: "d"}, flake: false},
+  tarball: {original: {type: "tarball", url: "https://x/y"}},
+  file: {original: {type: "file", url: "file:///x"}},
+  indirect: {original: {type: "indirect", id: "nixpkgs", ref: "unstable"}},
+  unknown: {original: {type: "mystery"}}}}' > "$FK/flake.lock"
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake list)
+check "lock refs cover forge host and query, git, file, tarball, indirect, unknown" jq -e '
+  (.inputs | any(.name == "gitlab" and .url == "gitlab:o/r?host=h&rev=r1&ref=a%2Fb&dir=sub")) and
+  (.inputs | any(.name == "sourcehut" and .url == "sourcehut:o/r")) and
+  (.inputs | any(.name == "git" and .url == "git+https://x/y?x=1&rev=r2&ref=main&dir=d" and (.flake | not))) and
+  (.inputs | any(.name == "tarball" and .url == "https://x/y")) and
+  (.inputs | any(.name == "file" and .url == "file:///x")) and
+  (.inputs | any(.name == "indirect" and .url == "nixpkgs/unstable")) and
+  (.inputs | any(.name == "unknown" and .url == null and (.inspectable | not)))' <<<"$out"
+
+if [ "${NIXARCHY_PKG_TEST_OFFLINE:-0}" != 1 ]; then
+FK=$(fresh_flake)
+printf '{ outputs = { self }: { packages.x86_64-linux.hello = { type = "derivation"; name = "hello"; drvPath = "/nix/store/00000000000000000000000000000000-hello.drv"; outPath = "/nix/store/00000000000000000000000000000000-hello"; }; packages.aarch64-darwin.maconly = { type = "derivation"; name = "maconly"; drvPath = "/nix/store/00000000000000000000000000000000-maconly.drv"; outPath = "/nix/store/00000000000000000000000000000000-maconly"; }; overlays.default = final: prev: {}; nixosModules.default = {}; }; }\n' > "$FK/flake.nix"
+out=$("$ADAPTER" flake show "path:$FK")
+check "show keeps this system packages and overlay names" jq -e \
+  '.packages == ["hello"] and .overlays == ["default"] and .otherCount == 1' <<<"$out"
+
 FK=$(fresh_flake)
 out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake add lib "path:$FLAKE_TMP/lib" 2>&1 || true)
 check "declares an input"            jq -e '.ok == true'          <<<"$out"
@@ -271,7 +348,14 @@ out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake remove lib 2>&1 || true)
 check "removes it"                   jq -e '.ok == true' <<<"$out"
 check "takes the line out"           test "$(grep -c '#@flake-input lib$' "$FK/flake.nix" || true)" = 0
 check "and still evaluates"          nix flake metadata "$FK" --no-update-lock-file
-check "lists nothing afterwards"     jq -e '.inputs | length == 0' <<<"$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake list)"
+check "removed input is absent, nixpkgs remains" \
+  jq -e '(.inputs | map(.name) | index("lib")) == null and
+         (.inputs | any(.name == "nixpkgs" and .mine == false))' \
+  <<<"$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake list)"
+check "removed input has no lock node" \
+  jq -e '.nodes[.root].inputs | has("lib") | not' "$FK/flake.lock"
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake add lib "path:$FLAKE_TMP/lib")
+check "removed name can be added again" jq -e '.ok == true' <<<"$out"
 
 # Names are checked whole, refs are data, and the remove guard can be
 # neither steered nor fooled by a hyphen -- and it looks past flake.nix (#29).
@@ -363,6 +447,21 @@ check "spaces around a word keep its ranking" jq -e --argjson other "$(stub_sear
 check "all search words must match" jq -e '.rows | length == 0' \
   <<<"$(stub_search -- "ssh nothinglikethis")"
 check "a blank search is refused" jq -e '.ok == false' <<<"$(stub_search -- "   ")"
+SEARCHCFG=$(mktemp -d)
+mkdir -p "$SEARCHCFG/nixarchy"
+printf '{ ... }:\n{\n  x.y = true;  #@opt x.y\n  # x.z = ;  #@opt x.z\n}\n' >"$SEARCHCFG/nixarchy/apps.nix"
+printf 'opt\tx.y\tSet option\tboolean\t\nopt\tx.z\tScaffold option\tstring\t\nopt\tx.a\tAbsent option\tboolean\t\n' \
+  >>"$STUBCACHE/nixarchy/index.tsv"
+out=$(XDG_CONFIG_HOME="$SEARCHCFG" stub_search --kind opt -- x.)
+check "search joins a set option to its current line" jq -e \
+  '.rows | map(select(.name == "x.y"))[0] | .set == true and .current == "true"' <<<"$out"
+check "search keeps a scaffold distinct from a set option" jq -e \
+  '.rows | map(select(.name == "x.z"))[0] | .set == false and (.current | contains("x.z = ;"))' <<<"$out"
+check "search leaves an absent option's state unknown" jq -e \
+  '.rows | map(select(.name == "x.a"))[0] | .set == null and .current == null' <<<"$out"
+check "non-option search rows have no option state" jq -e \
+  '.rows | map(select(.kind == "pkg"))[0] | has("set") | not' <<<"$(stub_search -- foo)"
+rm -rf "$SEARCHCFG"
 for i in $(seq 5000); do printf 'pkg\tssh%s\tssh tool\t\t\n' "$i"; done > "$STUBCACHE/nixarchy/index.tsv"
 check "a truncated search still answers once in JSON" jq -e '.ok == true and (.rows | length == 1)' \
   <<<"$(stub_search --limit 1 -- ssh)"
@@ -541,6 +640,33 @@ check "the fixture catalogue answers a boolean" \
   jq -e '.ok == true and .widget == "boolean"' <<<"$(fx opt describe t.bool)"
 check "and says so for an option it lacks" \
   jq -e '.ok == false' <<<"$(fx opt describe t.nope)"
+check "port bounds are strings" jq -e '.min == "0" and .max == "65535"' <<<"$(fx opt describe t.port)"
+check "signed integer bounds are strings" jq -e '.min == "-9223372036854775808" and .max == "9223372036854775807"' <<<"$(fx opt describe t.int)"
+
+CONFIG=$(fresh_config); export XDG_CONFIG_HOME="$CONFIG"
+APPSNIX="$CONFIG/nixarchy/apps.nix"
+before=$(sha256sum "$APPSNIX")
+check "out-of-range port is refused" jq -e '.ok == false and (.error | contains("outside"))' <<<"$(fx opt set t.port 70000)"
+check "refused port leaves file untouched" test "$before" = "$(sha256sum "$APPSNIX")"
+check "leading zeros are refused" jq -e '.ok == false and (.error | contains("leading zeros"))' <<<"$(fx opt set t.port 007)"
+check "large unsigned literal writes" jq -e '.ok' <<<"$(fx opt set t.u32 4294967295)"
+check "negative range lower bound refuses -10" jq -e '.ok == false' <<<"$(fx opt set t.neg -10)"
+check "negative range lower bound accepts -9" jq -e '.ok' <<<"$(fx opt set t.neg -9)"
+check "out-of-range list item is refused" jq -e '.ok == false and (.error | contains("outside"))' <<<"$(fx opt set t.ports '[ 0 70000 ]')"
+check "integer list accepts its bounds" jq -e '.ok' <<<"$(fx opt set t.ports '[ 0 65535 ]')"
+before=$(sha256sum "$APPSNIX")
+check "out-of-range nullable integer is refused on set" jq -e '.ok == false and (.error | contains("outside"))' <<<"$(fx opt set t.nullPort 70000)"
+check "refused nullable set leaves file untouched" test "$before" = "$(sha256sum "$APPSNIX")"
+check "nullable integer accepts null" jq -e '.ok' <<<"$(fx opt set t.nullPort null)"
+before=$(sha256sum "$APPSNIX")
+check "out-of-range nullable integer is refused on replace" jq -e '.ok == false and (.error | contains("outside"))' <<<"$(fx opt replace t.nullPort 70000)"
+check "refused nullable replace leaves file untouched" test "$before" = "$(sha256sum "$APPSNIX")"
+check "Nix expression passes literal check" jq -e '.ok' <<<"$(fx opt set t.port 'builtins.toString 80')"
+check "unsigned literal can be set" jq -e '.ok' <<<"$(fx opt set t.uint 0)"
+before=$(sha256sum "$APPSNIX")
+check "replace refuses negative unsigned literal" jq -e '.ok == false and (.error | contains("outside"))' <<<"$(fx opt replace t.uint -1)"
+check "refused replace leaves file untouched" test "$before" = "$(sha256sum "$APPSNIX")"
+rm -rf "$CONFIG"
 
 echo "options"
 if [ -n "$(command -v nixarchy-search)" ]; then
@@ -2041,8 +2167,8 @@ check "long grandchild finishes" wait67_done "$W67/gc.done"
 out=$(run67 recover)
 check "long grandchild recovery succeeds" jq -e '.ok == true' <<<"$out"
 check "long grandchild recovery restores apps.nix" test "$(md5sum < "$A67")" = "$before"
-check "timeout -k covers five write-time calls" test "$(grep -c 'timeout -k 10 120 nix flake' "$ADAPTER")" = 5
-check "no write-time call has the old timeout" test "$(grep -c 'timeout 120 nix flake \(metadata\|lock\)' "$ADAPTER" || :)" = 0
+check "timeout -k covers six write-time calls" test "$(grep -Ec 'timeout -k 10 120 (nix|"\$\{NIX\[@\]\}") flake (metadata|lock)' "$ADAPTER")" = 6
+check "no write-time call has the old timeout" test "$(grep -Ec 'timeout 120 (nix|"\$\{NIX\[@\]\}") flake (metadata|lock)' "$ADAPTER" || :)" = 0
 rm -rf "$W67"
 
 echo "an interrupted write stops apply (#66)"
