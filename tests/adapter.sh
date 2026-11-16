@@ -213,6 +213,8 @@ merged=$(printf '{ a = { x = 1; }; a.y = 2; }' | nix-instantiate --eval --strict
 check "a path assignment merges with an existing attrset" \
   test "$merged" = '{ a = { x = 1; y = 2; }; }'
 
+# The build sandbox has no network or writable nix store; CI and developer machines run these.
+if [ "${NIXARCHY_PKG_TEST_OFFLINE:-0}" != 1 ]; then
 FK=$(fresh_flake)
 out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake add lib "path:$FLAKE_TMP/lib" 2>&1 || true)
 check "declares an input"            jq -e '.ok == true'          <<<"$out"
@@ -308,6 +310,7 @@ out=$("$ADAPTER" flake show "path:$FLAKE_TMP/lib" 2>&1 || true)
 check "enumerates nixosModules"      jq -e '.nixosModules | index("default")' <<<"$out"
 check "sees the alias too"           jq -e '.nixosModules | index("thing")'   <<<"$out"
 check "reports opaque namespaces as a list" jq -e '.opaque | type == "array"' <<<"$out"
+else echo "  skip: needs a writable nix store or the network (flake inputs)"; fi
 check "says so when a flake cannot be read" \
   jq -e '.ok == false and (.message | length > 0)' \
   <<<"$("$ADAPTER" flake show "path:$FLAKE_TMP/nowhere" 2>&1 || true)"
@@ -1291,6 +1294,7 @@ else
   echo "skip: needs $TEMPLATES (not a nixarchy machine)"
 fi
 
+if [ "${NIXARCHY_PKG_TEST_OFFLINE:-0}" != 1 ]; then
 # "nothing was changed" has to mean it. A failed add used to leave behind
 # both a mode change and a flake.lock that nix created on its way to
 # failing.
@@ -1314,6 +1318,7 @@ NIXARCHY_FLAKE="$FKS" "$ADAPTER" flake remove lib >/dev/null 2>&1 || true
 check "flake remove takes the line out"   \
   test "$(grep -c '#@flake-input lib$' "$FKS/flake.nix" || true)" = 0
 check "and keeps flake.nix's mode"        test "$(stat -c %a "$FKS/flake.nix")" = 644
+else echo "  skip: needs a writable nix store or the network (flake inputs)"; fi
 
 # draft and reindex had no test at all, though draft calls writers that
 # create and mutate package files -- the same risk class as `pkg add` and
@@ -1513,6 +1518,7 @@ kill "$lockpid" 2>/dev/null || true; wait "$lockpid" 2>/dev/null || true
 rm -f "$W59/held"
 left_nothing "apply lock"
 
+if [ "${NIXARCHY_PKG_TEST_OFFLINE:-0}" != 1 ]; then
 mkdir -p "$W59/fk" "$W59/dep"
 printf '{\n  outputs = { self }: { };\n}\n' > "$W59/fk/flake.nix"
 printf '{\n  outputs = { self }: { nixosModules.default = { }; };\n}\n' > "$W59/dep/flake.nix"
@@ -1566,6 +1572,7 @@ check "read-only lock: refused, no failed undo" jq -e '.ok == false and (.error 
 check "read-only lock: unchanged" test "$(md5sum < "$W59/fk/flake.lock")" = "$before_lock"
 chmod 644 "$W59/fk/flake.lock"
 left_nothing "read-only lock"
+else echo "  skip: needs a writable nix store or the network (flake inputs)"; fi
 
 # A dangling symlink is refused, never recorded as absent and deleted.
 reset_apps; mv "$A59" "$W59/real.nix"; ln -s "$W59/gone.nix" "$A59"
