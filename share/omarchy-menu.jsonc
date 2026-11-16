@@ -16,6 +16,9 @@
 // comment calls description "extra search text", but the menu matches on
 // label and aliases only -- searching "reindex" against a description finds
 // nothing. Verified on a running shell.
+//
+// The action is nixarchy-plugin, not omarchy-shell: with the plugin off it
+// says so instead of doing nothing. No "when", for the same reason.
 "system.nixarchy-packages": {
     "icon": "❄",
     "label": "nixarchy packages",
@@ -29,7 +32,7 @@
       "options",
       "pkg"
     ],
-    "action": "omarchy-shell shell toggle nixarchy.pkg '{}'"
+    "action": "nixarchy-plugin nixarchy.pkg"
   },
   "learn.nixarchy-pkg-keybindings": {
     "icon": "❄",

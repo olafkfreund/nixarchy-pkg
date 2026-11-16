@@ -57,8 +57,11 @@ is a common clash with nvim.
 ```lua
 -- ~/.config/hypr/bindings.lua
 o.bind("SUPER + ALT + N", "nixarchy packages",
-       "omarchy-shell shell toggle nixarchy.pkg '{}'")
+       "nixarchy-plugin nixarchy.pkg")
 ```
+
+With the plugin turned off, the key shows a notification saying so and
+how to turn it on, instead of doing nothing.
 
 There is also a menu row. `share/omarchy-menu.jsonc` in the repository has
 two rows to paste into `~/.config/omarchy/extensions/omarchy-menu.jsonc` —

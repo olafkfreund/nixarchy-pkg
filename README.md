@@ -154,8 +154,11 @@ lists what is taken. `SUPER+SHIFT+N` is a common clash (nvim).
 ```lua
 -- ~/.config/hypr/bindings.lua
 o.bind("SUPER + ALT + N", "nixarchy packages",
-       "omarchy-shell shell toggle nixarchy.pkg '{}'")
+       "nixarchy-plugin nixarchy.pkg")
 ```
+
+With the plugin turned off, the key shows a notification saying so and
+how to turn it on, instead of doing nothing.
 
 Nix installs the plugin; enabling it stays runtime state in `shell.json`,
 deliberately.
