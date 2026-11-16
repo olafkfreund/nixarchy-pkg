@@ -34,6 +34,7 @@ ESCAPE                     -> Clear the search, then close the menu
 RETURN                     -> On the Flakes tab with a flakeref typed, ask
                               what that flake offers. Nothing is written,
                               and nothing is built
+RETURN                     -> On a declared input, inspect it again
 RETURN                     -> On "declare this as an input", name it: the
                               field suggests the repository's name. RETURN
                               declares it in your system flake and locks it,

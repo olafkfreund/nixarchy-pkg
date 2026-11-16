@@ -54,12 +54,68 @@ TestCase {
     describeProc().deliver(JSON.stringify(o))
     wait(20)
   }
+  function writeProcess() {
+    for (var i = 0; i < form.data.length; i++) {
+      var c = form.data[i]
+      if (c && c.command !== undefined && c.deliver && c !== describeProc()) return c
+    }
+    return null
+  }
+
   function init() {
     fakeModel.applying = false; fakeModel.busy = false
     var w = writeProc(); if (w) w.command = []
 
     if (form.open) form.finish()
     list.forceActiveFocus()
+  }
+
+  function test_opens_and_seeds_a_boolean() {
+    form.begin({ path: "t.bool" })
+    verify(form.open)
+    var p = describeProc()
+    verify(p !== null)
+    p.deliver(JSON.stringify({ ok: true, path: "t.bool", widget: "boolean",
+                               type: "boolean", default: "false", current: { state: "set", value: "true" } }))
+    compare(form.widget, "boolean")
+    compare(form.boolValue, true)
+    compare(form.touched, false)
+    compare(form.nixValue(), "")
+  }
+
+  function test_markup_is_readable_plain_text() {
+    form.begin({ path: "t.bool" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.bool", widget: "boolean",
+      description: "see {option}`a.b` here\n\n::: {.note}\nbe careful\n:::\n\n::: {.warning}\nwatch out\n:::" }))
+    var shown = form.reflow(form.option.description)
+    verify(shown.indexOf("see a.b here") >= 0)
+    verify(shown.indexOf("Note:") >= 0)
+    verify(shown.indexOf("Warning:") >= 0)
+    verify(shown.indexOf(":::") < 0)
+  }
+
+  function test_admonition_forms_become_labels() {
+    var shown = form.reflow("::: {.tip}\nuse it\n:::\n\n  :::{.important}\nreally\n  :::\n\n:::{.caution}\ncare\n:::")
+    verify(shown.indexOf("Tip:") >= 0)
+    verify(shown.indexOf("Important:") >= 0)
+    verify(shown.indexOf("Caution:") >= 0)
+    verify(shown.indexOf(":::") < 0)
+  }
+
+  function test_read_only_refuses_a_write() {
+    form.begin({ path: "t.ro" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.ro", widget: "boolean",
+      type: "boolean", default: "false", readOnly: true, current: { state: "absent" } }))
+    form.boolValue = true
+    form.touched = true
+    var writer = writeProcess()
+    verify(writer !== null)
+    compare(writer.command.length, 0)
+    form.commit()
+    verify(form.error.indexOf("read-only") >= 0)
+    verify(!fakeModel.busy)
+    compare(writer.command.length, 0)
+    verify(form.open)
   }
 
   // #76: on a system with no options.json, describe answers ok:false. The
@@ -143,7 +199,7 @@ TestCase {
   }
   function test_string_quoting() {
     open({ widget: "string", default: "" })
-    var tf = walk(form, function (o) { return o.placeholderText !== undefined })[0]
+    var tf = walk(form, function (o) { return o.placeholderText !== undefined && o.visible })[0]
     tf.text = "a\"b${HOME}"; form.touched = true
     compare(form.nixValue(), "\"a\\\"b\\${HOME}\"")
     tf.text = "\"x\""; compare(form.nixValue(), "\"x\"")
@@ -184,5 +240,102 @@ TestCase {
     form.finish()
     form.begin({ path: "programs.git.enable" })
     compare(describeProc().command.join(" "), "nixarchy-pkg opt describe --scope system programs.git.enable")
+  }
+
+  function test_integer_focus_steps_and_bounds() {
+    form.begin({ path: "t.port" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.port", widget: "integer",
+      default: "22", min: "0", max: "65535", current: { state: "absent" } }))
+    var field = findChild(form, "integerField")
+    verify(field !== null)
+    tryCompare(field, "activeFocus", true)
+    field.text = "65535"
+    keyClick(Qt.Key_Up)
+    compare(field.text, "65535")
+    field.text = "70000"
+    form.commit()
+    verify(form.error.indexOf("outside") >= 0)
+    compare(writeProcess().command.length, 0)
+    form.option = { widget: "integer", min: "-9223372036854775808", max: "9223372036854775807", current: { state: "absent" } }
+    field.text = "9007199254740993"
+    keyClick(Qt.Key_Up)
+    compare(field.text, "9007199254740994")
+    field.text = "0"
+    keyClick(Qt.Key_Down)
+    compare(field.text, "-1")
+  }
+
+  function test_lone_minus_refuses_without_writing() {
+    form.begin({ path: "t.port" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.port", widget: "integer",
+      current: { state: "absent" } }))
+    var field = findChild(form, "integerField")
+    tryCompare(field, "activeFocus", true)
+    field.text = "-"
+    keyClick(Qt.Key_Return)
+    verify(form.error.indexOf("complete integer") >= 0)
+    compare(writeProcess().command.length, 0)
+    verify(!fakeModel.busy)
+  }
+
+  function test_delete_twice_removes_and_empty_string_arms() {
+    form.begin({ path: "t.bool" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.bool", widget: "boolean",
+      current: { state: "set", value: "true" } }))
+    var writer = writeProcess()
+    keyClick(Qt.Key_Delete)
+    verify(form.armedRemove)
+    compare(writer.command.length, 0)
+    keyClick(Qt.Key_Delete)
+    compare(writer.command.slice(1, 3).join(" "), "opt remove")
+    writer.deliver(JSON.stringify({ ok: true }))
+    form.begin({ path: "t.str" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.str", widget: "string",
+      current: { state: "set", value: "\"old\"" } }))
+    var field = findChild(form, "textField")
+    tryCompare(field, "activeFocus", true)
+    field.text = ""
+    keyClick(Qt.Key_Return)
+    verify(form.armedRemove)
+    form.finish()
+    form.begin({ path: "t.str" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.str", widget: "string",
+      current: { state: "set", value: "\"old\"" } }))
+    writer.command = []
+    keyClick(Qt.Key_Return)
+    verify(!form.armedRemove)
+    compare(writer.command.length, 0)
+  }
+
+  function test_delete_edits_scaffold_without_arming_remove() {
+    form.begin({ path: "t.multi" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.multi", widget: "scaffold",
+      current: { state: "set", value: "abcde\nfgh" } }))
+    var field = findChild(form, "scaffoldField")
+    tryCompare(field, "activeFocus", true)
+    var writer = writeProcess()
+    field.cursorPosition = 2
+    keyClick(Qt.Key_Home)
+    keyClick(Qt.Key_Delete)
+    keyClick(Qt.Key_Delete)
+    compare(field.text, "cde\nfgh")
+    verify(!form.armedRemove)
+    compare(writer.command.length, 0)
+  }
+
+  function test_disarming_clears_only_remove_message() {
+    form.begin({ path: "t.bool" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.bool", widget: "boolean",
+      current: { state: "set", value: "true" } }))
+    form.forceActiveFocus()
+    keyClick(Qt.Key_Delete)
+    verify(form.armedRemove)
+    verify(form.error.indexOf("DEL again removes ") === 0)
+    keyClick(Qt.Key_Space)
+    verify(!form.armedRemove)
+    compare(form.error, "")
+    form.error = "another refusal"
+    keyClick(Qt.Key_Space)
+    compare(form.error, "another refusal")
   }
 }

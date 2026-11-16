@@ -27,7 +27,8 @@ What comes back is a list of what the flake exposes:
 · github:nix-community/nixvim
 · nixosModules.default
 · nixosModules.nixvim
-· 7 packages
+· hello (package)
+· default (overlay)
 · homeManagerModules — exists, contents cannot be read
 · homeModules — exists, contents cannot be read
 · declare this as an input
@@ -125,8 +126,18 @@ same directory `nixarchy-apply` uses. If there is no `flake.nix` there, the
 tab says so; the variable (`programs.nixarchy.flake` sets it) has to be set
 in the session the shell runs in, not only in a terminal.
 
-`SPACE` on a declared input asks first; `SPACE` again removes it, and any
-other key cancels. `RETURN` on a declared input does not remove it.
+The list shows every input in `flake.lock`, including inputs this tool did
+not write. Those are dimmed and marked. A marked input not yet in the lock
+also appears. If a marked input has no node in `flake.lock`, a note warns
+that the next apply will lock it.
+
+`RETURN` on a declared input inspects it again under its declared name.
+Packages for this system and overlays appear by name. The panel shows the
+line to use for each module, package, or overlay, but never writes that line.
+
+`SPACE` on an input this tool wrote asks first; `SPACE` again removes it,
+and any other key cancels. Removal updates `flake.lock` as well as
+`flake.nix`, so the removed input disappears from the list.
 
 ## Two refusals
 

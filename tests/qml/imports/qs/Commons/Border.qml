@@ -1,4 +1,4 @@
-// Only the specs' existence matters here (#50).
+// Only the existence of these border specs matters here (#50).
 pragma Singleton
 import QtQuick
 // Only spec shapes are supplied; no border is drawn.
