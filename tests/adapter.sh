@@ -363,6 +363,21 @@ check "spaces around a word keep its ranking" jq -e --argjson other "$(stub_sear
 check "all search words must match" jq -e '.rows | length == 0' \
   <<<"$(stub_search -- "ssh nothinglikethis")"
 check "a blank search is refused" jq -e '.ok == false' <<<"$(stub_search -- "   ")"
+SEARCHCFG=$(mktemp -d)
+mkdir -p "$SEARCHCFG/nixarchy"
+printf '{ ... }:\n{\n  x.y = true;  #@opt x.y\n  # x.z = ;  #@opt x.z\n}\n' >"$SEARCHCFG/nixarchy/apps.nix"
+printf 'opt\tx.y\tSet option\tboolean\t\nopt\tx.z\tScaffold option\tstring\t\nopt\tx.a\tAbsent option\tboolean\t\n' \
+  >>"$STUBCACHE/nixarchy/index.tsv"
+out=$(XDG_CONFIG_HOME="$SEARCHCFG" stub_search --kind opt -- x.)
+check "search joins a set option to its current line" jq -e \
+  '.rows | map(select(.name == "x.y"))[0] | .set == true and .current == "true"' <<<"$out"
+check "search keeps a scaffold distinct from a set option" jq -e \
+  '.rows | map(select(.name == "x.z"))[0] | .set == false and (.current | contains("x.z = ;"))' <<<"$out"
+check "search leaves an absent option's state unknown" jq -e \
+  '.rows | map(select(.name == "x.a"))[0] | .set == null and .current == null' <<<"$out"
+check "non-option search rows have no option state" jq -e \
+  '.rows | map(select(.kind == "pkg"))[0] | has("set") | not' <<<"$(stub_search -- foo)"
+rm -rf "$SEARCHCFG"
 for i in $(seq 5000); do printf 'pkg\tssh%s\tssh tool\t\t\n' "$i"; done > "$STUBCACHE/nixarchy/index.tsv"
 check "a truncated search still answers once in JSON" jq -e '.ok == true and (.rows | length == 1)' \
   <<<"$(stub_search --limit 1 -- ssh)"

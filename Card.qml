@@ -260,12 +260,14 @@ Item {
           // Glyphs as \u escapes, so the source survives an editor or a
           // patch that mangles them.
           text: modelData.settings === true      ? "\u2261"
+              : modelData.set === true           ? "\u25a0"
+              : modelData.set === false          ? "\u25a1"
               : modelData.enabled === undefined  ? "\u00b7"
               : modelData.enabled                ? "\u25a0" : "\u25a1"
           textFormat: Text.PlainText
           font.family: root.fontFamily
           font.pixelSize: Style.font.heading
-          color: modelData.enabled ? Commons.Color.menu.selectedText : root.dim
+          color: modelData.set === true || modelData.enabled ? Commons.Color.menu.selectedText : root.dim
         }
 
         // The column is reserved while the picture loads or is missing, so
@@ -366,7 +368,10 @@ Item {
                              - Style.space(10) * ((flags.visible ? 3 : 2)
                                                   + (icon.visible ? 1 : 0)))
           elide: Text.ElideRight
-          text: modelData.summary || modelData.note || modelData.type || ""
+          text: modelData.type !== undefined && modelData.type !== ""
+              ? (modelData.summary || "") + "  \u00b7  " + modelData.type
+                + (modelData.set === true && typeof modelData.current === "string" ? "  =  " + modelData.current : "")
+              : modelData.summary || modelData.note || modelData.type || ""
           textFormat: Text.PlainText
           font.family: root.fontFamily
           font.pixelSize: Style.font.title
