@@ -181,13 +181,15 @@ symbolic link. The check refuses to overlay files through a symlink into a
 target outside its private copy; replace the symlink with a real directory in
 the flake if you want `c` to evaluate it.
 
-## "could not check: this flake reads its own git revision; a copy would evaluate differently"
+## "could not check: the check failed, but this flake reads its own git revision…"
 
 A tracked `.nix` file in the flake references `self.rev`, `self.shortRev`,
 `self.dirtyRev`, `self.dirtyShortRev`, `self.lastModified`, or
-`self.lastModifiedDate`. Because `check` evaluates a `path:` copy rather than
-the git repository itself, those attributes would not match what a real apply
-sees.
+`self.lastModifiedDate`. Most flakes do, for
+`system.configurationRevision`. `check` evaluates a copy, which has no git
+revision, so a pass still counts but a failure might come from the missing
+revision rather than your selection. Press `RETURN` on the row to read the
+error; if it does not mention the revision, the failure is most likely real.
 
 ## "could not check: this flake has a relative path input; a copy would not resolve it"
 

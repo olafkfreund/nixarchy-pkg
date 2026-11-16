@@ -397,8 +397,10 @@ and the header comment. `--dry-run` is the only flag; anything else is
      write through it".
    - `[ -e "$flake/.git" ]` and
      `git -C "$flake" grep -lE 'self\.(rev|shortRev|dirtyRev|dirtyShortRev|lastModified|lastModifiedDate)\b' -- '*.nix'`
-     matches: "this flake reads its own git revision; a copy would evaluate
-     differently". A `git` error here (exit > 1) gives "git failed:
+     matches: sets `reads_rev=true` (deviation, owner-approved 2026-11-16:
+     no answer here; `check_failure` turns `fails` into `unknown` with "the
+     check failed, but this flake reads its own git revision, which a copy
+     does not have -- apply may still work"). A `git` error here (exit > 1) gives "git failed:
      <stderr>".
    - `[ -f "$flake/flake.lock" ]` and
      `jq -e '[.nodes[]? | .locked? // empty | select(.type=="path" and ((.path // "") | startswith("/") | not))] | length > 0'`
@@ -567,7 +569,9 @@ This goes in the same #60 section, after step 2's cases.
    Expect `unknown`.
 5. Delete a tracked, unrelated `extra.nix` from the work tree. Expect it to
    still evaluate.
-6. Put the comment `# self.rev` in `flake.nix`. Expect `unknown`.
+6. Put the comment `# self.rev` in `flake.nix`. Expect `evaluates`; with a
+   throwing `apps.nix` as well, expect `unknown` with the revision reason
+   and the error's summary (amended 2026-11-16).
 7. Use a `nix` stub on `PATH` that, when `$3 $4` is `eval --raw`, appends a
    comment to `$CONFIG_DIR/apps.nix` and then execs the real `nix` (its
    absolute path is captured before `PATH` changes). Expect `superseded`.

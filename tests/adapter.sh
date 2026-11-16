@@ -768,7 +768,14 @@ check 'deleted tracked file is skipped' jq -e '.verdict == "evaluates"' <<<"$C_O
 c_reset
 printf '# self.rev\n' >>"$C/flake/flake.nix"
 c_run self_rev
-check 'self.rev refuses the copied check' jq -e '.verdict == "unknown" and (.reason | contains("own git revision"))' <<<"$C_OUT"
+check 'self.rev still lets a good selection evaluate' jq -e '.verdict == "evaluates"' <<<"$C_OUT"
+
+c_reset
+printf '# self.rev\n' >>"$C/flake/flake.nix"
+printf '{ a = throw "boom"; }\n' >"$C/config/nixarchy/apps.nix"
+c_run self_rev_fails
+check 'self.rev turns a failure into could-not-check' jq -e \
+  '.verdict == "unknown" and (.reason | contains("own git revision")) and (.summary | contains("boom"))' <<<"$C_OUT"
 
 c_reset
 for tool in git tar cp; do

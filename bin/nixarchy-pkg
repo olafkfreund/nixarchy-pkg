@@ -1573,6 +1573,10 @@ check_replace() {
 check_failure() {
   local f name path
   verdict=fails
+  if $reads_rev; then
+    verdict=unknown
+    reason='the check failed, but this flake reads its own git revision, which a copy does not have -- apply may still work'
+  fi
   error=$(cat "$CHECKDIR/err")
   for f in "$cb/nixarchy/packages"/*.nix; do
     [ -f "$f" ] || continue
@@ -1677,7 +1681,7 @@ cmd_check() {
   local flake=${NIXARCHY_FLAKE:-/etc/nixos} host base br copy cb root="" p f name imports rc=0 \
     verdict=unknown reason="" drvPath="" summary="" error="" at=null dry_run="" dry_error="" \
     dry_set=false check_error="" fingerprint="" pins='{}' unpinned='{"drafts":[],"flake":true}' \
-    blocked='[]' note="" dry_requested=false
+    blocked='[]' note="" dry_requested=false reads_rev=false
   case "${1-}" in
     "") [ "$#" = 0 ] || die "check takes only --dry-run" ;;
     --dry-run) [ "$#" = 1 ] || die "check takes only --dry-run"; dry_requested=true ;;
@@ -1724,7 +1728,10 @@ cmd_check() {
     rc=0
     git -C "$flake" grep -lE 'self\.(rev|shortRev|dirtyRev|dirtyShortRev|lastModified|lastModifiedDate)\b' -- '*.nix' \
       >"$CHECKDIR/git.out" 2>"$CHECKDIR/git.err" 9>&- 8>&- || rc=$?
-    if [ "$rc" = 0 ]; then reason='this flake reads its own git revision; a copy would evaluate differently'; check_answer; fi
+    # Most flakes set configurationRevision from self.rev; a copy only
+    # loses the revision, so a pass still counts and only a failure is
+    # in doubt (check_failure).
+    [ "$rc" != 0 ] || reads_rev=true
     if [ "$rc" -gt 1 ]; then reason="git failed: $(sed -n '1p' "$CHECKDIR/git.err")"; check_answer; fi
   fi
   if [ -f "$flake/flake.lock" ] && jq -e \

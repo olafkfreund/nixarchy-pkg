@@ -164,10 +164,15 @@ flake, the selection or #59's lock, never elevates, and never switches.
 4. **Fidelity guard.** Answer `verdict:"unknown"`, with the reason, and
    without evaluating, when the check cannot reproduce what the real rebuild
    evaluates:
-   - **Git metadata.** `$flake/.git` exists and the flake's tracked `.nix`
-     files mention `self.rev`, `self.shortRev`, `self.dirtyRev`,
+   - **Git metadata** (amended 2026-11-16, owner-approved, after a run on
+     razer). `$flake/.git` exists and the flake's tracked `.nix` files
+     mention `self.rev`, `self.shortRev`, `self.dirtyRev`,
      `self.dirtyShortRev`, `self.lastModified` or `self.lastModifiedDate`.
-     A `path:` copy would evaluate those differently.
+     Nearly every flake does (`system.configurationRevision`), so this no
+     longer refuses up front: the check evaluates, a pass stands, and only
+     a failure becomes `unknown` ("the check failed, but this flake reads
+     its own git revision, which a copy does not have -- apply may still
+     work"), keeping the error.
    - **Relative path input.** `flake.lock` has a `"type": "path"` input whose
      `path` is relative.
    - **Submodule.** `git -C "$flake" ls-files -s` lists any gitlink (mode
