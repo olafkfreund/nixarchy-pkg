@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 61
 spec: spec/2026-11-16-61-option-forms.md
 coders:
