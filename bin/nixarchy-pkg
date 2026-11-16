@@ -49,8 +49,10 @@ umask 077
 readonly STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/nixarchy"
 readonly LOCK="$STATE_DIR/applied/lock"   # nixarchy-apply's lock, same expression
 readonly TXN="$STATE_DIR/pkg-recovery"    # one write at a time, under the lock
+readonly CHILDREN="$STATE_DIR/pkg-children.lock"
 # This script is not on PATH; a hint to run it must name it the way it was run.
 SELF=$0; case $SELF in /*) ;; *) SELF=$PWD/$SELF ;; esac; readonly SELF
+readonly SETTLE_NOTE="something this write started is still running, so nothing was undone. Your backup is kept: run $SELF recover when it has finished."
 WORK=""
 READDIR=""
 CHECKDIR=""
@@ -61,6 +63,7 @@ PENDING=false
 GUARDED=false        # true only while pkg-recovery/open belongs to this call
 ROLLBACK_NOTE=""
 WRITING=false        # true from begin_write on, so on_exit can answer for it
+SETTLE_FAILED=false
 
 readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/nixarchy"
 readonly CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/nixarchy"
@@ -125,6 +128,7 @@ on_exit() {
   local d
   for d in "$WORK" "$READDIR" "$CHECKDIR" "$APPLYDIR"; do
     [ -n "$d" ] || continue
+    [ "$d" = "$WORK" ] && $SETTLE_FAILED && continue
     chmod -R u+w "$d" 2>/dev/null || :   # nix leaves read-only dirs behind
     rm -rf "$d" 2>/dev/null || :
   done
@@ -144,6 +148,10 @@ begin_write() {
   flock -w 5 9 ||
     die "another write or an apply is running -- try again when it finishes. Nothing was changed."
   export NIXARCHY_LOCK_HELD=1
+  exec 7>>"$CHILDREN" || die "cannot open $CHILDREN. Nothing was changed."
+  # Children inherit fd 7; a write killed outright leaves them holding it.
+  flock -w 1 7 ||
+    die "something an interrupted write started is still running. Try again when it has finished. Nothing was changed."
   # We hold the lock: any other working dir is from a write that died.
   for d in "$STATE_DIR"/pkg-work.*; do
     [ -e "$d" ] || continue
@@ -194,6 +202,7 @@ guard() {
 # GUARDED changes in this shell.
 rollback() {
   local p i f failed=()
+  if ! settle; then GUARDED=false; ROLLBACK_NOTE=$SETTLE_NOTE; return 0; fi
   for p in "$TXN/open"/*.path; do
     [ -e "$p" ] || continue
     i=${p%.path}
@@ -223,10 +232,22 @@ rollback() {
 # because a failed mv in an && list is exempt from errexit and the EXIT trap
 # would then undo a write already reported as done.
 committed() {
+  if ! settle; then
+    GUARDED=false   # keep open/: neither committed nor undone
+    die "something this write started is still running, so the write was neither kept nor undone. Your backup is kept: run $SELF recover when it has finished."
+  fi
   mv "$TXN/open" "$TXN/done" ||
     die "could not record that the write finished (disk full?), so it was undone."
   GUARDED=false
   rm -rf "$TXN/done" 2>/dev/null || :
+}
+
+# A fresh open can take the lock only after every child has closed fd 7.
+settle() {
+  exec 7>&-
+  if ( flock -w 5 6 ) 6>>"$CHILDREN"; then return 0; fi
+  SETTLE_FAILED=true
+  return 1
 }
 
 # After run_writer: keep the writer's change, or undo it, and answer.
@@ -1131,7 +1152,7 @@ cmd_flake_add() {
 
   local err; err=$(mktemp)
 
-  if ! timeout 120 nix flake metadata "$dir" >/dev/null 2>"$err" 9>&-; then
+  if ! timeout -k 10 120 nix flake metadata "$dir" >/dev/null 2>"$err" 9>&-; then
     die "this flake does not evaluate as it stands, so I have changed nothing rather than add to a broken file: $(nix_why "$err")"
   fi
 
@@ -1150,11 +1171,11 @@ cmd_flake_add() {
   fi
   cp "$tmp" "$file"   # not mv; see cmd_opt_set (#39)
 
-  if ! timeout 120 nix flake lock "$dir" >/dev/null 2>"$err" 9>&-; then
+  if ! timeout -k 10 120 nix flake lock "$dir" >/dev/null 2>"$err" 9>&-; then
     die "could not lock '$ref', so nothing was changed: $(nix_why "$err")"
   fi
 
-  if ! timeout 120 nix flake metadata "$dir" >/dev/null 2>"$err" 9>&-; then
+  if ! timeout -k 10 120 nix flake metadata "$dir" >/dev/null 2>"$err" 9>&-; then
     die "the flake stopped evaluating with '$name' in it, so nothing was changed: $(nix_why "$err")"
   fi
   committed
@@ -1195,7 +1216,7 @@ cmd_flake_remove() {
   # The same baseline as add: a flake that was already broken is not this
   # removal's fault, and must not look like it (#29).
   local err; err=$(mktemp)
-  if ! timeout 120 nix flake metadata "$dir" >/dev/null 2>"$err" 9>&-; then
+  if ! timeout -k 10 120 nix flake metadata "$dir" >/dev/null 2>"$err" 9>&-; then
     die "this flake does not evaluate as it stands, so I have changed nothing rather than remove from a broken file: $(nix_why "$err")"
   fi
 
@@ -1252,7 +1273,7 @@ cmd_flake_remove() {
     die "that would have left $file unparseable, so nothing was changed: $(nix_why "$err")"
   fi
   cp "$tmp" "$file"   # not mv; see cmd_opt_set (#39)
-  if ! timeout 120 nix flake metadata "$dir" >/dev/null 2>"$err" 9>&-; then
+  if ! timeout -k 10 120 nix flake metadata "$dir" >/dev/null 2>"$err" 9>&-; then
     die "the flake stopped evaluating without '$name', so nothing was changed: $(nix_why "$err")"
   fi
   committed
