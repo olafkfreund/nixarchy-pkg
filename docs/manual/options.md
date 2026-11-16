@@ -40,12 +40,28 @@ with a label — an actual widget, when the type admits one.
 | --- | --- |
 | `boolean` | A checkbox. `SPACE` flips it |
 | enum | The alternatives, `j`/`k` to choose |
-| `int` | A number field |
-| simple string / path | A text field |
+| integer | A number field, with declared bounds checked before writing |
+| string / path | A text field |
+| `strings concatenated with "\n"` | A multi-line field that writes one escaped Nix string |
+| list of strings or integers | One item per line; `[ ]` writes an empty list |
+| package | A package search field, when `apps.nix` takes `pkgs` |
+| `null or` one of these types | The widget plus a `null` choice; `CTRL+N` toggles it |
 | anything else | See below |
 
 The type, the documentation and the default are all shown. `RETURN` writes,
 `ESCAPE` cancels.
+
+String lists keep each nonblank line as one item, including a line such as
+`console=ttyS0,115200n8`. Integer lists check each item's declared bounds.
+The multi-line string field writes newline escapes inside one Nix string.
+For the multi-line editors, `RETURN` adds a line and `CTRL+RETURN` writes.
+Package suggestions come from the package index; `UP`/`DOWN` moves through them
+and `RETURN` chooses the selected package as `pkgs.<attr>`.
+
+The form checks `non-empty string`, `absolute path`, and `string, not
+containing newlines or colons` constraints before writing. The adapter also
+checks these constraints on single string literals and lists of string
+literals. Other Nix expressions still use the scaffold editor.
 
 Options with `<name>` or `*` in their path ask for each name above the value
 field. Fill every name before writing; an empty field says `name every <name> first`.
@@ -73,8 +89,10 @@ is not.
 
 ![A scaffolded option](../img/09-option-form-scaffold.png)
 
-Booleans, enums, integers and simple strings get a real widget. Lists,
-`null or T`, attribute sets, submodules and functions do not.
+Only the exact types above get widgets. Pattern strings, attribute sets,
+submodules, functions, and lists of more complex values use the scaffold.
+Package types also use it when `apps.nix` does not take `pkgs`; the form says
+why.
 
 They get the option's own example — or its default — in a text box, with
 its type and documentation beside it. Edit it and RETURN writes it as a

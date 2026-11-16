@@ -26,7 +26,8 @@ declining to do something is an answer.
 | `pkg add <attr> [--stable\|--unstable]` | What `RETURN` and `SHIFT+RETURN` do |
 | `pkg remove <attr>` | |
 | `opt describe <path>` | An option's type, default, example and docs |
-| `opt set <path> <value>` / `opt replace <path> <value>` / `opt remove <path>` | Write, change or remove a marked option |
+| `opt set <path> <value>` / `opt remove <path>` | |
+| `opt replace <path> <value>` | Change an option already marked in `apps.nix` |
 | `draft new <url>` / `draft undraft <name>` | See [Drafts](drafts) |
 | `flake show <ref>` / `flake list` | Inspect a source or list locked inputs |
 | `flake add [--no-follows] [--no-flake] <name> <ref>` | Declare and lock an input; `--no-flake` also disables follows |
@@ -36,6 +37,26 @@ declining to do something is an answer.
 | `check [--dry-run]` | Evaluate a private copy of the flake with the queued selection |
 | `apply [--pin <part>=<sha256>]` | The rebuild. Streams a log, then one JSON object |
 | `reindex` | Rebuild the search index. About a minute |
+
+## Option values
+
+Pass a Nix expression as one shell argument. For example:
+
+```bash
+nixarchy-pkg opt set services.openssh.ports '[ 80 443 ]'
+nixarchy-pkg opt replace services.openssh.ports '[ 22 ]'
+```
+
+`opt describe` reports `widget`, `item`, `nullable`, `multiline`,
+`constraint`, and integer `min`/`max` bounds. Lists of strings or integers
+have a list widget; a `null or` type can take `null`. A package type gets a
+package widget only if `apps.nix` takes `pkgs`.
+
+`opt set` and `opt replace` refuse a literal integer outside its bounds.
+They also refuse a single string literal, or a list of string literals, that
+breaks the declared non-empty, absolute-path, or no-newline-and-colon rule.
+Other Nix expressions are left to the usual parse check. A refusal leaves
+`apps.nix` unchanged.
 
 ## A worked example
 

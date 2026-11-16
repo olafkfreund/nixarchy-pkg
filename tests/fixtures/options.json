@@ -186,6 +186,13 @@
       "text": "null"
     }
   },
+  "t.nullList": {
+    "type": "null or list of string",
+    "description": "Test option t.nullList.",
+    "readOnly": false,
+    "declarations": ["tests/fixtures/options.json"],
+    "default": null
+  },
   "t.ports": {
     "type": "list of 16 bit unsigned integer; between 0 and 65535 (both inclusive)",
     "description": "Test option t.ports.",

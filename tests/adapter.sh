@@ -781,6 +781,32 @@ check "token has no file alternative" jq -e '.sensitive == true and .fileOption 
 check "boolean token is not sensitive" jq -e '.sensitive == false' <<<"$(fx opt describe t.enableToken)"
 check "boolean is not sensitive" jq -e '.sensitive == false and .fileOption == null' <<<"$(fx opt describe t.bool)"
 check "signed integer bounds are strings" jq -e '.min == "-9223372036854775808" and .max == "9223372036854775807"' <<<"$(fx opt describe t.int)"
+for spec in \
+  't.bool boolean null false false null' \
+  't.enum enum null false false null' \
+  't.port integer null false false null' \
+  't.str string null false false null' \
+  't.nonEmpty string null false false nonEmpty' \
+  't.abs string null false false absolute' \
+  't.noColon string null false false noNewlineColon' \
+  't.lines string null false true null' \
+  't.nullStr string null true false null' \
+  't.nullPort integer null true false null' \
+  't.nullList scaffold null true false null' \
+  't.ports list integer false false null' \
+  't.strs list string false false null' \
+  't.absList list string false false absolute' \
+  't.pkg scaffold null false false null' \
+  't.nullPkg scaffold null true false null' \
+  't.pattern scaffold null false false null' \
+  't.attrs scaffold null false false null'; do
+  read -r name widget item nullable multiline constraint <<<"$spec"
+  # shellcheck disable=SC2016 # jq variables are passed by --arg.
+  check "$name has its exact type metadata" jq -e \
+    --arg w "$widget" --arg i "$item" --arg n "$nullable" --arg m "$multiline" --arg c "$constraint" \
+    '.widget == $w and (.item | tostring) == $i and (.nullable | tostring) == $n and (.multiline | tostring) == $m and (.constraint | tostring) == $c' \
+    <<<"$(fx opt describe "$name")"
+done
 
 CONFIG=$(fresh_config); export XDG_CONFIG_HOME="$CONFIG"
 APPSNIX="$CONFIG/nixarchy/apps.nix"
@@ -805,6 +831,18 @@ check "unsigned literal can be set" jq -e '.ok' <<<"$(fx opt set t.uint 0)"
 before=$(sha256sum "$APPSNIX")
 check "replace refuses negative unsigned literal" jq -e '.ok == false and (.error | contains("outside"))' <<<"$(fx opt replace t.uint -1)"
 check "refused replace leaves file untouched" test "$before" = "$(sha256sum "$APPSNIX")"
+before=$(sha256sum "$APPSNIX")
+check "empty constrained string is refused" jq -e '.ok == false and (.error | contains("non-empty"))' <<<"$(fx opt set t.nonEmpty '""')"
+check "relative path is refused" jq -e '.ok == false and (.error | contains("absolute"))' <<<"$(fx opt set t.abs '"rel/x"')"
+check "relative path in a list is refused" jq -e '.ok == false and (.error | contains("absolute"))' <<<"$(fx opt set t.absList '[ "/ok" "rel" ]')"
+check "colon in a string is refused" jq -e '.ok == false and (.error | contains("colons"))' <<<"$(fx opt set t.noColon '"x:y"')"
+check "constrained refusals leave the file alone" test "$before" = "$(sha256sum "$APPSNIX")"
+check "package explains missing pkgs" jq -e '.widget == "scaffold" and (.packageNote | contains("does not take pkgs"))' <<<"$(fx opt describe t.pkg)"
+sed -i 's/{ ... }:/{ other ? "pkgs", ... }:/' "$APPSNIX"
+check "a pkgs string in another header argument is not a binding" jq -e '.widget == "scaffold"' <<<"$(fx opt describe t.pkg)"
+sed -i 's/{ other ? "pkgs", ... }:/{ pkgs, ... }:/' "$APPSNIX"
+check "package widget needs pkgs in apps header" jq -e '.widget == "package" and .packageNote == null' <<<"$(fx opt describe t.pkg)"
+check "nullable package widget needs pkgs" jq -e '.widget == "package" and .nullable == true' <<<"$(fx opt describe t.nullPkg)"
 
 quoted_path='fileSystems."/mnt/usb drive".options'
 check "quoted option path writes" jq -e '.ok == true' <<<"$(fx opt set "$quoted_path" '[ "nofail" ]')"
@@ -841,10 +879,10 @@ if [ -n "$(command -v nixarchy-search)" ]; then
   d=$("$ADAPTER" opt describe services.openssh.enable)
   check "boolean maps to a checkbox"  jq -e '.widget == "boolean"' <<<"$d"
   d=$("$ADAPTER" opt describe services.openssh.ports)
-  check "a list falls through to a scaffold" jq -e '.widget == "scaffold"' <<<"$d"
+  check "an integer list gets a list widget" jq -e '.widget == "list" and .item == "integer"' <<<"$d"
   check "literalExpression is unwrapped"     jq -e '.default | contains("22")' <<<"$d"
   d=$("$ADAPTER" opt describe networking.hostName)
-  check "a string maps to a field"    jq -e '.widget == "string"' <<<"$d"
+  check "a pattern string stays a scaffold" jq -e '.widget == "scaffold"' <<<"$d"
   d=$("$ADAPTER" opt describe boot.binfmt.registrations.\<name\>.recognitionType)
   check "an enum offers its choices"  jq -e '.widget == "enum" and (.choices | length == 2)' <<<"$d"
   check "an unknown option is a value" jq -e '.ok == false' <<<"$("$ADAPTER" opt describe not.a.real.option)"

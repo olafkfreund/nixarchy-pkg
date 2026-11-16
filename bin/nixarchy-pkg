@@ -763,13 +763,10 @@ cmd_draft() {
 # display.
 #
 # `widget` is this script's answer to "what can the panel draw for this?".
-# The patterns are the ones nixarchy-search's own option picker uses, and
-# they are anchored exactly as it anchors them: `list of string` and `null
-# or path` deliberately fall through to the scaffold, because their value
-# is not one prompted word and a form that pretended otherwise would write
-# plausible-looking wrong configuration.
+# Only the exact type grammar below gets a widget; other Nix types keep
+# their expression editor.
 opt_meta() {
-  local path=$1 scope=${2:-system} oj="" source=system
+  local path=$1 scope=${2:-system} oj="" source=system has_pkgs=false result
   options_resolve
   if [ -n "$OPT_DIR" ] && [ -f "$OPT_DIR/$scope.json" ]; then
     oj=$OPT_DIR/$scope.json; source=flake
@@ -777,9 +774,28 @@ opt_meta() {
     oj=$(searched optionsjson)
   fi
   if [ -z "$oj" ] || [ ! -f "$oj" ]; then printf 'null\n'; return 0; fi
-  jq --arg p "$path" --arg scope "$scope" --arg source "$source" '
+  if [ -f "$APPS" ]; then
+    result=$(NIXARCHY_APPS="$APPS" nix-instantiate --eval --readonly-mode -E \
+      'builtins.hasAttr "pkgs" (builtins.functionArgs (import (builtins.toPath (builtins.getEnv "NIXARCHY_APPS"))))' 2>/dev/null 9>&- 8>&-) || result=false
+    [ "$result" = true ] && has_pkgs=true
+  fi
+  jq --arg p "$path" --arg scope "$scope" --arg source "$source" --argjson hasPkgs "$has_pkgs" '
     def literal: if type == "object" then (.text // tostring) else tojson end;
     def alt: "\"(?:[^\"\\\\]|\\\\.)*\"|-?[0-9]+";
+    def integer($x): $x | test("^(signed integer|unsigned integer, meaning >=0|positive integer, meaning >0|integer between -?[0-9]+ and -?[0-9]+ \\(both inclusive\\)|[0-9]+ bit unsigned integer; between -?[0-9]+ and -?[0-9]+ \\(both inclusive\\))$");
+    def enum($x): $x | test("^one of (?:" + alt + ")(?:, (?:" + alt + "))*$");
+    def scalar($x):
+      if $x == "boolean" then "boolean"
+      elif enum($x) then "enum"
+      elif integer($x) then "integer"
+      elif (["string", "path", "strings concatenated with \"\\n\"", "non-empty string", "absolute path", "string, not containing newlines or colons"] | index($x)) != null then "string"
+      else "scaffold" end;
+    def constraint($x):
+      if $x == "non-empty string" then "nonEmpty"
+      elif $x == "absolute path" then "absolute"
+      elif $x == "string, not containing newlines or colons" then "noNewlineColon"
+      else null end;
+    def unparen: if startswith("(") and endswith(")") then .[1:-1] else . end;
     def bounds:
       gsub("[()]"; "") | gsub("^(null or |list of )+"; "") as $t
       | if $t | test("^[0-9]+ bit unsigned integer; between -?[0-9]+ and -?[0-9]+|^integer between -?[0-9]+ and -?[0-9]+") then
@@ -806,7 +822,11 @@ opt_meta() {
     | $all[$key] as $o
     | if $o == null then null else
         ($o.type // "") as $t
-        | ($t | test("^one of (?:" + alt + ")(?:, (?:" + alt + "))*$")) as $listed
+        | ($t | sub("^null or "; "") | unparen) as $base
+        | ($base | sub("^list of "; "") | unparen) as $itemType
+        | enum($base) as $listed
+        | scalar($base) as $scalar
+        | scalar($itemType) as $itemWidget
         | ($t | bounds) as $b
         | {
             ok: true, path: $p, scope: $scope, source: $source, type: $t,
@@ -815,17 +835,17 @@ opt_meta() {
             declarations: ($o.declarations // []),
             default: (if $o.default == null then "" else ($o.default | literal) end),
             example: (if $o.example == null then "" else ($o.example | literal) end),
-            widget: if $t == "boolean" then "boolean" elif $listed then "enum"
-              elif ($t | test("^(signed integer|unsigned integer|positive integer|integer between|[0-9]+ bit unsigned integer)")) then "integer"
-              elif ($t | test("^(string|path|absolute path)([,[:space:]]|$)")) then "string"
-              else "scaffold" end,
-            item: (if $t | startswith("list of ") then
-              if ($b[0] != null) then "integer" elif ($t | test("string")) then "string" else null end
-              else null end),
+            widget: (if $t == "package" or $t == "null or package" then (if $hasPkgs then "package" else "scaffold" end)
+              elif ($t | startswith("list of ")) and ($itemWidget == "string" or $itemWidget == "integer") then "list"
+              else $scalar end),
+            item: (if ($t | startswith("list of ")) and ($itemWidget == "string" or $itemWidget == "integer") then $itemWidget else null end),
             nullable: ($t | startswith("null or ")),
+            multiline: ($base == "strings concatenated with \"\\n\""),
+            constraint: (if ($t | startswith("list of ")) or $scalar == "string" then constraint($itemType) else null end),
+            packageNote: (if ($t == "package" or $t == "null or package") and ($hasPkgs | not) then "apps.nix does not take pkgs, so a package is written as Nix here" else null end),
             min: $b[0], max: $b[1],
-            choices: (if $listed then [ $t | ltrimstr("one of ") | scan(alt) ] else [] end),
-            choicesUnavailable: (($t | startswith("one of ")) and ($listed | not)),
+            choices: (if $listed then [ $base | ltrimstr("one of ") | scan(alt) ] else [] end),
+            choicesUnavailable: (($base | startswith("one of ")) and ($listed | not)),
             sensitive: (($key | comps | last) | test("(?i)(password|passwd|secret|token|apikey|privatekey|presharedkey|psk)$")) and ($t | test("string")),
             fileOption: (($key | sub("(?<l>[^.]+)$"; "\(.l)File")) as $f
               | if $all[$f] == null then null else
@@ -990,16 +1010,45 @@ decimal_lt() {
 }
 
 check_literal() {
-  local path=$1 value=$2 meta min max integer_type item nullable v
+  local path=$1 value=$2 meta min max integer_type item nullable v constraint decoded rule tree
   local -a fields
   meta=$(opt_meta "$path")
   [ "$meta" != null ] || return 0
   mapfile -t fields < <(jq -r '[.min // "", .max // "",
     (.type | test("^(null or )?(signed integer|unsigned integer|positive integer|integer between|[0-9]+ bit unsigned integer)")),
-    .item // "", .nullable] | .[]' <<<"$meta")
-  min=${fields[0]} max=${fields[1]} integer_type=${fields[2]} item=${fields[3]} nullable=${fields[4]}
-  [ "$integer_type" = true ] || [ "$item" = integer ] || return 0
+    .item // "", .nullable, .constraint // ""] | .[]' <<<"$meta")
+  min=${fields[0]} max=${fields[1]} integer_type=${fields[2]} item=${fields[3]} nullable=${fields[4]} constraint=${fields[5]}
   [ "$value" = null ] && [ "$nullable" = true ] && return 0
+  if [ -n "$constraint" ]; then
+    local single='^"([^"\\]|\\.)*"$'
+    local list='^\[[[:space:]]*("([^"\\]|\\.)*"[[:space:]]*)*\]$'
+    local list_tree='^\[ ?(\("([^"\\]|\\.)*"\) ?)*\]$'
+    if { [ "$item" = string ] && [[ $value =~ $list ]]; } ||
+       { [ "$item" != string ] && [[ $value =~ $single ]]; }; then
+      tree=$(nix-instantiate --parse -E "$value" 2>/dev/null 9>&- 8>&-) || return 0
+      if [ "$item" = string ]; then
+        [[ $tree =~ $list_tree ]] || return 0
+      else
+        [[ $tree =~ $single ]] || return 0
+      fi
+      decoded=$(nix-instantiate --eval --strict --json --readonly-mode \
+        --option pure-eval true --option restrict-eval true -E "$value" 2>/dev/null 9>&- 8>&-) || return 0
+      case "$constraint" in
+        nonEmpty) rule="a non-empty string" ;;
+        absolute) rule="an absolute path" ;;
+        noNewlineColon) rule="a string without newlines or colons" ;;
+      esac
+      if ! jq -e --arg c "$constraint" '
+        def valid: if $c == "nonEmpty" then . != ""
+          elif $c == "absolute" then startswith("/")
+          else (contains("\n") or contains(":")) | not end;
+        if type == "array" then all(.[]; type == "string" and valid)
+        else type == "string" and valid end' <<<"$decoded" >/dev/null; then
+        die "$path needs $rule. Nothing was changed."
+      fi
+    fi
+  fi
+  [ "$integer_type" = true ] || [ "$item" = integer ] || return 0
   if [ "$item" = integer ]; then
     [[ $value =~ ^\[[[:space:]]*(-?[0-9]+([[:space:]]+-?[0-9]+)*[[:space:]]*)?\]$ ]] || return 0
     value=${value#\[}; value=${value%\]}

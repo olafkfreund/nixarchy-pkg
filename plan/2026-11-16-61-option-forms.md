@@ -457,6 +457,8 @@ expect `widget: "list"`, `item: "integer"`, in this step.
 **Traps.** jq regexes are Oniguruma: escape `(` and `)` in type text. The
 header check reads `$APPS` only if it exists.
 
+(Deviation, PR 5: the host catalogue declares `networking.hostName` as a pattern string, so its old string-widget test now expects a scaffold.)
+
 ### 9. Widgets and seeds (`OptionForm.qml`)
 
 - `nullable`: an extra choice / toggle "null" beside the widget; when
@@ -615,5 +617,7 @@ count the block as one change.
 (Review fixes, PR 3: Delete inside a text editor edits text and arms removal only from the form root; disarming clears the "DEL again removes" message; a lone "-" in the integer field is refused with a message; `null or <integer>` options get the range check.)
 
 (Review fixes, PR 4: removal keys ignore auto-repeat so a held Delete never arms and removes; the sensitive heuristic is tested against a *File sibling and a non-string secret-named option.)
+
+(Review fixes, PR 5: null writes bypass field constraints and integer-list validation; seeded packages neither search nor write on untouched RETURN; nullable integer defaults of null stay in the integer widget; lists drop blank lines; package results use arrow keys while plain j/k type; stale searches are ignored; CTRL+N toggles null with a hint; forced multiline scaffolds show the scaffold hint; the manual shows one backslash in the newline code span.)
 
 (Review fixes, PR 6: name-field Tab and Shift+Tab reach the value and return; RETURN waits for concrete describe, failed describes discard the held value and restore the template path; quoted keys refuse control characters; name placeholders identify their position and path segment.)
