@@ -330,6 +330,18 @@ TestCase {
     compare(writer.command.length, 0)
   }
 
+  function test_held_delete_does_not_arm_or_remove() {
+    open({ widget: "boolean", current: { state: "set", value: "true" } })
+    var writer = writeProcess()
+    for (var i = 0; i < 2; i++) {
+      var event = { key: Qt.Key_Delete, isAutoRepeat: true, accepted: false }
+      compare(form.removeKey(event), true)
+      compare(event.accepted, true)
+      verify(!form.armedRemove)
+      compare(writer.command.length, 0)
+    }
+  }
+
   function test_delete_edits_scaffold_without_arming_remove() {
     form.begin({ path: "t.multi" })
     describeProc().deliver(JSON.stringify({ ok: true, path: "t.multi", widget: "scaffold",

@@ -370,6 +370,7 @@ FocusScope {
     if (event.key !== Qt.Key_Delete || current.state !== "set" ||
         textField.activeFocus || integerField.activeFocus || scaffoldField.activeFocus) return false
     event.accepted = true
+    if (event.isAutoRepeat) return true
     if (!armedRemove) { armRemove(); return true }
     if (root.model.applying) { root.error = "an apply is running \u2014 wait for it to finish"; return true }
     if (root.model.busy) { root.error = "still writing \u2014 try again in a moment"; return true }
