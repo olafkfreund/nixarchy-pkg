@@ -530,7 +530,7 @@ Item {
         objectName: "queueStatus"
         anchors {
           left: parent.left; leftMargin: Style.space(10)
-          right: hints.left; rightMargin: Style.space(14)
+          right: optionsText.visible ? optionsText.left : hints.left; rightMargin: Style.space(14)
           verticalCenter: parent.verticalCenter
         }
         // A long reason (an interrupted write names its files and both
@@ -563,6 +563,25 @@ Item {
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
         color: Commons.Color.urgent
+      }
+
+      // Where the option list came from, so "your flake's" and "the system
+      // manual's" are never mistaken for each other.
+      Text {
+        id: optionsText
+        objectName: "optionsStatus"
+        anchors {
+          right: hints.left; rightMargin: Style.space(14)
+          verticalCenter: parent.verticalCenter
+        }
+        visible: text !== ""
+        text: root.model ? String(root.model.optionsStatus || "") : ""
+        textFormat: Text.PlainText
+        elide: Text.ElideRight
+        width: Math.min(implicitWidth, parent.width * 0.35)
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.title
+        color: root.model && root.model.optionsError ? Commons.Color.urgent : root.dim
       }
 
       Text {

@@ -81,6 +81,22 @@ QtObject {
   property var _deferredArgs: []
   property bool neverApplied: false
   property bool indexStale: false
+  // Where the option list came from: "flake" (the host's own flake, read by
+  // `options refresh`), "system" (the NixOS manual: today's index), or ""
+  // before any answer. Kept like indexStale.
+  property string optionsSource: ""
+  property bool optionsStale: false
+  property string optionsError: ""
+  readonly property bool optionsReading: _optionsRefresh.running
+  readonly property string optionsStatus: {
+    if (optionsReading) return "options: reading your flake\u2026"
+    if (optionsError !== "") return "options: " + optionsError
+    if (optionsSource === "system") return "options: system manual"
+    if (optionsSource === "flake" && optionsStale) return "options: your flake (stale)"
+    return ""
+  }
+  // One automatic refresh per panel session for a stale cache found on opening.
+  property bool _optionsAuto: false
   property bool busy: false
   property bool reindexing: false
   property bool _reindexAnswered: false
@@ -415,6 +431,45 @@ QtObject {
     }
   }
 
+  // The `options` object of search and reindex, or `optionsInfo` of state.
+  // A refresh failure arrives as {ok:false, error} (reindex carries one).
+  function _absorbOptions(o) {
+    if (o === undefined || o === null || typeof o !== "object") return
+    if (o.ok === false) {
+      root.optionsError = String(o.error || "could not read the options")
+      return
+    }
+    if (o.source === undefined) return
+    root.optionsSource = String(o.source)
+    root.optionsStale = o.stale === true
+    root.optionsError = ""
+  }
+
+  // A stale cache found on opening is refreshed once, in the background.
+  function _optionsAutoRefresh() {
+    if (root._optionsAuto || !root.optionsStale || root.optionsSource !== "flake") return
+    root._optionsAuto = true
+    root.refreshOptions()
+  }
+
+  function refreshOptions() {
+    if (_optionsRefresh.running) return
+    _optionsRefresh.command = [script, "options", "refresh"]
+    _optionsRefresh.running = true
+  }
+
+  property Process _optionsRefresh: Process {
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var data = null
+        try { data = JSON.parse(text) } catch (e) { data = null }
+        if (data === null || typeof data !== "object")
+          data = { ok: false, error: "could not read the adapter" }
+        root._absorbOptions(data)
+      }
+    }
+  }
+
   function _absorb(text, isWrite) {
     var data
     try {
@@ -432,6 +487,7 @@ QtObject {
     if (data.rows !== undefined) {
       root.results = data.rows
       if (data.indexStale !== undefined) root.indexStale = data.indexStale
+      root._absorbOptions(data.options)
       root.cursor = 0
       return
     }
@@ -441,12 +497,15 @@ QtObject {
     // that as state emptied every tab until the menu was reopened.
     if (data.apps === undefined) {
       if (data.indexStale !== undefined) root.indexStale = data.indexStale
+      root._absorbOptions(data.options)
       if (data.message) root.message = String(data.message)
       if (isWrite) root.refresh()
       return
     }
     root.state = data
     if (data.indexStale !== undefined) root.indexStale = data.indexStale
+    root._absorbOptions(data.optionsInfo)
+    root._optionsAutoRefresh()
     if (data.message) root.message = String(data.message)
     if (isWrite) root.refreshPending()
     root.cursor = Math.min(root.cursor, Math.max(0, root.count - 1))
@@ -871,6 +930,8 @@ QtObject {
           root._logLine(done.ok ? "\u2014 applied \u2014"
                                 : "\u2014 failed: " + String(done.message || "") + " \u2014")
           root.refresh()
+          // The flake just changed: read its options again, off to the side.
+          if (done.ok) root.refreshOptions()
           return
         }
         root._logLine(trimmed)

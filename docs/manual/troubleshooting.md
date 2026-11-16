@@ -240,6 +240,21 @@ Evaluating the host configuration took longer than 900 seconds and was
 stopped. A dry run that times out does not change the verdict: the check
 still says `evaluates`, and the dry-run part reports the error instead.
 
+## "options: <error>"
+
+The footer shows this when the last read of your flake's options failed, and
+the list falls back to the one it had before (or to the system manual). The
+words after the colon are Nix's first line of error. Common ones:
+
+- `no flake at …`: `NIXARCHY_FLAKE` (default `/etc/nixos`) has no `flake.nix`.
+- `this flake has no nixosConfigurations.<host>`: the flake does not define
+  this machine's host name.
+- `timed out after 5 minutes`: evaluating took too long; the previous list
+  stays. Another read starts after the next apply or `r`.
+- `options are already being read`: another read is running; wait for it.
+
+Fix the cause and press `r`, or apply once.
+
 ## Still wrong
 
 `nixarchy doctor` checks the machine rather than the panel, and is the right

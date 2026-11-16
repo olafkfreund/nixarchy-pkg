@@ -44,6 +44,12 @@ TestCase {
     m._pending.running = false
     m._check.running = false
     m._apply.command = []
+    m.optionsSource = ""
+    m.optionsStale = false
+    m.optionsError = ""
+    m._optionsAuto = false
+    m._optionsRefresh.running = false
+    m._optionsRefresh.command = []
   }
 
   function pend(o) {
@@ -468,5 +474,61 @@ TestCase {
     compare(m.rows().map(function (r) { return r.id }).join(), "x,z,y")
     compare(m.rows().map(function (r) { return r.section }).join("|"),
             "constructor|constructor|__proto__")
+  }
+
+  // ---- #62: where the option list came from ------------------------
+
+  function test_search_reports_the_option_source() {
+    m._absorb(JSON.stringify({ ok: true, indexStale: false, query: "x", rows: [],
+      options: { source: "system", stale: false } }), false)
+    compare(m.optionsSource, "system")
+    compare(m.optionsStatus, "options: system manual")
+    m._absorb(JSON.stringify({ ok: true, indexStale: false, query: "x", rows: [],
+      options: { source: "flake", stale: false } }), false)
+    compare(m.optionsStatus, "", "a fresh flake read needs no footer text")
+  }
+
+  function test_state_reads_optionsInfo_not_options() {
+    // `options` in a state answer is the rows set in apps.nix: an array.
+    m._absorb(JSON.stringify({ ok: true, apps: [], services: [], packages: [], options: [],
+      optionsInfo: { source: "flake", stale: false } }), false)
+    compare(m.optionsSource, "flake")
+  }
+
+  function test_stale_cache_refreshes_once_per_session() {
+    var st = JSON.stringify({ ok: true, apps: [], services: [], packages: [], options: [],
+      optionsInfo: { source: "flake", stale: true } })
+    m._absorb(st, false)
+    compare(m.optionsStale, true)
+    compare(m._optionsRefresh.command.join(" "), m.script + " options refresh")
+    compare(m._optionsRefresh.running, true)
+    compare(m.optionsStatus, "options: reading your flake\u2026")
+    m._optionsRefresh.deliver(JSON.stringify({ ok: true, source: "flake" }))
+    compare(m.optionsStale, false, "the refresh answer clears it")
+    m._absorb(st, false)
+    compare(m._optionsRefresh.running, false, "not again in the same session")
+  }
+
+  function test_refresh_failure_shows_its_error() {
+    m.refreshOptions()
+    m._optionsRefresh.deliver(JSON.stringify({ ok: false, error: "timed out after 5 minutes" }))
+    compare(m.optionsError, "timed out after 5 minutes")
+    compare(m.optionsStatus, "options: timed out after 5 minutes")
+    m._optionsRefresh.deliver(JSON.stringify({ ok: true, source: "flake" }))
+    compare(m.optionsError, "", "a later good read clears it")
+  }
+
+  function test_reindex_answer_carries_the_options_result() {
+    m._absorb(JSON.stringify({ ok: true, indexStale: false, message: "index rebuilt",
+      options: { ok: false, error: "no flake at /etc/nixos" } }), false)
+    compare(m.optionsError, "no flake at /etc/nixos")
+  }
+
+  function test_successful_apply_refreshes_options() {
+    m._apply.stdout.feed('{"nixarchyPkgApply":{"ok":false,"message":"nope"}}')
+    compare(m._optionsRefresh.running, false, "not after a failed apply")
+    m._apply.stdout.feed('{"nixarchyPkgApply":{"ok":true,"message":"applied"}}')
+    compare(m._optionsRefresh.running, true)
+    compare(m._optionsRefresh.command.join(" "), m.script + " options refresh")
   }
 }

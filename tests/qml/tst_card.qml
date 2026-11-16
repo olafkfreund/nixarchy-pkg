@@ -46,6 +46,8 @@ TestCase {
     property string queueError: ""
     property bool queueTab: false
     property bool indexStale: false
+    property string optionsStatus: ""
+    property bool optionsError: false
     property bool neverApplied: false
     property bool showingLog: false
     property string applyLog: ""
@@ -585,6 +587,23 @@ TestCase {
     } finally {
       fakeModel.queueError = ""
       fakeModel.queued = 0
+    }
+  }
+
+  // #62 + #66: the options status sits between the queue status and the hints.
+  function test_options_status_between_queue_and_hints() {
+    fakeModel.queued = -1
+    fakeModel.queueError = "an earlier write was interrupted (/home/u/.config/nixarchy/apps.nix). To put back what was there before, run: nixarchy-pkg recover."
+    fakeModel.optionsStatus = "options: system manual"
+    try {
+      var st = byName(card, "queueStatus"), os = byName(card, "optionsStatus"), h = byName(card, "hints")
+      verify(st && os && h && os.visible)
+      var right = function (it) { return it.mapToItem(card, it.width, 0).x }
+      var left = function (it) { return it.mapToItem(card, 0, 0).x }
+      verify(right(st) <= left(os), "queue status ends before the options status")
+      verify(right(os) <= left(h), "options status ends before the hints")
+    } finally {
+      fakeModel.queueError = ""; fakeModel.queued = 0; fakeModel.optionsStatus = ""
     }
   }
 }

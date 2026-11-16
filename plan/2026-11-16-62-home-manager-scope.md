@@ -323,3 +323,5 @@ handling; without nixarchy C nothing ever writes that file.
 **nixarchy:** "Home Manager part for selection files: apply copies and
 imports `~/.config/nixarchy/home.nix`; writers take `--home`". The body is
 the spec's section C, verbatim. The lead files it after PR 1 merges.
+
+(Workflow run 2026-11-16: the steps of this PR were implemented in one parallel workflow pass and committed together as one commit, because agent-run codex will not start on a worktree with uncommitted changes and the implementing agents may not commit. The PR names which steps Codex wrote and which the coordinating agent wrote; each agent verified every step with the adapter suite, shellcheck, the QML suites and nix flake check, and the lead re-ran the adapter suite and nix flake check before committing.)
