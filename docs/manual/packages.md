@@ -70,8 +70,8 @@ amount of it.
 
 If the search index is stale, it carries **no flags at all**, and every
 package reads as free. The footer says when the index was built and what
-changed since, for example **index built 14 days ago — nixpkgs and 4 more
-changed — r to rebuild**, and it means it. `r` rebuilds the index; it takes
+changed since, for example **index built 14 days ago — r to rebuild —
+nixpkgs and 4 more changed**, and it means it. `r` rebuilds the index; it takes
 about 45 seconds.
 
 Absence of a flag is absence of evidence, not evidence of absence.

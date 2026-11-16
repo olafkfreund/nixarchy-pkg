@@ -43,8 +43,8 @@ Three likely reasons, in order:
 The index is stale. A search index built before unfree and broken flags
 existed carries none of them, so *every* package reads as free.
 
-The footer says so, for example **index built 14 days ago — nixpkgs and 4
-more changed — r to rebuild**. Press `r`. It takes about 45 seconds. (An older
+The footer says so, for example **index built 14 days ago — r to rebuild —
+nixpkgs and 4 more changed**. Press `r`. It takes about 45 seconds. (An older
 adapter says only **index stale — r to rebuild**.)
 
 An absent flag is absent evidence, not a "no".

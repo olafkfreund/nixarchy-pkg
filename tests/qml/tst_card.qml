@@ -46,7 +46,7 @@ TestCase {
     property string queueError: ""
     property bool queueTab: false
     property bool indexStale: false
-    function indexLine(now) { return "index built 14 days ago \u2014 nixpkgs and 4 more changed \u2014 r to rebuild" }
+    function indexLine(now) { return "index built 14 days ago \u2014 r to rebuild \u2014 nixpkgs and 4 more changed" }
     property bool neverApplied: false
     property bool showingLog: false
     property string applyLog: ""

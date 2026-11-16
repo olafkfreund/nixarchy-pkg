@@ -143,11 +143,11 @@ TestCase {
     compare(m.indexLine(now), "no search index \u2014 r to build it")
     m.index = { status: "stale", builtAt: now / 1000 - 14 * 86400,
                 changed: ["nixpkgs"] }
-    compare(m.indexLine(now), "index built 14 days ago \u2014 nixpkgs changed \u2014 r to rebuild")
+    compare(m.indexLine(now), "index built 14 days ago \u2014 r to rebuild \u2014 nixpkgs changed")
     m.index.changed = ["nixpkgs", "options"]
-    compare(m.indexLine(now), "index built 14 days ago \u2014 nixpkgs and options changed \u2014 r to rebuild")
+    compare(m.indexLine(now), "index built 14 days ago \u2014 r to rebuild \u2014 nixpkgs and options changed")
     m.index.changed = ["nixpkgs", "options", "app list", "flatpaks", "new-package row"]
-    compare(m.indexLine(now), "index built 14 days ago \u2014 nixpkgs and 4 more changed \u2014 r to rebuild")
+    compare(m.indexLine(now), "index built 14 days ago \u2014 r to rebuild \u2014 nixpkgs and 4 more changed")
     m.index.changed = null
     compare(m.indexLine(now), "index built 14 days ago \u2014 r to rebuild")
     m.index.builtAt = null

@@ -836,8 +836,9 @@ QtObject {
     var parts = [typeof ix.builtAt === "number"
                  ? "index built " + _ago(now / 1000 - ix.builtAt)
                  : "index stale"]
-    if (ix.changed && ix.changed.length > 0) parts.push(_names(ix.changed) + " changed")
+    // The key first: the footer elides from the end, and the key is what to do.
     parts.push("r to rebuild")
+    if (ix.changed && ix.changed.length > 0) parts.push(_names(ix.changed) + " changed")
     return parts.join(" \u2014 ")
   }
   function _ago(s) {
