@@ -166,6 +166,19 @@ Traps:
 the tests (`test(card): …`) before step 2 starts, so step 3 can revert each
 fix against committed tests.
 
+(Deviations, step 1:
+- Test 6 is deleted. On main, `currentItem` stayed non-null after
+  `positionViewAtBeginning()`, because Qt kept the delegate, so it could not
+  fail. Fix 2 has no automated test; the live check covers it.
+- Test 4 is two tests, one per setup: `..._on_cancel` and `..._on_invalidate`.
+- The preview comparison sorts keys (`canon()`), because `JSON.stringify`
+  differed on key order alone between `modelData` and the model's row.
+- A `withReal()` helper does the setup and shows `realCard` only inside a
+  `try/finally`.
+
+Measured on main: the six must-fail Card tests and both `tst_pkgmodel` clamp
+tests fail, and tests 7-9 and every older test pass.)
+
 ### 2. The fix (`Card.qml`, `PkgModel.qml`) -- codex
 
 1. `Card.qml:59`: replace
