@@ -40,6 +40,8 @@ RETURN                     -> On "declare this as an input", name it: the
                               declares it in your system flake and locks it,
                               ESC goes back
 SPACE                      -> On a declared input, twice: remove it
+u                          -> On a locked input, twice: update its lock
+SHIFT + RETURN             -> While naming, declare without nixpkgs follows
 ESCAPE                     -> Step back out of what you are looking at,
                               before it clears the field
 -- Act ----------------------------

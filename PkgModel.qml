@@ -174,12 +174,16 @@ QtObject {
     if (naming)
       return [{ kind: "note",
                 label: "declare " + namingRef + " as inputs." + namingName
-                     + " \u2014 RETURN declares, ESC goes back" }]
+                     + (namingNonFlake
+                        ? " \u2014 RETURN declares it as a non-flake source"
+                        : " \u2014 RETURN declares (following this flake's nixpkgs), SHIFT+RETURN without, ESC goes back") }]
     if (inspected !== null) {
       var rows = [{ kind: "head", label: inspected.declaredAs
                     ? "inputs." + inspected.declaredAs + " = " + inspected.ref : inspected.ref }]
       if (inspected.ok === false) {
         rows.push({ kind: "note", label: inspected.message || "could not read that flake" })
+        if (inspected.notFlake === true)
+          rows.push({ kind: "declare", label: "declare this as a non-flake source" })
         return rows
       }
       var mods = inspected.nixosModules || []
@@ -401,6 +405,7 @@ QtObject {
     // early while it is on -- and turned RETURN into a declare against a
     // ref from the tab the user had already left (#43).
     if (naming) { cancelNaming(); namingAbandoned() }
+    namingNonFlake = false
     if (next !== tab) { query = ""; results = [] }
     pendingDeclare = null
     tab = next
@@ -1011,12 +1016,15 @@ QtObject {
   // the field for the person to confirm or change. The adapter validates
   // whatever comes back; this only pre-fills it.
   property bool naming: false
+  property bool namingNonFlake: false
   property string namingRef: ""
   property string namingName: ""
 
   // The suggestion to pre-fill, or null when there is nothing to name.
   function beginNaming() {
-    if (inspected === null || inspected.ok === false) return null
+    namingNonFlake = false
+    if (inspected === null || (inspected.ok === false && inspected.notFlake !== true)) return null
+    namingNonFlake = inspected.ok === false
     namingRef = String(inspected.ref)
     namingName = suggestInputName(namingRef)
     naming = true
@@ -1025,14 +1033,17 @@ QtObject {
 
   // True when the declaration started. A refusal (busy) keeps the name and
   // the inspection, where clearing them used to lose both.
-  function declareAs(name) {
-    if (!write(["flake", "add", String(name), namingRef])) {
+  function declareAs(name, noFollows) {
+    var args = ["flake", "add"].concat(namingNonFlake ? ["--no-flake"]
+               : noFollows ? ["--no-follows"] : [], [String(name), namingRef])
+    if (!write(args)) {
       // write() has already said why when an apply is running.
       if (!applying) message = "still writing \u2014 try again in a moment"
       return false
     }
-    pendingDeclare = { name: String(name), ref: namingRef, offers: inspected, nonFlake: false }
+    pendingDeclare = { name: String(name), ref: namingRef, offers: inspected, nonFlake: namingNonFlake }
     naming = false
+    namingNonFlake = false
     invalidateInspection()
     return true
   }
@@ -1041,6 +1052,7 @@ QtObject {
   function cancelNaming() {
     pendingDeclare = null
     naming = false
+    namingNonFlake = false
     return namingRef
   }
 

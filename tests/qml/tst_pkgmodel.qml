@@ -828,6 +828,38 @@ TestCase {
     verify(m.message.indexOf("follows nixpkgs") >= 0)
   }
 
+  function test_non_flake_can_be_declared() {
+    m.setTab(5)
+    m.inspected = { ok: false, notFlake: true, ref: "path:/plain", message: "no flake.nix" }
+    compare(m.flakeRows().filter(function (r) { return r.kind === "declare" })[0].label,
+            "declare this as a non-flake source")
+    compare(m.beginNaming(), "plain")
+    verify(m.namingNonFlake)
+    verify(m.declareAs("x"))
+    compare(m._writer.command.slice(1), ["flake", "add", "--no-flake", "x", "path:/plain"])
+    m._writer.deliver(JSON.stringify({ ok: true, name: "x", url: "path:/plain" }))
+    m.inspected = { ok: false, ref: "path:/broken" }
+    compare(m.beginNaming(), null)
+  }
+
+  function test_declare_without_follows() {
+    m.setTab(5)
+    m.inspected = { ok: true, ref: "path:/tool", nixosModules: [] }
+    m.beginNaming()
+    verify(m.declareAs("x", true))
+    compare(m._writer.command.slice(1), ["flake", "add", "--no-follows", "x", "path:/tool"])
+  }
+
+  function test_armFlake_updates_on_second_press() {
+    m.setTab(5)
+    m.state = { flakeDir: "/f", flakeFound: true,
+                flakes: [{ name: "t", url: "path:/t", locked: true }] }
+    m.cursor = 1
+    verify(m.armFlake("update"))
+    verify(m.armFlake("update"))
+    compare(m._writer.command.slice(1), ["flake", "update", "t"])
+  }
+
   function test_armFlake_removes_on_the_second_press() {
     m.setTab(5)
     m.state = { flakeDir: "/f", flakeFound: true,
