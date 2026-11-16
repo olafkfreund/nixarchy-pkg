@@ -169,8 +169,11 @@ f. **New cases in the same section** (each `check "<description>" ...`):
    1. *Missing template with a home selection.* `NIXARCHY_HOME_TEMPLATE=$O62/none.nix`
       with `NIX_MODE=capture`: `check` returns `.verdict == "unknown"` and
       `.reason` containing `home template is not installed`; no `generated.nix`
-      written for that run (`rm -f` it first) and no nix call (the `nix.calls`
-      count is unchanged). `state` under the same env var: `.userScope.available
+      written for that run (`rm -f` it first) and no flake evaluation (no new
+      `nix.calls` line containing `eval`, `build` or `flake`; the
+      `nix config show allow-import-from-derivation` query that `check_answer`
+      makes at `bin/nixarchy-pkg:2121` is allowed). *(Amended after approval:
+      a zero-call count could never pass with step 3f.)* `state` under the same env var: `.userScope.available
       == false` and `.userScope.reason` contains the same words. Run through
       `env` with the var overridden after `scope62`'s own (the later assignment
       wins), or a local wrapper.
@@ -199,6 +202,17 @@ f. **New cases in the same section** (each `check "<description>" ...`):
       true` in `"$OC/options/meta.json"` (via the `options` symlink path the
       other tests already use) and in the refresh answer; the `nohm` run's
       answer has `.useGlobalPkgs == false`.
+g0. **Discovery evaluates `useGlobalPkgs` for real** *(amended after
+   approval: the canned stub never runs `DISCOVER`, so deleting step 3c would
+   pass every other test)*. Inside the nix-gated block below, evaluate the
+   script's own `DISCOVER` (extract it with
+   `sed -n "/^readonly DISCOVER='/,/^'\$/p" "$HERE/bin/nixarchy-pkg"`, or
+   source a helper that prints it) with `nix eval --impure --json --expr`
+   against three stub configurations `c`: no `home-manager` option at all;
+   `home-manager.users.<u>` with `useGlobalPkgs = true`; and with `false`.
+   Expect `.useGlobalPkgs` to be `false`, `true` and `false`. Must fail on
+   main (the field is absent) and after a mutation that drops it from step 3c.
+
 g. **Nix-gated block** (`if np62=$(nix eval --raw nixpkgs#path ...`). Extend,
    do not duplicate; keep its skip line. Facts measured in a `mktemp` dir with
    the real fixture filled for the real user: with the stub modules below, the
@@ -439,8 +453,21 @@ fixed before the PR. Provider failures are reported verbatim.
 Everything in the guest, nothing on the host's real config. Needs the Home
 Manager part installed and a flake with `home-manager.useGlobalPkgs = true`.
 1. `nixarchy-pkg check` with a `home.nix` selection, and `nixarchy-apply`
-   with the same: `diff` of the `nixarchy-apps.nix` each writes (check's copy
-   from the capture directory, apply's from the flake): byte-identical.
+   with the same: `diff` of the `nixarchy-apps.nix` each writes: byte-identical.
+   *(Amended after approval: production `check` deletes its `$CHECKDIR`.)*
+   Capture check's copy with a guest-only `nix` wrapper put first on `PATH`
+   for that one `check` run. `cmd_check` passes its flake copy
+   (`$CHECKDIR/flake`, `bin/nixarchy-pkg:2456`) to nix, so the wrapper finds
+   the file from its own arguments before delegating:
+   ```sh
+   #!/bin/sh
+   for a; do d=${a#path:}; d=${d%%#*}
+     [ -d "$d" ] && f=$(find "$d" -maxdepth 2 -name nixarchy-apps.nix | head -1) &&
+       [ -n "$f" ] && cp "$f" /mnt/host/check-apps.nix
+   done
+   exec /run/current-system/sw/bin/nix "$@"
+   ```
+   Apply's copy comes from the guest flake directory.
    Without a `home.nix`: the plain stub, also identical.
 2. Set `useGlobalPkgs = false` in the guest flake; `nixarchy-pkg options
    refresh`; `state` shows the reason; `pkg add --scope user` refuses with it;
@@ -489,15 +516,17 @@ is bumped to a commit that contains `tests/fixtures/home-apps-template.nix`
 says). It needs its own artifact set or an explicit owner waiver, and the
 owner's go-ahead before any build on p510.
 
-F1. **Pin.** Bump `nixarchy-pkg` to the merge commit of this PR (coordinator;
-`nix flake lock --update-input nixarchy-pkg` in a scratch copy first, read the
-diff of `flake.lock`: only that input moves).
+F1. **Pin.** Bump `nixarchy-pkg` to the merge commit of this PR (coordinator):
+edit the full SHA in the `nixarchy-pkg` URL in `flake.nix` first (the input is
+pinned by rev, so a lock update alone keeps the old one), then `nix flake lock`;
+read the diff of `flake.lock`: only that input moves.
 
 F2. **The case.** `tests/home-selection.nix` already has
 `homeAppsTemplate = pkgs.writeText "home-apps-template.nix"
 (configWith { }).environment.etc."nixarchy/home-apps-template.nix".text;`. Add,
 next to the check at `sed ... ${homeAppsTemplate} >home.expected` (the
-`bad()`/`fails` idiom):
+`bad()`/`fails` idiom). `pluginFixture` goes in the file's outer `let`, not
+inside the shell script beside the `sed`:
 ```nix
 pluginFixture = "${inputs.nixarchy-pkg}/tests/fixtures/home-apps-template.nix";
 ```
