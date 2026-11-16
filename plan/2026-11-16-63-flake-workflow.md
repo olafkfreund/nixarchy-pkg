@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 63
 spec: spec/2026-11-16-63-flake-workflow.md
 coders:
