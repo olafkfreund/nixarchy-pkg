@@ -26,6 +26,17 @@ Item {
   readonly property color hoverBackground: Qt.rgba(selectedBg.r, selectedBg.g, selectedBg.b, selectedBg.a * 0.5)
   // Alpha 0 of the same colour, not "transparent": a fade to #00000000 passes through grey.
   readonly property color restBackground: Qt.rgba(selectedBg.r, selectedBg.g, selectedBg.b, 0)
+  readonly property bool waiting: Boolean(model && (model.busy || model.inspecting || model.checkRunning))
+  property real busyProgress: 0
+  readonly property bool busyAnimating: busyAnim.running
+  NumberAnimation on busyProgress {
+    id: busyAnim
+    from: 0; to: 1
+    // A running animation keeps its starting duration; a 0 ms loop could spin when motion resumes.
+    duration: 1100
+    loops: Animation.Infinite
+    running: root.waiting && !Style.reduceMotion
+  }
   // Apps and Services rows carry an icon; the other tabs don't.
   readonly property bool showIcons: root.model && root.model.tab <= 1
 
@@ -427,11 +438,26 @@ Item {
     anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
     spacing: Style.space(4)
 
-    Rectangle {
+    Item {
+      objectName: "busyRule"
       width: parent.width
       height: Math.max(1, Style.space(1))
-      color: root.dim
-      opacity: 0.25
+      clip: true
+
+      Rectangle {
+        objectName: "busyRuleBase"
+        anchors.fill: parent
+        color: root.waiting && Style.reduceMotion ? Commons.Color.menu.selectedText : root.dim
+        opacity: root.waiting && Style.reduceMotion ? 1 : 0.25
+      }
+      Rectangle {
+        objectName: "busySegment"
+        width: parent.width / 5
+        height: parent.height
+        x: -width + root.busyProgress * (parent.width + width)
+        visible: root.waiting && !Style.reduceMotion
+        color: Commons.Color.menu.selectedText
+      }
     }
 
     // Whatever a writer last said. These are the refusals -- an id that

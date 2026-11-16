@@ -34,6 +34,8 @@ TestCase {
     property int count: 3
     function rows() { return theRows }
     property bool busy: false
+    property bool inspecting: false
+    property bool checkRunning: false
     property string message: ""
     property int queued: 0
     property string queueError: ""
@@ -51,6 +53,7 @@ TestCase {
     visible: true
     Card { id: card; anchors.fill: parent; model: fakeModel }
   }
+  Component { id: busyCardComponent; Card {} }
 
   function find(item, cls) {
     if (!item) return null
@@ -82,6 +85,9 @@ TestCase {
   function init() {
     fakeModel.tab = 0
     fakeModel.cursor = 0
+    fakeModel.busy = false
+    fakeModel.inspecting = false
+    fakeModel.checkRunning = false
     win.width = 800
     Style.reduceMotion = true
     // Park the pointer off every row and tab so hover does not leak between tests.
@@ -134,7 +140,7 @@ TestCase {
     var out = []
     function walk(it) {
       if (!it) return
-      if (it.hasOwnProperty("text") && /queue|queued/.test(String(it.text))) out.push(String(it.text))
+      if (it.hasOwnProperty("text") && /queue|queued|working/.test(String(it.text))) out.push(String(it.text))
       for (var i = 0; i < it.children.length; i++) walk(it.children[i])
     }
     walk(card)
@@ -265,5 +271,53 @@ TestCase {
     mouseMove(win.contentItem, p.x, p.y)
     verify(Qt.colorEqual(text.color, card.fg))
     compare(fakeModel.tab, 0)
+  }
+
+  function test_busy_rule_moves() {
+    var segment = byName(card, "busySegment")
+    Style.reduceMotion = false
+    for (var field of ["busy", "inspecting", "checkRunning"]) {
+      fakeModel[field] = true
+      verify(segment.visible, field + " shows the segment")
+      verify(card.busyAnimating, field + " starts motion")
+      fakeModel[field] = false
+      verify(!segment.visible, field + " hides the segment")
+      verify(!card.busyAnimating, field + " stops motion")
+    }
+  }
+
+  function test_busy_rule_without_motion() {
+    var segment = byName(card, "busySegment")
+    var base = byName(card, "busyRuleBase")
+    fakeModel.busy = true
+    verify(!segment.visible)
+    verify(!card.busyAnimating)
+    verify(Qt.colorEqual(base.color, Commons.Color.menu.selectedText))
+    compare(base.opacity, 1)
+    verify(footerText().indexOf("working\u2026") >= 0)
+  }
+
+  function test_busy_segment_follows_width() {
+    var segment = byName(card, "busySegment")
+    card.busyProgress = 0.5
+    compare(segment.x, 320)
+    win.width = 400
+    wait(0)
+    compare(segment.x, 160)
+  }
+
+  function test_busy_card_created_busy() {
+    fakeModel.busy = true
+    Style.reduceMotion = false
+    var second = busyCardComponent.createObject(win.contentItem,
+                                                 { width: 800, height: 400, model: fakeModel })
+    verify(second !== null)
+    try {
+      wait(0)
+      compare(byName(second, "busySegment").parent.width, 800)
+      verify(second.busyAnimating)
+    } finally {
+      second.destroy()
+    }
   }
 }
