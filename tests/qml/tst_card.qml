@@ -48,6 +48,8 @@ TestCase {
     property string queueError: ""
     property bool queueTab: false
     property bool indexStale: false
+    property string optionsStatus: ""
+    property bool optionsError: false
     function indexLine(now) { return "index built 14 days ago \u2014 r to rebuild \u2014 nixpkgs and 4 more changed" }
     property bool neverApplied: false
     property bool showingLog: false
@@ -641,6 +643,42 @@ TestCase {
     }
   }
 
+  // #62 + #66: the options status sits between the queue status and the hints.
+  function test_options_status_between_queue_and_hints() {
+    fakeModel.queued = -1
+    fakeModel.queueError = "an earlier write was interrupted (/home/u/.config/nixarchy/apps.nix). To put back what was there before, run: nixarchy-pkg recover."
+    fakeModel.optionsStatus = "options: system manual"
+    try {
+      var st = byName(card, "queueStatus"), os = byName(card, "optionsStatus"), h = byName(card, "hints")
+      verify(st && os && h && os.visible)
+      var right = function (it) { return it.mapToItem(card, it.width, 0).x }
+      var left = function (it) { return it.mapToItem(card, 0, 0).x }
+      verify(right(st) <= left(os), "queue status ends before the options status")
+      verify(right(os) <= left(h), "options status ends before the hints")
+    } finally {
+      fakeModel.queueError = ""; fakeModel.queued = 0; fakeModel.optionsStatus = ""
+    }
+  }
+
+  function test_stale_index_and_options_status_do_not_overlap() {
+    fakeModel.queued = 0
+    fakeModel.indexStale = true
+    fakeModel.optionsStatus = "options: reading your flake\u2026"
+    try {
+      var q = byName(card, "queueStatus"), s = byName(card, "indexAge")
+      var o = byName(card, "optionsStatus"), h = byName(card, "hints")
+      verify(q && s && o && h && s.visible && o.visible)
+      var right = function (it) { return it.mapToItem(card, it.width, 0).x }
+      var left = function (it) { return it.mapToItem(card, 0, 0).x }
+      verify(right(q) <= left(s), "queue ends before stale index")
+      verify(right(s) <= left(o), "stale index ends before options")
+      verify(right(o) <= left(h), "options end before hints")
+    } finally {
+      fakeModel.indexStale = false
+      fakeModel.optionsStatus = ""
+    }
+  }
+
   // #66 + #69: queue status, index age and key hints share one footer line
   // and never overlap, even with a long reason on the left.
   function test_footer_parts_do_not_overlap() {
@@ -656,6 +694,28 @@ TestCase {
       verify(right(ia) <= left(h), "index age ends before the hints")
     } finally {
       fakeModel.queueError = ""; fakeModel.queued = 0; fakeModel.indexStale = false
+    }
+  }
+
+  // #62 + #66 + #69: queue status, index age, options status and hints all
+  // at once, at 800 px, with a long queue reason: none overlaps another.
+  function test_all_four_footer_parts_do_not_overlap() {
+    fakeModel.queued = -1
+    fakeModel.queueError = "an earlier write was interrupted (/home/u/.config/nixarchy/apps.nix). To put back what was there before, run: nixarchy-pkg recover."
+    fakeModel.indexStale = true
+    fakeModel.optionsStatus = "options: reading your flake\u2026"
+    try {
+      var q = byName(card, "queueStatus"), ia = byName(card, "indexAge")
+      var o = byName(card, "optionsStatus"), h = byName(card, "hints")
+      verify(q && ia && o && h && ia.visible && o.visible)
+      var right = function (it) { return it.mapToItem(card, it.width, 0).x }
+      var left = function (it) { return it.mapToItem(card, 0, 0).x }
+      verify(right(q) <= left(ia), "queue ends before the index age")
+      verify(right(ia) <= left(o), "index age ends before the options status")
+      verify(right(o) <= left(h), "options status ends before the hints")
+    } finally {
+      fakeModel.queueError = ""; fakeModel.queued = 0
+      fakeModel.indexStale = false; fakeModel.optionsStatus = ""
     }
   }
 }
