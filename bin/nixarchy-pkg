@@ -413,6 +413,7 @@ cmd_search() {
     esac
   done
 
+  query="${query#"${query%%[![:space:]]*}"}"; query="${query%"${query##*[![:space:]]}"}"
   [ -n "$query" ] || die "usage: nixarchy-pkg search [--kind pkg|opt|app] [--limit N] [--] <query>"
   case "$limit" in ''|*[!0-9]*) die "--limit takes a number, not '$limit'" ;; esac
   case "$kind" in ''|pkg|opt|app) ;; *) die "--kind takes pkg, opt or app, not '$kind'" ;; esac
@@ -424,17 +425,20 @@ cmd_search() {
   jq -n \
     --rawfile rows <(
       awk -F'\t' -v OFS='\t' -v q="$query" -v want="$kind" -v lim="$limit" '
-        BEGIN { lq = tolower(q) }
+        BEGIN { n = split(tolower(q), w, " ") }
         want != "" && $1 != want { next }
         {
-          name = tolower($2)
-          if (name == lq)                    rank = 0
-          else if (index(name, lq) == 1)     rank = 1
-          else if (index(name, lq))          rank = 2
-          else if (index(tolower($3), lq))   rank = 3
-          else next
+          name = tolower($2); sum = tolower($3); best = 9
+          for (i = 1; i <= n; i++) {
+            if      (name == w[i])           r = 0
+            else if (index(name, w[i]) == 1) r = 1
+            else if (index(name, w[i]))      r = 2
+            else if (index(sum, w[i]))       r = 3
+            else next
+            if (r < best) best = r
+          }
           # Shorter names first within a rank: "git" beats "gitAndTools.git-extras"
-          print rank, length($2), $1, $2, $3, $4, $5
+          print best, length($2), $1, $2, $3, $4, $5
         }
       ' "$INDEX" | sort -t"$(printf '\t')" -k1,1n -k2,2n | head -n "$limit" | cut -f3-
     ) \

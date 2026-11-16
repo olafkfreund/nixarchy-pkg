@@ -119,7 +119,7 @@ QtObject {
   // Apps and Services are a finite catalogue, so there the query filters
   // what is already known rather than asking the index -- instant, and it
   // keeps the enabled state that a search row would not carry.
-  readonly property bool searching: query.length > 0
+  readonly property bool searching: query.trim().length > 0
   readonly property bool indexTab: tab === 2 || tab === 3
   readonly property bool flakeTab: tab === 5
   readonly property bool queueTab: tab === 6
@@ -253,11 +253,11 @@ QtObject {
 
   function filtered(list) {
     if (!searching) return list
-    var q = query.toLowerCase()
+    var words = query.trim().toLowerCase().split(/\s+/)
     return list.filter(function (r) {
-      return String(r.id || "").toLowerCase().indexOf(q) >= 0
-          || String(r.label || "").toLowerCase().indexOf(q) >= 0
-          || String(r.category || "").toLowerCase().indexOf(q) >= 0
+      var hay = (String(r.id || "") + " " + String(r.label || "") + " "
+                 + String(r.category || "")).toLowerCase()
+      return words.every(function (w) { return hay.indexOf(w) >= 0 })
     })
   }
 

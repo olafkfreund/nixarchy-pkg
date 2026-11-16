@@ -346,6 +346,17 @@ TestCase {
     m.results = []
   }
 
+  function test_catalogue_search_all_words_and_blank_query() {
+    var rows = [{ id: "alpha", label: "Beta", category: "tools" },
+                { id: "alpha", label: "Gamma", category: "tools" }]
+    m.query = "b a"
+    compare(m.filtered(rows).length, 1)
+    compare(m.filtered(rows)[0].label, "Beta")
+    m.query = "   "
+    compare(m.searching, false)
+    compare(m.filtered(rows).length, 2)
+  }
+
   // #75: whatever shrank the rows, the cursor must still name a row.
   function test_cancel_check_clamps_cursor() {
     m.setTab(6)
