@@ -46,7 +46,9 @@ ESCAPE                     -> Step back out of what you are looking at,
                               before it clears the field
 -- Act ----------------------------
 SPACE                      -> Turn the row under the cursor on or off
-RETURN                     -> Edit an option's value, or add a search result
+RETURN                     -> Edit an option's value, or add a package in system scope
+CTRL + RETURN              -> On Packages search, add in user scope. Disabled
+                              until this host has Home Manager through nixarchy
 SHIFT + RETURN             -> Add a search result from the OTHER channel.
                               It brings its own closure -- the two channels
                               share no store paths, even at the same version.

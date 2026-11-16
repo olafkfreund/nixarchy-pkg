@@ -682,9 +682,9 @@ for attr in novers nolineversion qmark; do
     '.packages[] | select(.attr == $attr) | .flags == [] and (has("version") | not)' <<<"$out"
 done
 check "other vlc has only attr and channel" jq -e \
-  '.packages[] | select(.attr == "vlc") | keys == ["attr", "channel"]' <<<"$out"
+  '.packages[] | select(.attr == "vlc") | keys == ["attr", "channel", "scope"]' <<<"$out"
 check "missing package has only attr and channel" jq -e \
-  '.packages[] | select(.attr == "nosuchpkg") | keys == ["attr", "channel"]' <<<"$out"
+  '.packages[] | select(.attr == "nosuchpkg") | keys == ["attr", "channel", "scope"]' <<<"$out"
 check "package order and attr channel survive" jq -e \
   '.packages | map([.attr, .channel]) == [["ripgrep","default"],["foo","default"],["novers","default"],["nolineversion","default"],["qmark","default"],["nosummary","default"],["vlc","other"],["nerd-fonts.blex-mono","default"],["nosuchpkg","default"]]' <<<"$out"
 check "Apps and Services still take labels from the index" jq -e \
@@ -700,18 +700,18 @@ out=$(selection_state)
 check "dual-selected default vlc gets its version" jq -e \
   '.packages[] | select(.attr == "vlc" and .channel == "default") | .version == "3.0"' <<<"$out"
 check "dual-selected other vlc stays bare" jq -e \
-  '.packages[] | select(.attr == "vlc" and .channel == "other") | keys == ["attr", "channel"]' <<<"$out"
+  '.packages[] | select(.attr == "vlc" and .channel == "other") | keys == ["attr", "channel", "scope"]' <<<"$out"
 cp "$S/apps.base" "$S/config/nixarchy/apps.nix"
 
 printf '%s\n' stale >"$S/cache/nixarchy/stamp"
 out=$(selection_state)
 check "stale index leaves every package bare" jq -e \
-  '.indexStale == true and (.packages | all(keys == ["attr", "channel"]))' <<<"$out"
+  '.indexStale == true and (.packages | all(keys == ["attr", "channel", "scope"]))' <<<"$out"
 sed -n 's/^[^=]*=//p' "$S/bin/nixarchy-search" >"$S/cache/nixarchy/stamp"
 mv "$S/cache/nixarchy/index.tsv" "$S/index.saved"
 out=$(selection_state)
 check "missing index leaves every package bare" jq -e \
-  '.ok == true and (.packages | all(keys == ["attr", "channel"]))' <<<"$out"
+  '.ok == true and (.packages | all(keys == ["attr", "channel", "scope"]))' <<<"$out"
 mv "$S/index.saved" "$S/cache/nixarchy/index.tsv"
 
 if [ "$(id -u)" = 0 ]; then
@@ -1158,7 +1158,7 @@ check 'duplicate markers stay separate by file and occurrence' jq -e '
 q_reset
 sed -i 's/x = true/x = false/' "$Q/config/nixarchy/apps.nix"
 q_answer marked
-check 'changed marked value is paired and located' jq -e '.changes == [{marker:":x",file:"apps",line:"x = false; #@ x",change:"modified",lineNo:2}] and .files[0].explained' <<<"$QOUT"
+check 'changed marked value is paired and located' jq -e '.changes == [{marker:":x",file:"apps",line:"x = false; #@ x",change:"modified",scope:"system",lineNo:2}] and .files[0].explained' <<<"$QOUT"
 
 q_reset
 sed -i '2i\  dup = true; #@ dup' "$Q/flake/nixarchy/apps.nix"
@@ -1230,7 +1230,7 @@ check 'pins hash present sources and leave absent source empty' jq -e \
   --arg apps "$(sha256sum <"$Q/config/nixarchy/apps.nix" | cut -d' ' -f1)" \
   --arg advanced "$(sha256sum <"$Q/config/nixarchy/advanced.nix" | cut -d' ' -f1)" \
   --arg flatsnap "$(sha256sum <"$Q/config/nixarchy/flatsnap.nix" | cut -d' ' -f1)" \
-  '.pins == {apps:$apps,services:"",advanced:$advanced,flatsnap:$flatsnap} and .sources.services == null' <<<"$QOUT"
+  '.pins == {apps:$apps,services:"",advanced:$advanced,flatsnap:$flatsnap,home:""} and .sources.services == null' <<<"$QOUT"
 
 q_reset
 printf 'draft\n' >"$Q/config/nixarchy/packages/foo.nix"
@@ -2493,13 +2493,18 @@ check "no sed -i"                          not edits_in_place
 echo "options discovered from the flake (#62)"
 # A stub nix that prints a canned `out.json`, so no real flake is ever
 # evaluated: NIXARCHY_FLAKE points at a throwaway directory, never /etc/nixos.
-O62=$(mktemp -d); mkdir -p "$O62/bin" "$O62/fl" "$O62/fl2" "$O62/cache" "$O62/state"
+O62=$(mktemp -d -p "$XDG_STATE_HOME"); mkdir -p "$O62/bin" "$O62/fl" "$O62/fl2" "$O62/cache" "$O62/state"
 touch "$O62/fl/flake.nix" "$O62/fl2/flake.nix"
 echo lock-one >"$O62/fl/flake.lock"; echo lock-one >"$O62/fl2/flake.lock"
 cat >"$O62/bin/nix" <<'NEOF'
 #!/usr/bin/env bash
 echo run >>"$O62/nix.calls"
 case "${NIX_MODE-ok}" in
+  capture)
+    for arg in "$@"; do
+      case "$arg" in path:*) cp "${arg#path:}/nixarchy-apps.nix" "$O62/generated.nix"; break ;; esac
+    done
+    exit 1 ;;
   change-lock) echo lock-during-eval >"$O62/fl/flake.lock" ;;
   fail)  echo "error: attribute 'x' missing" >&2; exit 1 ;;
   nohost) echo "error: flake does not provide attribute 'nixosConfigurations.\"h\"'" >&2; exit 1 ;;
@@ -2547,8 +2552,9 @@ echo lock-one >"$O62/fl/flake.lock"
 opt62 options refresh >/dev/null
 check "describe reads the cached system.json" \
   jq -e '.ok and .source == "flake" and .scope == "system" and .default == "false"' <<<"$(opt62 opt describe programs.git.enable)"
-check "describe --scope user reads user.json" \
-  jq -e '.ok and .scope == "user" and .path == "programs.hm.enable"' <<<"$(opt62 opt describe --scope user programs.hm.enable)"
+check "user describe refuses while nixarchy C is absent" \
+  jq -e '.ok == false and (.error | contains("no Home Manager part"))' <<<"$(opt62 opt describe --scope user programs.hm.enable)"
+check "search hides user options while C is absent" jq -e '.userScope.available == false and (.rows | length == 0)' <<<"$(opt62 search hm --kind opt)"
 
 # A changed lock makes the cache stale, not unusable.
 echo lock-two >"$O62/fl/flake.lock"
@@ -2574,8 +2580,18 @@ out=$(NIX_MODE=nohost opt62 options refresh)
 check "a flake without the host is named" jq -e '.ok == false and (.error | contains("nixosConfigurations"))' <<<"$out"
 mkdir -p "$O62/fl3"; touch "$O62/fl3/flake.nix"
 FLAKE62=$O62/fl3 NIX_MODE=nohm opt62 options refresh >/dev/null
+# The installed apply supports home here, so describe must reach meta.json.
+cat >"$O62/bin/nixarchy-apply" <<'EOF'
+#!/bin/sh
+for part in apps services advanced flatsnap home; do :; done
+EOF
+chmod +x "$O62/bin/nixarchy-apply"
+cache62=$(readlink -f "$OC/options")
+jq --arg u "$(id -un)" '.homeManager = true | .users = [$u]' "$cache62/meta.json" >"$O62/meta.json"
+mv "$O62/meta.json" "$cache62/meta.json"
+check "the user cache has no user.json" test ! -e "$cache62/user.json"
 check "describe --scope user with no user.json refuses, saying why" \
-  jq -e '.ok == false and (.error | contains("no Home Manager"))' <<<"$(FLAKE62=$O62/fl3 opt62 opt describe --scope user programs.git.enable)"
+  jq -e '.ok == false and (.error | contains("no Home Manager options for")) and (.error | contains("no Home Manager options were read for"))' <<<"$(FLAKE62=$O62/fl3 opt62 opt describe --scope user programs.git.enable)"
 check "and still describes the system scope from that cache" \
   jq -e '.ok and .source == "flake"' <<<"$(FLAKE62=$O62/fl3 opt62 opt describe programs.git.enable)"
 
@@ -2622,6 +2638,172 @@ linked_old=$(readlink -f "$O62/linked-cache/nixarchy/options")
 sleep 1
 CACHE62=$O62/linked-cache opt62 options refresh >/dev/null
 check "symlinked cache home keeps the replaced generation" test -d "$linked_old"
+printf '{"nodes":{}}\n' >"$O62/fl/flake.lock"
+
+echo "user scope (#62)"
+# nixarchy C is absent on this host and in CI. All writer-backed cases below
+# use fixture selection files and stub writers; no real writer receives --home.
+mkdir -p "$O62/config/nixarchy" "$O62/flake/nixarchy"
+cat >"$O62/config/nixarchy/apps.nix" <<'EOF'
+{ pkgs, ... }: {
+  environment.systemPackages = with pkgs; [ #@pkgs-begin
+  ]; #@pkgs-end
+}
+EOF
+cat >"$O62/config/nixarchy/home.nix" <<'EOF'
+{ pkgs, ... }:
+{
+  home.packages = with pkgs; [  #@pkgs-begin
+  ];  #@pkgs-end
+}
+EOF
+cat >"$O62/bin/nixarchy-apply" <<'EOF'
+#!/usr/bin/env bash
+for part in apps services advanced flatsnap home; do :; done
+for arg in "$@"; do printf '%s\n' "$arg" >>"$O62/apply.args"; done
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = --expect-sha256 ] && [[ $arg == home=* ]]; then
+    got=$(sha256sum <"$XDG_CONFIG_HOME/nixarchy/home.nix"); got=${got%% *}
+    [ "${arg#home=}" = "$got" ] || { echo 'home is not what you checked'; exit 1; }
+  fi
+  prev=$arg
+done
+EOF
+cat >"$O62/bin/nixarchy-pkg-add" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = --home ] || { echo 'expected --home' >&2; exit 1; }
+shift
+file=$XDG_CONFIG_HOME/nixarchy/home.nix
+for attr in "$@"; do sed -i "/#@pkgs-end/i\\    $attr  #@pkg $attr" "$file"; done
+EOF
+cat >"$O62/bin/nixarchy-pkg-remove" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = --home ] || { echo 'expected --home' >&2; exit 1; }
+shift
+sed -i "/#@pkg $1$/d" "$XDG_CONFIG_HOME/nixarchy/home.nix"
+EOF
+cat >"$O62/bin/nixarchy-opt-remove" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = --home ] || { echo 'expected --home' >&2; exit 1; }
+shift
+sed -i "/#@opt $1$/d" "$XDG_CONFIG_HOME/nixarchy/home.nix"
+EOF
+chmod +x "$O62/bin/nixarchy-apply" "$O62/bin/nixarchy-pkg-add" "$O62/bin/nixarchy-pkg-remove" "$O62/bin/nixarchy-opt-remove"
+scope62() { env PATH="$O62/bin:$FIXSTUB:$PATH" XDG_CONFIG_HOME="$O62/config" XDG_STATE_HOME="$O62/state" \
+  XDG_CACHE_HOME="$O62/cache" NIXARCHY_FLAKE="$O62/fl" "$ADAPTER" "$@"; }
+opt62 options refresh >/dev/null
+# A selection file alone must not enable a part missing from installed apply.
+cp "$O62/bin/nixarchy-apply" "$O62/apply-with-home"
+sed -i 's/ flatsnap home;/ flatsnap;/' "$O62/bin/nixarchy-apply"
+check "pending omits home without the installed apply part" jq -e '.files | all(.file != "home")' <<<"$(scope62 pending)"
+NIX_MODE=capture scope62 check >/dev/null
+check "check omits the home import without the installed apply part" not grep -q 'home-manager.users\|home.nix' "$O62/generated.nix"
+cp "$O62/apply-with-home" "$O62/bin/nixarchy-apply"
+check "pending includes home with the installed apply part" jq -e '.files | any(.file == "home")' <<<"$(scope62 pending)"
+NIX_MODE=capture scope62 check >/dev/null
+check "check includes the home import with the installed apply part" grep -q 'home-manager.users.*home.nix' "$O62/generated.nix"
+jq '. + {"programs.git.enable": {type:"boolean",description:"",default:null,example:null,declarations:[],readOnly:false}}' \
+  "$OC/options/user.json" >"$O62/user.tmp"; mv "$O62/user.tmp" "$OC/options/user.json"
+printf 'opt\tprograms.git.enable\thm git\tboolean\tpreview\tuser\n' >>"$OC/options/rows.tsv"
+check "state says user scope is available only with C" jq -e '.userScope.available and .userScope.reason == ""' <<<"$(scope62 state)"
+check "search shows user options when C is available" jq -e '.userScope.available and (.rows | any(.name == "programs.hm.enable" and .scope == "user"))' <<<"$(scope62 search hm --kind opt)"
+out=$(scope62 pkg add --scope user git)
+check "stub package writer receives --home" jq -e '.ok and (.packages | any(.attr == "git" and .scope == "user"))' <<<"$out"
+scope62 pkg add --scope user jq >/dev/null
+check "two adds keep one home.packages block" test "$(grep -c 'home.packages =' "$O62/config/nixarchy/home.nix")" = 1
+check "fixture home template parses" nix-instantiate --parse "$O62/config/nixarchy/home.nix"
+scope62 pkg remove --scope user jq >/dev/null
+check "stub package remover receives --home" not grep -q '#@pkg jq$' "$O62/config/nixarchy/home.nix"
+check "system and user packages can share a name" jq -e '.packages | map(select(.attr == "git")) | length == 2' \
+  <<<"$(sed -i '/#@pkgs-end/i\    git  #@pkg git' "$O62/config/nixarchy/apps.nix"; scope62 state)"
+printf 'pkg\tgit\tGit package\tunfree\tpreview\\nversion:  9.1\n' >>"$OC/index.tsv"
+printf '\n\n%s\n\n\n\n\n' "$HERE/tests/fixtures/options.json" >"$OC/stamp"
+scope62 pkg add --scope user jq >/dev/null
+check "user-only default package gets index facts" jq -e '.packages | any(.attr == "jq" and .scope == "user" and .summary == "JQ package" and .version == "1.2" and (.flags | index("unfree")))' \
+  <<<"$(printf 'pkg\tjq\tJQ package\tunfree\tpreview\\nversion:  1.2\n' >>"$OC/index.tsv"; scope62 state)"
+scope62 pkg remove --scope user git >/dev/null
+check "user removal leaves system package" jq -e '.packages | any(.attr == "git" and .scope == "system")' <<<"$(scope62 state)"
+
+out=$(scope62 opt set --scope user programs.git.enable true)
+check "user option set writes home only" jq -e '.ok and (.options | any(.path == "programs.git.enable" and .scope == "user"))' <<<"$out"
+scope62 opt set --scope system programs.git.enable false >/dev/null
+check "same option path exists in both scopes" jq -e '.options | map(select(.path == "programs.git.enable")) | length == 2' <<<"$(scope62 state)"
+check "search keeps each scope's current option value" jq -e '.rows | map(select(.name == "programs.git.enable")) | length == 2 and any(.scope == "user" and .set == true and .current == "true") and any(.scope == "system" and .set == true and .current == "false")' \
+  <<<"$(scope62 search programs.git.enable --kind opt)"
+check "user describe reads home value" jq -e '.scope == "user" and .current.value == "true"' <<<"$(scope62 opt describe --scope user programs.git.enable)"
+scope62 opt replace --scope user programs.git.enable false >/dev/null
+check "user replace leaves system value" grep -q 'programs.git.enable = false;.*#@opt programs.git.enable' "$O62/config/nixarchy/apps.nix"
+scope62 opt remove --scope user programs.git.enable >/dev/null
+check "stub option remover leaves system marker" grep -q '#@opt programs.git.enable$' "$O62/config/nixarchy/apps.nix"
+scope62 opt set --scope user programs.hm.enable true >/dev/null
+printf '  #@draft home-only\n' >>"$O62/config/nixarchy/home.nix"
+check "home draft has user scope" jq -e '.drafts | any(.name == "home-only" and .scope == "user")' <<<"$(scope62 state)"
+# shellcheck disable=SC2016 # jq variable is passed through --arg.
+check "state.files lists home.nix" jq -e --arg p "$O62/config/nixarchy/home.nix" '.files.home == $p' <<<"$(scope62 state)"
+check "state scopes every selection row" jq -e '([.apps[], .services[], .packages[], .options[], .drafts[]] | all(.scope == "system" or .scope == "user"))' <<<"$(scope62 state)"
+check "pending pins include home" jq -e '.pins.home | length == 64' <<<"$(scope62 pending)"
+check "pending home rows carry user scope" jq -e '(.changes | any(.file == "home" and .scope == "user")) and (.files | any(.file == "home" and .scope == "user"))' <<<"$(scope62 pending)"
+NIX_MODE=capture scope62 check >/dev/null
+sed "s/@USER@/$(id -un)/" "$HERE/tests/fixtures/nixarchy-apps-home.nix" >"$O62/expected.nix"
+check "check generates the C import form" cmp -s "$O62/expected.nix" "$O62/generated.nix"
+pin=$(sha256sum <"$O62/config/nixarchy/home.nix"); pin=${pin%% *}
+out=$(scope62 apply --pin "home=$pin")
+check "home pin accepted and forwarded" jq -e '.nixarchyPkgApply.ok' <<<"$out"
+printf '\n' >>"$O62/config/nixarchy/home.nix"
+out=$(scope62 apply --pin "home=$pin")
+check "changed home pin refuses before copying" jq -e '.nixarchyPkgApply.ok == false and (.nixarchyPkgApply.message | contains("changed"))' <<<"${out##*$'\n'}"
+
+# The generated import is evaluated by check, using a small module system
+# fixture and the local nixpkgs store path. No nixarchy writer is involved.
+mkdir -p "$O62/check-config/nixarchy" "$O62/check-flake"
+printf '{ ... }: { }\n' >"$O62/check-config/nixarchy/apps.nix"
+printf '{ ... }: { demo.flag = true; demo.list = [ "b" ]; }\n' >"$O62/check-config/nixarchy/home.nix"
+printf '{ ... }: { demo.flag = true; demo.list = [ "a" ]; }\n' >"$O62/check-flake/handwritten.nix"
+# Needs a working nix with a nixpkgs registry; the flake-check sandbox has neither.
+if np62=$(nix eval --raw nixpkgs#path 2>/dev/null) && [ -n "$np62" ]; then
+host62=$(uname -n); user62=$(id -un)
+mkdir -p "$O62/apply-only"
+cp "$O62/bin/nixarchy-apply" "$O62/apply-only/nixarchy-apply"
+cat >"$O62/check-flake/flake.nix" <<EOF
+{ inputs.nixpkgs.url = "path:$np62"; outputs = { self, nixpkgs }: let
+  lib = nixpkgs.lib;
+  selection = lib.evalModules { modules = [
+    { options.home-manager.users = lib.mkOption { type = lib.types.attrsOf (lib.types.submodule {
+      options.imports = lib.mkOption { type = lib.types.listOf lib.types.path; default = []; };
+    }); }; }
+    ./nixarchy-apps.nix
+  ]; };
+  evaluated = lib.evalModules { modules = [
+    { options.demo.flag = lib.mkOption { type = lib.types.bool; };
+      options.demo.list = lib.mkOption { type = lib.types.listOf lib.types.str; }; }
+    (builtins.head selection.config.home-manager.users."$user62".imports)
+    ./handwritten.nix
+  ]; };
+in { nixosConfigurations."$host62".config.system.build.toplevel.drvPath =
+  if evaluated.config.demo.flag then toString (builtins.length evaluated.config.demo.list) else "0";
+}; }
+EOF
+check62() { env PATH="$O62/apply-only:$PATH" XDG_CONFIG_HOME="$O62/check-config" XDG_STATE_HOME="$O62/state" \
+  XDG_CACHE_HOME="$O62/cache" NIXARCHY_FLAKE="$O62/check-flake" "$ADAPTER" check; }
+out=$(check62)
+check "check evaluates merged list definitions" jq -e '.verdict == "evaluates"' <<<"$out"
+printf '{ ... }: { demo.flag = false; demo.list = [ "a" ]; }\n' >"$O62/check-flake/handwritten.nix"
+out=$(check62)
+check "check reports a boolean conflict" jq -e '.verdict == "fails" and (.error | contains("conflicting definition values"))' <<<"$out"
+else
+  echo "  skip  check evaluation fixtures (no usable nix here)"
+fi
+
+# Each capability refusal has its own sentence and occurs before begin_write.
+mv "$O62/bin/nixarchy-apply" "$O62/bin/nixarchy-apply.saved"
+check "missing C refuses before a transaction" jq -e '.ok == false and (.error | contains("no Home Manager part"))' <<<"$(scope62 opt set --scope user p.q true)"
+check "missing C leaves no transaction" test ! -e "$O62/state/nixarchy/pkg-recovery/open"
+mv "$O62/bin/nixarchy-apply.saved" "$O62/bin/nixarchy-apply"
+jq '.homeManager = false' "$OC/options/meta.json" >"$O62/meta.tmp"; mv "$O62/meta.tmp" "$OC/options/meta.json"
+check "missing Home Manager module has its own refusal" jq -e '.ok == false and (.error | contains("no Home Manager"))' <<<"$(scope62 opt set --scope user p.q true)"
+jq '.homeManager = true | .users = []' "$OC/options/meta.json" >"$O62/meta.tmp"; mv "$O62/meta.tmp" "$OC/options/meta.json"
+check "user absent from home-manager.users has its own refusal" jq -e '.ok == false and (.error | contains("not in home-manager.users"))' <<<"$(scope62 opt set --scope user p.q true)"
 rm -rf "$O62"
 
 echo "failure is a value, not an exit code"

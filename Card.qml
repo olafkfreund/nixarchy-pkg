@@ -44,6 +44,7 @@ Item {
   // Queue rows say how much they matter: a conflict or a failed check is
   // urgent, other check results stand out, notes recede.
   function rowColor(row) {
+    if (row.scope === "user" && model && !model.userScope.available) return dim
     if (row.kind === "declared" && row.mine === false) return dim
     if (!model || !model.queueTab) return fg
     if (row.kind === "conflict" || (row.kind === "check" && row.verdict === "fails"))
@@ -57,6 +58,7 @@ Item {
   // Only Selection rows carry a channel, so no other tab's rows change (#71).
   function tagsOf(row) {
     return (row.flags || []).concat(row.channel ? [row.channel] : [])
+      .concat(row.scope === "user" ? ["user"] : [])
   }
 
   // The row under the cursor, and what the pane beside the list says about
@@ -67,6 +69,8 @@ Item {
   readonly property string previewText: {
     const r = currentRow
     if (!r) return ""
+    if (r.scope === "user" && root.model && !root.model.userScope.available)
+      return root.model.userScope.reason
     if (typeof r.preview === "string")
       return r.preview.split("\n")
               .filter(l => !l.trim().startsWith("ctrl-")).join("\n")
