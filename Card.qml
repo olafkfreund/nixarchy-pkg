@@ -44,6 +44,7 @@ Item {
   // Queue rows say how much they matter: a conflict or a failed check is
   // urgent, other check results stand out, notes recede.
   function rowColor(row) {
+    if (row.kind === "declared" && row.mine === false) return dim
     if (!model || !model.queueTab) return fg
     if (row.kind === "conflict" || (row.kind === "check" && row.verdict === "fails"))
       return Commons.Color.urgent
@@ -295,6 +296,7 @@ Item {
           // read" is a different and misleading statement -- so it takes
           // the width it needs.
           width: modelData.kind !== undefined
+                 && !(modelData.kind === "declared" && modelData.mine === false)
                  ? Math.min(implicitWidth, parent.width)
                  : Math.min(implicitWidth, parent.width * 0.42)
           elide: Text.ElideRight
@@ -366,7 +368,9 @@ Item {
                              - Style.space(10) * ((flags.visible ? 3 : 2)
                                                   + (icon.visible ? 1 : 0)))
           elide: Text.ElideRight
-          text: modelData.summary || modelData.note || modelData.type || ""
+          text: (modelData.kind === "declared" && modelData.mine === false
+                 ? "(not written by this tool)" : "")
+                || modelData.summary || modelData.note || modelData.type || ""
           textFormat: Text.PlainText
           font.family: root.fontFamily
           font.pixelSize: Style.font.title
