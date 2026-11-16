@@ -34,6 +34,7 @@ FocusScope {
   property bool nullSelected: false
   property string packageAttr: ""
   property string packageQuery: ""
+  property bool packageSearchAgain: false
   property var packageResults: []
   property int packageIndex: 0
 
@@ -164,6 +165,12 @@ FocusScope {
         }
       }
     }
+    onRunningChanged: {
+      if (!running && root.open && root.packageSearchAgain) {
+        root.packageSearchAgain = false
+        packageDebounce.restart()
+      }
+    }
   }
 
   Timer {
@@ -171,7 +178,7 @@ FocusScope {
     interval: 300
     onTriggered: {
       if (!root.open || root.widget !== "package" || !packageField.text.trim()) return
-      packageSearch.running = false
+      if (packageSearch.running) { root.packageSearchAgain = true; return }
       root.packageQuery = packageField.text
       packageSearch.command = [root.model.script, "search", "--kind", "pkg", "--limit", "20", "--", packageField.text]
       packageSearch.running = true
@@ -211,6 +218,7 @@ FocusScope {
     scaffoldField.focus = false
     packageField.focus = false
     packageDebounce.stop()
+    root.packageSearchAgain = false
     packageSearch.running = false
     root.focus = false
     root.closed()
@@ -224,6 +232,8 @@ FocusScope {
     packageAttr = ""
     packageResults = []
     packageIndex = 0
+    packageSearchAgain = false
+    packageQuery = ""
     packageField.text = ""
     boolValue = option.default === "true"
     integerField.text = /^-?(0|[1-9][0-9]*)$/.test(String(option.default || "")) ? String(option.default) : ""
@@ -288,11 +298,13 @@ FocusScope {
       if (v === "null" && option.nullable === true) { nullSelected = true; held = true }
       if (!held) { forceScaffold = true; scaffoldField.text = v }
     } else if (option.widget === "integer" && option.default &&
+               !(option.nullable === true && option.default === "null") &&
                !/^-?(0|[1-9][0-9]*)$/.test(String(option.default))) {
       forceScaffold = true
     }
     if (current.state !== "set") nullSelected = option.nullable === true && option.default === "null"
     touched = false
+    packageDebounce.stop()
     // Whatever they are about to type into, focused -- otherwise the
     // keystrokes fall through to the surface behind and land in its
     // search box, which is exactly what happened the first time this
@@ -351,6 +363,10 @@ FocusScope {
     return body.slice(end).trim() ? null : out
   }
 
+  function listLines() {
+    return scaffoldField.text.split("\n").filter(function (line) { return line.trim().length > 0 })
+  }
+
   // The widget's value as Nix source. Empty means "write nothing", which
   // the adapter understands and reports as keeping the default.
   function nixValue() {
@@ -369,7 +385,7 @@ FocusScope {
       case "list":
         if (scaffoldField.text.trim() === "[ ]") return "[ ]"
         if (!scaffoldField.text.length) return ""
-        var lines = scaffoldField.text.split("\n")
+        var lines = listLines()
         return "[ " + lines.map(function (line) {
           return option.item === "integer" ? line.trim() : quoteString(line)
         }).join(" ") + " ]"
@@ -417,8 +433,8 @@ FocusScope {
       root.error = path + " takes " + option.min + " to " + option.max + "; " + value + " is outside that. Nothing was changed."
       return
     }
-    if (widget === "list" && option.item === "integer" && value !== "[ ]") {
-      var numbers = scaffoldField.text.split("\n")
+    if (value !== "null" && widget === "list" && option.item === "integer" && value !== "[ ]") {
+      var numbers = listLines()
       for (var i = 0; i < numbers.length; i++) {
         var n = numbers[i].trim()
         if (!/^-?(0|[1-9][0-9]*)$/.test(n)) {
@@ -432,8 +448,8 @@ FocusScope {
         }
       }
     }
-    if (option.constraint && (widget === "string" || widget === "list")) {
-      var values = widget === "list" ? (value === "[ ]" ? [] : scaffoldField.text.split("\n"))
+    if (value !== "null" && option.constraint && (widget === "string" || widget === "list")) {
+      var values = widget === "list" ? (value === "[ ]" ? [] : listLines())
         : [option.multiline === true ? scaffoldField.text : textField.text]
       for (var j = 0; j < values.length; j++) {
         var s = values[j]
@@ -531,6 +547,9 @@ FocusScope {
     if (!root.open) return
     if (root.removeKey(event)) return
     root.disarmRemove()
+    if (root.option.nullable === true && event.key === Qt.Key_N && (event.modifiers & Qt.ControlModifier)) {
+      root.nullSelected = !root.nullSelected; root.touched = true; event.accepted = true; return
+    }
     switch (event.key) {
       case Qt.Key_Escape:
         root.finish(); event.accepted = true; return
@@ -762,16 +781,18 @@ FocusScope {
         }
         Keys.onPressed: function (event) {
           if (event.key === Qt.Key_Escape) { root.finish(); event.accepted = true; return }
-          if (root.packageResults.length && (event.key === Qt.Key_Down || event.key === Qt.Key_J)) {
+          if (root.packageResults.length && (event.key === Qt.Key_Down ||
+              (event.key === Qt.Key_J && (event.modifiers & Qt.ControlModifier)))) {
             root.packageIndex = (root.packageIndex + 1) % root.packageResults.length
             event.accepted = true; return
           }
-          if (root.packageResults.length && (event.key === Qt.Key_Up || event.key === Qt.Key_K)) {
+          if (root.packageResults.length && (event.key === Qt.Key_Up ||
+              (event.key === Qt.Key_K && (event.modifiers & Qt.ControlModifier)))) {
             root.packageIndex = (root.packageIndex + root.packageResults.length - 1) % root.packageResults.length
             event.accepted = true; return
           }
           if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-            if (root.packageResults.length) {
+            if (root.touched && root.packageResults.length) {
               text = root.packageResults[root.packageIndex].name
               root.packageAttr = text
             }
@@ -807,7 +828,7 @@ FocusScope {
         Text {
           width: parent.width
           text: root.widget === "list" ? "One item per line; use [ ] for an empty list."
-            : root.option.multiline === true ? "Write the string on several lines."
+            : root.widget === "string" && root.option.multiline === true ? "Write the string on several lines."
             : "This type has no one-word answer, so here is its own example to edit."
           textFormat: Text.PlainText
           wrapMode: Text.Wrap
@@ -895,6 +916,7 @@ FocusScope {
             : root.widget === "scaffold"
               ? "CTRL+RETURN writes   ESC cancels   \u2014 RETURN is a newline, empty keeps the " + (root.current.state === "set" ? "current value" : "default")
               : "RETURN writes   ESC cancels   \u2014 empty keeps the " + (root.current.state === "set" ? "current value" : "default"))
+              + (root.option.nullable === true ? "   CTRL+N toggles null" : "")
               + (root.current.state === "set" ? "   DEL removes" : "")
         textFormat: Text.PlainText
         font.family: root.fontFamily

@@ -42,20 +42,20 @@ with a label — an actual widget, when the type admits one.
 | enum | The alternatives, `j`/`k` to choose |
 | integer | A number field, with declared bounds checked before writing |
 | string / path | A text field |
-| `strings concatenated with "\\n"` | A multi-line field that writes one escaped Nix string |
+| `strings concatenated with "\n"` | A multi-line field that writes one escaped Nix string |
 | list of strings or integers | One item per line; `[ ]` writes an empty list |
 | package | A package search field, when `apps.nix` takes `pkgs` |
-| `null or` one of these types | The widget plus a `null` choice |
+| `null or` one of these types | The widget plus a `null` choice; `CTRL+N` toggles it |
 | anything else | See below |
 
 The type, the documentation and the default are all shown. `RETURN` writes,
 `ESCAPE` cancels.
 
-String lists keep each line as one item, including a line such as
+String lists keep each nonblank line as one item, including a line such as
 `console=ttyS0,115200n8`. Integer lists check each item's declared bounds.
 The multi-line string field writes newline escapes inside one Nix string.
 For the multi-line editors, `RETURN` adds a line and `CTRL+RETURN` writes.
-Package suggestions come from the package index; `j`/`k` moves through them
+Package suggestions come from the package index; `UP`/`DOWN` moves through them
 and `RETURN` chooses the selected package as `pkgs.<attr>`.
 
 The form checks `non-empty string`, `absolute path`, and `string, not
