@@ -6,6 +6,7 @@ import QtTest
 TestCase {
   name: "OptionForm"
   when: windowShown
+  visible: true
 
   QtObject {
     id: fakeModel
@@ -92,6 +93,28 @@ TestCase {
     verify(shown.indexOf("Note:") >= 0)
     verify(shown.indexOf("Warning:") >= 0)
     verify(shown.indexOf(":::") < 0)
+  }
+
+  function test_sensitive_warning_does_not_block_write() {
+    form.begin({ path: "t.password" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.password", widget: "string",
+      sensitive: true, fileOption: "t.passwordFile", current: { state: "absent" } }))
+    var warning = findChild(form, "secretWarning")
+    verify(warning !== null)
+    verify(warning.visible)
+    verify(warning.text.indexOf("copied into the Nix store") >= 0)
+    verify(warning.text.indexOf("t.passwordFile") >= 0)
+    compare(warning.textFormat, Text.PlainText)
+    var field = findChild(form, "textField")
+    tryCompare(field, "activeFocus", true)
+    field.text = "example"
+    keyClick(Qt.Key_Return)
+    compare(writeProcess().command.slice(1, 4).join(" "), "opt set t.password")
+    writeProcess().deliver(JSON.stringify({ ok: true }))
+    form.begin({ path: "t.bool" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.bool", widget: "boolean",
+      sensitive: false, fileOption: null, current: { state: "absent" } }))
+    verify(!warning.visible)
   }
 
   function test_admonition_forms_become_labels() {

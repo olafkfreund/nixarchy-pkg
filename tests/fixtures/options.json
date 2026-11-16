@@ -89,6 +89,27 @@
     ],
     "default": ""
   },
+  "t.password": {
+    "type": "string",
+    "description": "Test option t.password.",
+    "readOnly": false,
+    "declarations": ["tests/fixtures/options.json"],
+    "default": null
+  },
+  "t.passwordFile": {
+    "type": "null or string",
+    "description": "Test option t.passwordFile.",
+    "readOnly": false,
+    "declarations": ["tests/fixtures/options.json"],
+    "default": null
+  },
+  "t.token": {
+    "type": "string",
+    "description": "Test option t.token.",
+    "readOnly": false,
+    "declarations": ["tests/fixtures/options.json"],
+    "default": null
+  },
   "t.nonEmpty": {
     "type": "non-empty string",
     "description": "Test option t.nonEmpty.",

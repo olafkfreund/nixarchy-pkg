@@ -787,7 +787,7 @@ opt_meta() {
         elif $t | startswith("unsigned integer") then ["0", "9223372036854775807"]
         elif $t | startswith("signed integer") then ["-9223372036854775808", "9223372036854775807"]
         else [null, null] end;
-    .[$p] as $o
+    . as $all | .[$p] as $o
     | if $o == null then null else
         ($o.type // "") as $t
         | ($t | test("^one of (?:" + alt + ")(?:, (?:" + alt + "))*$")) as $listed
@@ -808,7 +808,9 @@ opt_meta() {
             nullable: ($t | startswith("null or ")),
             min: $b[0], max: $b[1],
             choices: (if $listed then [ $t | ltrimstr("one of ") | scan(alt) ] else [] end),
-            choicesUnavailable: (($t | startswith("one of ")) and ($listed | not))
+            choicesUnavailable: (($t | startswith("one of ")) and ($listed | not)),
+            sensitive: (($p | split(".") | last) | test("(?i)(password|passwd|secret|token|apikey|privatekey|presharedkey|psk)$")) and ($t | test("string")),
+            fileOption: (($p | sub("(?<l>[^.]+)$"; "\(.l)File")) as $f | if $all[$f] != null then $f else null end)
           }
       end' "$oj" 2>/dev/null || printf 'null\n'
 }
