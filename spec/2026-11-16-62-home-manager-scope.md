@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 62
 intent: intent/2026-11-16-62-home-manager-scope.md
 ---
