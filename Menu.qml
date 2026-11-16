@@ -228,10 +228,7 @@ Item {
               && event.key !== Qt.Key_Alt && event.key !== Qt.Key_Meta
               && event.key !== Qt.Key_Super_L && event.key !== Qt.Key_Super_R)
             pkg.disarm()
-          if (pkg.armedFlake !== "" && event.key !== Qt.Key_Space && event.key !== Qt.Key_U
-              && event.key !== Qt.Key_Shift && event.key !== Qt.Key_Control
-              && event.key !== Qt.Key_Alt && event.key !== Qt.Key_Meta
-              && event.key !== Qt.Key_Super_L && event.key !== Qt.Key_Super_R)
+          if (pkg.keyCancelsFlakeArm(event.key))
             pkg.disarm()
 
           // Naming an input: RETURN declares with the name in the field,
@@ -298,7 +295,9 @@ Item {
               // Space toggles only where a row has two states; in a search
               // field it is a space, so the field handles it first.
               if (!search.activeFocus) {
-                if (pkg.flakeTab) { if (!event.isAutoRepeat) pkg.armFlake("remove") }
+                if (pkg.flakeTab && pkg.rowAt(pkg.cursor) && pkg.rowAt(pkg.cursor).kind === "declared") {
+                  if (!event.isAutoRepeat) pkg.armFlake("remove")
+                }
                 else pkg.activate()
                 event.accepted = true; return
               }

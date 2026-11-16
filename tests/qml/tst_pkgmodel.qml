@@ -185,7 +185,25 @@ TestCase {
     m._writer.deliver(JSON.stringify({ ok: true, name: "tool", url: "path:/tmp/x", message: "declared" }))
     compare(m.pendingDeclare, null)
     compare(m.inspected.declaredAs, "tool")
+    var rows = m.flakeRows()
+    compare(rows.filter(function (r) { return r.kind === "declare" }).length, 0)
+    compare(rows.filter(function (r) { return r.kind === "module" })[0].label,
+            "inputs.tool.nixosModules.odd.${name}")
     compare(m.message, 'declared tool. To use it, add inputs.tool.nixosModules."odd.\\${name}" to the imports of the host that should have it -- this tool does not know which file that is')
+  }
+
+  function test_new_inspection_discards_pending_declare() {
+    m.setTab(5)
+    m.inspected = { ref: "path:/tmp/old", ok: true, nixosModules: ["default"] }
+    m.beginNaming()
+    verify(m.declareAs("old"))
+    m.setQuery("path:/tmp/new")
+    m.inspect()
+    compare(m.pendingDeclare, null)
+    m._inspector.deliver(JSON.stringify({ ref: "path:/tmp/new", ok: true, nixosModules: ["new"] }))
+    m._writer.deliver(JSON.stringify({ ok: true, name: "old", url: "path:/tmp/old", message: "declared" }))
+    compare(m.inspected.ref, "path:/tmp/new")
+    compare(m.inspected.declaredAs, undefined)
   }
 
   function test_declare_late_answer_after_tab_switch() {
@@ -518,9 +536,19 @@ TestCase {
     m.setTab(2)
     m.query = "x"
     m.results = [{ name: "x" }]
+    m.setTab(2)
+    compare(m.query, "x")
+    compare(m.results.length, 1)
     m.setTab(3)
     compare(m.query, "")
     compare(m.results.length, 0)
+  }
+
+  function test_flake_with_no_inputs_has_only_the_head_row() {
+    m.setTab(5)
+    m.state = { flakeDir: "/f", flakeFound: true, flakes: [] }
+    compare(m.flakeRows().length, 1)
+    compare(m.flakeRows()[0].kind, "head")
   }
 
   function test_armFlake_removes_on_the_second_press() {
@@ -538,6 +566,28 @@ TestCase {
     m.armFlake("remove")
     m.armFlake("remove")
     compare(m._writer.command.slice(1), ["flake", "remove", "b"])
+  }
+
+  function test_flake_arm_cancel_keys() {
+    m.armedFlake = "remove:tool"
+    verify(m.keyCancelsFlakeArm(Qt.Key_U))
+    verify(!m.keyCancelsFlakeArm(Qt.Key_Space))
+    m.armedFlake = "update:tool"
+    verify(!m.keyCancelsFlakeArm(Qt.Key_U))
+    verify(!m.keyCancelsFlakeArm(Qt.Key_Space))
+    verify(m.keyCancelsFlakeArm(Qt.Key_Escape))
+  }
+
+  function test_flake_confirm_refused_while_busy_says_why() {
+    m.setTab(5)
+    m.state = { flakeDir: "/f", flakeFound: true,
+                flakes: [{ name: "tool", url: "u" }] }
+    m.cursor = 1
+    verify(m.armFlake("remove"))
+    m.busy = true
+    compare(m.armFlake("remove"), false)
+    compare(m.armedFlake, "")
+    compare(m.message, "another change is still running -- try again")
   }
 
   function test_addFromOtherChannel_refuses_when_channel_unknown() {

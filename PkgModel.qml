@@ -160,7 +160,7 @@ QtObject {
       var mods = inspected.nixosModules || []
       if (mods.length > 0) {
         for (var i = 0; i < mods.length; i++)
-          rows.push({ kind: "module", label: "nixosModules." + mods[i] })
+          rows.push({ kind: "module", label: (inspected.declaredAs ? "inputs." + inspected.declaredAs + "." : "") + "nixosModules." + mods[i] })
       } else {
         rows.push({ kind: "note", label: "no nixosModules" })
       }
@@ -174,7 +174,8 @@ QtObject {
       var op = inspected.opaque || []
       for (var j = 0; j < op.length; j++)
         rows.push({ kind: "note", label: op[j] + " \u2014 exists, contents cannot be read" })
-      rows.push({ kind: "declare", label: "declare this as an input" })
+      if (!inspected.declaredAs)
+        rows.push({ kind: "declare", label: "declare this as an input" })
       return rows
     }
     var have = state.flakes || []
@@ -184,8 +185,6 @@ QtObject {
       out.push({ kind: "note", label: "no flake.nix here. The panel and nixarchy-apply both use"
                 + " NIXARCHY_FLAKE (programs.nixarchy.flake sets it); it must be set in the"
                 + " session the shell runs in, not only in a terminal." })
-    else if (have.length === 0)
-      out.push({ kind: "note", label: "no flake inputs declared here yet" })
     return out.concat(have.map(function (f) {
       return { kind: "declared", label: f.name, url: f.url, name: f.name }
     }))
@@ -360,6 +359,7 @@ QtObject {
   }
 
   function setTab(i) {
+    var next = Math.max(0, Math.min(tabs.length - 1, i))
     disarm()
     invalidateInspection()
     // A mode must not outlive the tab it belongs to. Left behind, naming
@@ -367,10 +367,9 @@ QtObject {
     // early while it is on -- and turned RETURN into a declare against a
     // ref from the tab the user had already left (#43).
     if (naming) { cancelNaming(); namingAbandoned() }
-    query = ""
-    results = []
+    if (next !== tab) { query = ""; results = [] }
     pendingDeclare = null
-    tab = Math.max(0, Math.min(tabs.length - 1, i))
+    tab = next
     cursor = 0
   }
 
@@ -700,7 +699,8 @@ QtObject {
         else if (row.kind === "declare") { if (host && host.startNaming) host.startNaming() }
         else if (row.kind === "module")
           message = "paste this into the imports of the host that should have it: "
-                  + "inputs." + suggestInputName(inspected ? inspected.ref : "") + "." + row.label
+                  + (inspected && inspected.declaredAs ? row.label
+                     : "inputs." + suggestInputName(inspected ? inspected.ref : "") + "." + row.label)
                   + " \u2014 this tool does not know which file that is"
         break
     }
@@ -758,8 +758,11 @@ QtObject {
     var key = kind + ":" + row.name
     if (armedFlake === key) {
       armedFlake = ""; message = ""
-      return write(kind === "remove" ? ["flake", "remove", row.name]
-                                     : ["flake", "update", row.name])
+      var started = write(kind === "remove" ? ["flake", "remove", row.name]
+                                            : ["flake", "update", row.name])
+      if (!started && busy && !applying)
+        message = "another change is still running -- try again"
+      return started
     }
     disarm()
     if (kind === "update" && (row.follows || row.locked === false)) {
@@ -780,11 +783,20 @@ QtObject {
     return true
   }
 
+  function keyCancelsFlakeArm(key) {
+    return armedFlake !== "" && key !== Qt.Key_Space
+      && !(armedFlake.indexOf("update:") === 0 && key === Qt.Key_U)
+      && key !== Qt.Key_Shift && key !== Qt.Key_Control
+      && key !== Qt.Key_Alt && key !== Qt.Key_Meta
+      && key !== Qt.Key_Super_L && key !== Qt.Key_Super_R
+  }
+
   // Ask what a flakeref contains. Nothing is written; `nix flake show`
   // needs no build, and this is the step that exists so a person can look
   // before they commit to running somebody else's build code.
   function inspect() {
     if (!flakeTab || query.length === 0 || inspecting) return
+    pendingDeclare = null
     inspecting = true
     _inspectRun = _inspectToken
     message = "looking at " + query + "\u2026"
