@@ -17,7 +17,7 @@
 #   opt replace <path> <nix-value>  replace a value
 #   opt remove <path>            take it out again
 #   draft new <url> | draft undraft <name>
-#   flake show|add|remove|list    inspect or edit flake inputs
+#   flake show|add|remove|update|list    inspect or edit flake inputs
 #   recover [--discard]          restore or keep an interrupted write
 #   pending                      what is queued but not yet applied
 #   check [--dry-run]            evaluate a private copy of the queued flake
@@ -1233,8 +1233,10 @@ cmd_flake_show() {
   out=$(timeout 120 "${NIX[@]}" flake show --json "$ref" 2>"$err") || rc=$?
   if [ "$rc" != 0 ]; then
     local why; why=$(nix_why "$err")
-    jq -nc --arg ref "$ref" --arg why "${why:-could not inspect $ref}" \
-      '{ok: false, ref: $ref, message: $why}'
+    local not_flake=false
+    [[ $why =~ [Pp]ath\ \'[^\']*flake\.nix\'\ does\ not\ exist ]] && not_flake=true
+    jq -nc --arg ref "$ref" --arg why "${why:-could not inspect $ref}" --argjson nf "$not_flake" \
+      '{ok: false, ref: $ref, message: $why} + (if $nf then {notFlake: true} else {} end)'
     return 0
   fi
   # An enumerable namespace is an object of attributes; an opaque one is a
@@ -1291,8 +1293,17 @@ valid_input_name() {
 # Evaluating one costs minutes and proves far more than is at stake: an
 # input nothing imports cannot break a host. Parse, resolve, lock.
 cmd_flake_add() {
-  local name=${1-} ref=${2-}
-  [ -n "$name" ] && [ -n "$ref" ] || die "usage: nixarchy-pkg flake add <name> <flakeref>"
+  local nofollows=false noflake=false
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --no-follows) nofollows=true; shift ;;
+      --no-flake) noflake=true; nofollows=true; shift ;;
+      *) break ;;
+    esac
+  done
+  [ $# -eq 2 ] && [[ $1 != -* ]] && [[ $2 != -* ]] ||
+    die "usage: nixarchy-pkg flake add [--no-follows] [--no-flake] <name> <flakeref>"
+  local name=$1 ref=$2
   valid_input_name "$name"
   # The ref goes between quotes in the system flake, so it is data or it
   # is refused: a quote, a backslash or ${ in it would write Nix that
@@ -1329,7 +1340,7 @@ cmd_flake_add() {
 
   local err; err=$(mktemp)
 
-  if ! timeout -k 10 120 nix flake metadata "$dir" >/dev/null 2>"$err" 9>&-; then
+  if ! timeout -k 10 120 "${NIX[@]}" flake metadata "$dir" >/dev/null 2>"$err" 9>&- 8>&-; then
     die "this flake does not evaluate as it stands, so I have changed nothing rather than add to a broken file: $(nix_why "$err")"
   fi
 
@@ -1339,29 +1350,50 @@ cmd_flake_add() {
   local line="  inputs.${name}.url = \"${ref}\";  #@flake-input ${name}"
   local tmp; tmp=$(mktemp)
   # Through the environment, not -v, which would process escapes in it.
-  NIXARCHY_PKG_LINE="$line" awk -v at="$at" \
-    'NR == at { print; print ENVIRON["NIXARCHY_PKG_LINE"]; next } { print }' \
-    "$file" > "$tmp"
+  NIXARCHY_PKG_LINE="$line" NIXARCHY_PKG_EXTRA="$(if $noflake; then printf '  inputs.%s.flake = false;  #@flake-input %s' "$name" "$name"; fi)" \
+    awk -v at="$at" 'NR == at { print; print ENVIRON["NIXARCHY_PKG_LINE"];
+      if (ENVIRON["NIXARCHY_PKG_EXTRA"] != "") print ENVIRON["NIXARCHY_PKG_EXTRA"]; next } { print }' \
+      "$file" > "$tmp"
 
-  if ! nix-instantiate --parse "$tmp" >/dev/null 2>"$err" 9>&-; then
+  if ! nix-instantiate --parse "$tmp" >/dev/null 2>"$err" 9>&- 8>&-; then
     die "that would have left $file unparseable, so nothing was changed: $(nix_why "$err")"
   fi
   cp "$tmp" "$file"   # not mv; see cmd_opt_set (#39)
 
-  if ! timeout -k 10 120 nix flake lock "$dir" >/dev/null 2>"$err" 9>&-; then
+  if ! timeout -k 10 120 "${NIX[@]}" flake lock "$dir" >/dev/null 2>"$err" 9>&- 8>&-; then
     die "could not lock '$ref', so nothing was changed: $(nix_why "$err")"
   fi
 
-  if ! timeout -k 10 120 nix flake metadata "$dir" >/dev/null 2>"$err" 9>&-; then
+  local follows=false
+  if ! $nofollows && jq -e --arg n "$name" '
+    (.nodes[.root].inputs.nixpkgs | type) == "string" and
+    ((.nodes[.root].inputs[$n]) as $k | ($k | type) == "string" and
+      ((.nodes[$k].inputs.nixpkgs // null) | type) == "string")' "$lock" >/dev/null; then
+    follows=true
+    tmp=$(mktemp)
+    NIXARCHY_PKG_LINE="  inputs.${name}.inputs.nixpkgs.follows = \"nixpkgs\";  #@flake-input ${name}" \
+      awk -v at="$at" 'NR == at + 1 { print; print ENVIRON["NIXARCHY_PKG_LINE"]; next } { print }' \
+        "$file" > "$tmp"
+    if ! nix-instantiate --parse "$tmp" >/dev/null 2>"$err" 9>&- 8>&-; then
+      die "that would have left $file unparseable, so nothing was changed: $(nix_why "$err")"
+    fi
+    cp "$tmp" "$file"
+    if ! timeout -k 10 120 "${NIX[@]}" flake lock "$dir" >/dev/null 2>"$err" 9>&- 8>&-; then
+      die "could not lock '$ref' with nixpkgs follows, so nothing was changed: $(nix_why "$err")"
+    fi
+  fi
+
+  if ! timeout -k 10 120 "${NIX[@]}" flake metadata "$dir" >/dev/null 2>"$err" 9>&- 8>&-; then
     die "the flake stopped evaluating with '$name' in it, so nothing was changed: $(nix_why "$err")"
   fi
   committed
 
   # The adapter has not inspected this flake's outputs, so it cannot name
   # a module to import. `flake show` lets the caller see what it offers.
-  jq -nc --arg name "$name" --arg ref "$ref" --arg warn "$warn" \
-    '{ok: true, name: $name, url: $ref,
+  jq -nc --arg name "$name" --arg ref "$ref" --arg warn "$warn" --argjson follows "$follows" \
+    '{ok: true, name: $name, url: $ref, follows: $follows,
       message: (("declared " + $name + " and locked it -- run \u0027nixarchy-pkg flake show " + $ref + "\u0027 to see what it offers")
+                + (if $follows then " -- follows this flake\u0027s nixpkgs" else "" end)
                 + (if $warn == "" then "" else " -- " + $warn end))}'
 }
 
@@ -1454,6 +1486,57 @@ cmd_flake_remove() {
   # nix flake lock prunes the input and its dependencies (Nix 2.35.6).
   # List reads the lock; leaving it would keep the input visible and block re-add.
   jq -nc --arg name "$name" '{ok: true, name: $name, message: ("removed " + $name + " -- the flake still parses, locks and evaluates its metadata; hosts were not evaluated")}'
+}
+
+cmd_flake_update() {
+  [ $# -eq 1 ] || die "usage: nixarchy-pkg flake update <name>"
+  local name=$1
+  valid_input_name "$name"
+  need nix
+  begin_write
+
+  local dir="${NIXARCHY_FLAKE:-/etc/nixos}" file lock key err snap lc ans
+  file="$dir/flake.nix"; lock="$dir/flake.lock"
+  [ -r "$lock" ] || die "no flake.lock in $dir -- nothing is locked yet. Nothing was changed."
+  [ -w "$lock" ] && [ -w "$dir" ] || die "cannot write $lock. Nothing was changed."
+  key=$(jq -r --arg n "$name" '.nodes[.root].inputs[$n] // empty | if type == "array" then "follows:" + join("/") else . end' "$lock") ||
+    die "cannot read $lock. Nothing was changed."
+  [ -n "$key" ] || die "'$name' is not an input of this flake's lock. Nothing was changed."
+  case $key in follows:*) die "$name follows ${key#follows:}; update that one. Nothing was changed." ;; esac
+  guard "$file" "$lock"
+  snap=$(mktemp); cp "$lock" "$snap"
+  err=$(mktemp)
+  if ! (cd "$dir" && timeout -k 10 120 "${NIX[@]}" flake metadata) >/dev/null 2>"$err" 9>&- 8>&-; then
+    die "this flake does not evaluate as it stands, so I have changed nothing rather than update a broken file: $(nix_why "$err")"
+  fi
+  if ! (cd "$dir" && timeout -k 10 120 "${NIX[@]}" flake update "$name") >/dev/null 2>"$err" 9>&- 8>&-; then
+    die "could not update $name, so nothing was changed: $(nix_why "$err")"
+  fi
+  if ! (cd "$dir" && timeout -k 10 120 "${NIX[@]}" flake metadata) >/dev/null 2>"$err" 9>&- 8>&-; then
+    die "the flake stopped evaluating after updating '$name', so nothing was changed: $(nix_why "$err")"
+  fi
+  if cmp -s "$snap" "$lock"; then lc=false; else lc=true; fi
+  ans=$(jq -nc --arg name "$name" --argjson lc "$lc" --slurpfile a "$snap" --slurpfile b "$lock" '
+    ($a[0]) as $old | ($b[0]) as $new |
+    ($old.nodes[$old.nodes[$old.root].inputs[$name]].locked.lastModified // null) as $from |
+    ($new.nodes[$new.nodes[$new.root].inputs[$name]].locked.lastModified // null) as $to |
+    ([ $new.nodes | to_entries[] | select(.key != "root" and
+       (.value.locked.narHash != $old.nodes[.key].locked.narHash)) | .key ]) as $moved |
+    ([ $old.nodes | keys[] | . as $key | select($key != "root" and ($new.nodes | has($key) | not)) ]) as $removed |
+    (if $from == null then "an unknown date" else ($from | todate[:10]) end) as $fromDate |
+    (if $to == null then "an unknown date" else ($to | todate[:10]) end) as $toDate |
+    ($new.nodes[$new.root].inputs[$name]) as $named |
+    {ok: true, name: $name, changed: ($moved | length > 0), lockChanged: $lc,
+     moved: $moved, removed: $removed, from: $from, to: $to,
+     message: (if ($moved | length) > 0 then
+       (if ($moved | index($named)) == null
+        then "updated " + $name + "\u0027s dependencies (" + ($moved | join(", ")) + ")"
+        else "updated " + $name end) + ": " + $fromDate + " -> " + $toDate + ". Nothing is built until you apply."
+       elif $lc then $name + ": a newer revision with the same contents -- nothing to rebuild"
+       else $name + " is already up to date" end)}' 2>"$err") ||
+    die "could not read the updated lock. Nothing was changed."
+  committed
+  printf '%s\n' "$ans"
 }
 
 # Root inputs from the lock, plus marked lines not locked yet.
@@ -2416,8 +2499,9 @@ cmd_flake() {
     show)   cmd_flake_show "$@" ;;
     add)    cmd_flake_add "$@" ;;
     remove) cmd_flake_remove "$@" ;;
+    update) cmd_flake_update "$@" ;;
     list)   cmd_flake_list "$@" ;;
-    *) die "flake takes show, add, remove or list, not '${action:-nothing}'" ;;
+    *) die "flake takes show, add, remove, update or list, not '${action:-nothing}'" ;;
   esac
 }
 

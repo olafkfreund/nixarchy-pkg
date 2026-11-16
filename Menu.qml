@@ -235,7 +235,7 @@ Item {
           // ESC goes back to the inspection with the flakeref restored.
           if (pkg.naming) {
             if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-              if (pkg.declareAs(search.text)) search.text = ""
+              if (pkg.declareAs(search.text, Boolean(event.modifiers & Qt.ShiftModifier))) search.text = ""
               event.accepted = true; return
             }
             if (event.key === Qt.Key_Escape) {
@@ -354,6 +354,10 @@ Item {
               case Qt.Key_C:
                 if (!pkg.queueTab) break
                 if (!event.isAutoRepeat) pkg.check(false)
+                event.accepted = true; return
+              case Qt.Key_U:
+                if (!pkg.flakeTab) break
+                if (!event.isAutoRepeat) pkg.armFlake("update")
                 event.accepted = true; return
               case Qt.Key_A:
                 if (!event.isAutoRepeat && pkg.armApply("here")) {

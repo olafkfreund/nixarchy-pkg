@@ -28,6 +28,9 @@ declining to do something is an answer.
 | `opt describe <path>` | An option's type, default, example and docs |
 | `opt set <path> <value>` / `opt remove <path>` | |
 | `draft new <url>` / `draft undraft <name>` | See [Drafts](drafts) |
+| `flake show <ref>` / `flake list` | Inspect a source or list locked inputs |
+| `flake add [--no-follows] [--no-flake] <name> <ref>` | Declare and lock an input; `--no-flake` also disables follows |
+| `flake update <name>` / `flake remove <name>` | Update a locked input, or remove one this tool declared |
 | `recover [--discard]` | Put back what an interrupted write changed, or keep the files as they are. See [Troubleshooting](troubleshooting) |
 | `pending` | What would change on the next apply |
 | `check [--dry-run]` | Evaluate a private copy of the flake with the queued selection |
@@ -35,6 +38,14 @@ declining to do something is an answer.
 | `reindex` | Rebuild the search index. About a minute |
 
 ## A worked example
+
+`flake add` answers with `name`, `url`, `follows`, and `message`. It does not
+return an `import` field: inspect the source with `flake show` to see its
+modules. `flake list` returns `dir`, `stale`, and `inputs`. Each input has
+`name`, `url`, `mine`, `locked`, `follows`, `flake`, and `inspectable`; a
+marked input missing from the lock sets `stale`. `flake update` reports
+`moved` and `removed` node keys, `changed`, `lockChanged`, and the named
+input's `from` and `to` modification dates when available.
 
 What is queued, as a list of markers:
 

@@ -63,11 +63,22 @@ file is touched. So is a flakeref with a quote, a backslash, a `$`, a
 backtick or a space in it — no real one has any, and in the file they would
 be Nix rather than data.
 
-One line is then appended to your `flake.nix`:
+The URL line is added near the top of your `flake.nix`:
 
 ```nix
 inputs.nixvim.url = "github:nix-community/nixvim";  #@flake-input nixvim
 ```
+
+If both your flake and the new input have their own `nixpkgs` input, the
+declaration also adds `inputs.nixvim.inputs.nixpkgs.follows = "nixpkgs"`.
+This makes them share your locked nixpkgs. Press `SHIFT+RETURN` while naming
+to keep the new input's own nixpkgs instead. The terminal flag is
+`--no-follows`.
+
+If inspection reports that the source has no `flake.nix`, the panel offers
+to declare it as a non-flake source. This adds `inputs.<name>.flake = false`;
+you can use the source path as `inputs.<name>`. It has no flake outputs to
+inspect, and no follows line is added.
 
 Your own `inputs { }` block is not touched. It does not need to be: in Nix, a
 path assignment merges with an attrset that already exists, so the line is
@@ -139,6 +150,11 @@ line to use for each module, package, or overlay, but never writes that line.
 and any other key cancels. Removal updates `flake.lock` as well as
 `flake.nix`, so the removed input disappears from the list.
 
+Press `u` twice on any locked input to update it. The first press asks for
+confirmation; the second changes the lock, and nothing is built until apply.
+Updating `nixpkgs` or `nixarchy` can change the whole system on the next
+apply, so check the result before rebuilding.
+
 ## Two refusals
 
 **A name your flake already uses.** Two definitions of one input is an error,
@@ -182,6 +198,7 @@ about `nixpkgs`, the name you are most likely to reach for.
 nixarchy-pkg flake show github:nix-community/nixvim
 nixarchy-pkg flake add nixvim github:nix-community/nixvim
 nixarchy-pkg flake list
+nixarchy-pkg flake update nixvim
 nixarchy-pkg flake remove nixvim
 ```
 

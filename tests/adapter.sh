@@ -411,6 +411,116 @@ out=$("$ADAPTER" flake show "path:$FLAKE_TMP/lib" 2>&1 || true)
 check "enumerates nixosModules"      jq -e '.nixosModules | index("default")' <<<"$out"
 check "sees the alias too"           jq -e '.nixosModules | index("thing")'   <<<"$out"
 check "reports opaque namespaces as a list" jq -e '.opaque | type == "array"' <<<"$out"
+
+# Local inputs exercise both passes without fetching nixpkgs.
+mkdir -p "$FLAKE_TMP/np" "$FLAKE_TMP/lib2" "$FLAKE_TMP/plain"
+printf '{ outputs = { self }: {}; }\n' > "$FLAKE_TMP/np/flake.nix"
+printf '{ inputs.nixpkgs.url = "path:%s"; outputs = { self, ... }: {}; }\n' "$FLAKE_TMP/np" > "$FLAKE_TMP/lib2/flake.nix"
+printf 'plain source\n' > "$FLAKE_TMP/plain/data"
+FK=$(fresh_flake)
+sed -i "s|github:nixos/nixpkgs/nixos-unstable|path:$FLAKE_TMP/np|" "$FK/flake.nix"
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake add lib2 "path:$FLAKE_TMP/lib2")
+check "add follows the root nixpkgs" jq -e '.ok and .follows == true' <<<"$out"
+check "follows line is marked" grep -q 'inputs.lib2.inputs.nixpkgs.follows = "nixpkgs";  #@flake-input lib2' "$FK/flake.nix"
+check "follows is locked" jq -e '.nodes[.nodes.root.inputs.lib2].inputs.nixpkgs == ["nixpkgs"]' "$FK/flake.lock"
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake add no-nixpkgs "path:$FLAKE_TMP/lib")
+check "input without nixpkgs does not follow" jq -e '.ok and .follows == false' <<<"$out"
+check "input without nixpkgs has no follows line" not grep -q 'inputs.no-nixpkgs.inputs.nixpkgs.follows' "$FK/flake.nix"
+metadata_err=$(nix flake metadata "$FK" --no-update-lock-file 2>&1)
+check "metadata has no non-existent input warning" not grep -q 'non-existent input' <<<"$metadata_err"
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake add --no-follows separate "path:$FLAKE_TMP/lib2")
+check "no-follows opts out" jq -e '.ok and .follows == false' <<<"$out"
+check "no-follows writes no follows line" not grep -q 'inputs.separate.inputs.nixpkgs.follows' "$FK/flake.nix"
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake add --no-flake plain "path:$FLAKE_TMP/plain")
+check "non-flake source locks" jq -e '.ok and .follows == false' <<<"$out"
+check "non-flake lock node" jq -e '.nodes[.nodes.root.inputs.plain].flake == false' "$FK/flake.lock"
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake remove plain)
+check "remove deletes both non-flake lines" test "$(grep -c '#@flake-input plain$' "$FK/flake.nix" || true)" = 0
+out=$("$ADAPTER" flake show "path:$FLAKE_TMP/plain")
+check "show identifies a non-flake" jq -e '.ok == false and .notFlake == true' <<<"$out"
+out=$("$ADAPTER" flake show "path:$FLAKE_TMP/no-such-source")
+check "unresolvable source is not called non-flake" jq -e '.ok == false and (has("notFlake") | not)' <<<"$out"
+check "flags after ref are refused" jq -e '.ok == false and (.error | startswith("usage:"))' \
+  <<<"$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake add late "path:$FLAKE_TMP/lib2" --no-flake)"
+
+mkdir -p "$FLAKE_TMP/np2" "$FLAKE_TMP/lib3" "$FLAKE_TMP/following"
+printf '{ outputs = { self }: {}; }\n' > "$FLAKE_TMP/np2/flake.nix"
+printf '{ inputs.nixpkgs.url = "path:%s"; outputs = { self, ... }: {}; }\n' "$FLAKE_TMP/np2" > "$FLAKE_TMP/lib3/flake.nix"
+printf '{ inputs.foo.url = "path:%s"; inputs.nixpkgs.follows = "foo"; outputs = { self, ... }: {}; }\n' "$FLAKE_TMP/np2" > "$FLAKE_TMP/following/flake.nix"
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake add already-follows "path:$FLAKE_TMP/following")
+check "input already following does not gain another follows" jq -e '.ok and .follows == false' <<<"$out"
+FK_ARRAY=$(fresh_flake)
+sed -i "s|nixpkgs.url = \"github:nixos/nixpkgs/nixos-unstable\";|other.url = \"path:$FLAKE_TMP/np\"; nixpkgs.follows = \"other\";|" "$FK_ARRAY/flake.nix"
+out=$(NIXARCHY_FLAKE="$FK_ARRAY" "$ADAPTER" flake add lib2 "path:$FLAKE_TMP/lib2")
+check "root nixpkgs follows array does not enable follows" jq -e '.ok and .follows == false' <<<"$out"
+
+printf 'changed\n' > "$FLAKE_TMP/lib2/new"
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake update lib2)
+check "update reports the moved input" jq -e '.ok and .changed and (.moved | index("lib2"))' <<<"$out"
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake update lib2)
+check "second update is current" jq -e '.ok and (.changed | not) and (.lockChanged | not)' <<<"$out"
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake add --no-follows dep-only "path:$FLAKE_TMP/lib3")
+printf 'changed dependency\n' > "$FLAKE_TMP/np2/new"
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake update dep-only)
+check "dependency-only update reports moved dependency" jq -e \
+  '.ok and .changed and (.moved | index("dep-only") == null) and (.moved | any(contains("nixpkgs")))' <<<"$out"
+mkdir -p "$FLAKE_TMP/git-src"
+printf '{ outputs = { self }: {}; }\n' > "$FLAKE_TMP/git-src/flake.nix"
+git -C "$FLAKE_TMP/git-src" init -q .
+git -C "$FLAKE_TMP/git-src" add flake.nix
+git -C "$FLAKE_TMP/git-src" -c user.email=t@t -c user.name=t commit -qm first
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake add --no-follows gs "git+file:$FLAKE_TMP/git-src")
+git -C "$FLAKE_TMP/git-src" -c user.email=t@t -c user.name=t commit --allow-empty -qm second
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake update gs)
+check "empty git commit changes lock without contents" jq -e \
+  '.ok and (.changed | not) and .lockChanged and (.message | contains("same contents"))' <<<"$out"
+before_nix=$(md5sum < "$FK/flake.nix"); before_lock=$(md5sum < "$FK/flake.lock")
+out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake update absent)
+check "unknown update is refused" jq -e '.ok == false' <<<"$out"
+check "unknown update preserves both files" test "$(md5sum < "$FK/flake.nix") $(md5sum < "$FK/flake.lock")" = "$before_nix $before_lock"
+
+mkdir -p "$FLAKE_TMP/wrap"
+REAL_NIX=$(command -v nix)
+cat > "$FLAKE_TMP/wrap/nix" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *" flake $FAIL_KIND "*)
+    count=0
+    [ ! -e "$FAIL_COUNT" ] || count=$(cat "$FAIL_COUNT")
+    count=$((count + 1))
+    printf '%s\n' "$count" > "$FAIL_COUNT"
+    [ "$count" != "$FAIL_NTH" ] || exit 1 ;;
+esac
+exec "$REAL_NIX" "$@"
+SH
+chmod +x "$FLAKE_TMP/wrap/nix"
+for mode in existing absent; do
+  for failure in second-lock final-metadata update; do
+    FK=$(fresh_flake)
+    sed -i "s|github:nixos/nixpkgs/nixos-unstable|path:$FLAKE_TMP/np|" "$FK/flake.nix"
+    if [ "$mode" = existing ]; then nix flake lock "$FK" >/dev/null 2>&1; fi
+    before_nix=$(md5sum < "$FK/flake.nix")
+    before_lock=absent
+    [ ! -e "$FK/flake.lock" ] || before_lock=$(md5sum < "$FK/flake.lock")
+    count_file="$FLAKE_TMP/count-$mode-$failure"
+    case $failure in
+      second-lock) kind=lock; nth=2; action=add ;;
+      final-metadata) kind=metadata; nth=2; action=add ;;
+      update) kind=update; nth=1; action=update ;;
+    esac
+    if [ "$action" = add ]; then set -- add lib2 "path:$FLAKE_TMP/lib2"
+    else set -- update nixpkgs; fi
+    out=$(PATH="$FLAKE_TMP/wrap:$PATH" REAL_NIX="$REAL_NIX" FAIL_KIND="$kind" FAIL_NTH="$nth" FAIL_COUNT="$count_file" \
+      NIXARCHY_FLAKE="$FK" "$ADAPTER" flake "$@")
+    check "$mode $failure returns one refusal" jq -se 'length == 1 and .[0].ok == false' <<<"$out"
+    check "$mode $failure preserves flake.nix" test "$(md5sum < "$FK/flake.nix")" = "$before_nix"
+    if [ "$before_lock" = absent ]; then
+      check "$mode $failure leaves lock absent" test ! -e "$FK/flake.lock"
+    else
+      check "$mode $failure preserves lock" test "$(md5sum < "$FK/flake.lock")" = "$before_lock"
+    fi
+  done
+done
 else echo "  skip: needs a writable nix store or the network (flake inputs)"; fi
 check "says so when a flake cannot be read" \
   jq -e '.ok == false and (.message | length > 0)' \
@@ -1790,7 +1900,7 @@ reset_apps; before=$(md5sum < "$A59")
 before_nix=$(md5sum < "$W59/fk/flake.nix"); before_lock=$(md5sum < "$W59/fk/flake.lock")
 cat > "$W59/stub/nix" <<EOF
 #!/usr/bin/env bash
-if [ "\$1 \$2" = 'flake metadata' ] && [ ! -e "$W59/once" ]; then
+if [[ " \$* " == *' flake metadata '* ]] && [ ! -e "$W59/once" ]; then
   touch "$W59/once"; printf 'damage\n' >> "$W59/fk/flake.lock"; exit 1
 fi
 exec "$REAL_NIX" "\$@"
@@ -1811,7 +1921,7 @@ printf 'inputs.dep.nixosModules.default\n' > "$W59/fk/referred.nix"
 before_nix=$(md5sum < "$W59/fk/flake.nix"); before_lock=$(md5sum < "$W59/fk/flake.lock")
 cat > "$W59/stub/nix" <<EOF
 #!/usr/bin/env bash
-if [ "\$1 \$2" = 'flake metadata' ]; then printf '\n' >> "$W59/fk/flake.lock"; fi
+if [[ " \$* " == *' flake metadata '* ]]; then printf '\n' >> "$W59/fk/flake.lock"; fi
 exec "$REAL_NIX" "\$@"
 EOF
 chmod +x "$W59/stub/nix"
@@ -1913,7 +2023,7 @@ printf '{"nodes":{"root":{}},"root":"root","version":7}\n' > "$W67/fk/flake.lock
 before_nix=$(md5sum < "$W67/fk/flake.nix"); before_lock=$(md5sum < "$W67/fk/flake.lock")
 cat > "$W67/stub/nix" <<'EOF'
 #!/usr/bin/env bash
-if [ "$1 $2" = 'flake lock' ]; then
+if [[ " $* " == *' flake lock '* ]]; then
   echo $$ > "$STUB67/nix.pid"
   exec sleep 30
 fi
@@ -2011,8 +2121,8 @@ check "long grandchild finishes" wait67_done "$W67/gc.done"
 out=$(run67 recover)
 check "long grandchild recovery succeeds" jq -e '.ok == true' <<<"$out"
 check "long grandchild recovery restores apps.nix" test "$(md5sum < "$A67")" = "$before"
-check "timeout -k covers six write-time calls" test "$(grep -Ec 'timeout -k 10 120 (nix|"\$\{NIX\[@\]\}") flake (metadata|lock)' "$ADAPTER")" = 6
-check "no write-time call has the old timeout" test "$(grep -Ec 'timeout 120 (nix|"\$\{NIX\[@\]\}") flake (metadata|lock)' "$ADAPTER" || :)" = 0
+check "timeout -k covers ten write-time calls" test "$(grep -Ec 'timeout -k 10 120 "\$\{NIX\[@\]\}" flake (metadata|lock|update)' "$ADAPTER")" = 10
+check "no write-time call has the old timeout" test "$(grep -Ec 'timeout 120 (nix|"\$\{NIX\[@\]\}") flake (metadata|lock|update)' "$ADAPTER" || :)" = 0
 rm -rf "$W67"
 
 echo "an interrupted write stops apply (#66)"
