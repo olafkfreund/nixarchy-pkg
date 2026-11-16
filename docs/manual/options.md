@@ -53,9 +53,9 @@ is not.
 Booleans, enums, integers and simple strings get a real widget. Lists,
 `null or T`, attribute sets, submodules and functions do not.
 
-They get the option's own example — or its default — written **commented
-out**, with its type and documentation beside it, as a starting shape for you
-to edit.
+They get the option's own example — or its default — in a text box, with
+its type and documentation beside it. Edit it and RETURN writes it as a
+live value; leave it untouched and nothing is written.
 
 That is not the form giving up. A widget for "a list of submodules" would be
 a text box pretending to understand Nix, and the first thing it would do is

@@ -44,7 +44,8 @@ That is the route for two situations:
 - any apply that **asks a question the panel cannot show** — a prompt, a
   confirmation, a conflict
 
-If `a` seems to hang, try `SHIFT+A` before assuming anything is broken.
+On a machine with no polkit agent, use `SHIFT+A` instead of `a`. Once an
+apply is running, `SHIFT+A` is refused until it ends.
 
 ## The Queue tab
 
