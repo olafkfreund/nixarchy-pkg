@@ -34,6 +34,9 @@ TestCase {
     property int count: 3
     function rows() { return theRows }
     property bool busy: false
+    property string selCount: "2"
+    property string queueCount: "?"
+    function tabCount(i) { return i === 2 ? selCount : i === 6 ? queueCount : "" }
     property bool inspecting: false
     property bool checkRunning: false
     property string message: ""
@@ -90,6 +93,8 @@ TestCase {
     fakeModel.checkRunning = false
     win.width = 800
     Style.reduceMotion = true
+    fakeModel.selCount = "2"
+    fakeModel.queueCount = "?"
     // Park the pointer off every row and tab so hover does not leak between tests.
     mouseMove(win.contentItem, win.width - 2, win.height - 2)
   }
@@ -319,5 +324,28 @@ TestCase {
     } finally {
       second.destroy()
     }
+  }
+
+  function tabLabel(i) {
+    var item = find(card, "QQuickRow").children[i]
+    for (var k = 0; k < item.children.length; k++)
+      if (item.children[k].hasOwnProperty("text")) return item.children[k]
+    return null
+  }
+
+  function test_tab_labels_carry_counts() {
+    compare(tabLabel(2).text, "Selection 2")
+    compare(tabLabel(6).text, "Queue ?")
+    compare(tabLabel(0).text, "Apps")
+    var sel = tabLabel(2), q = tabLabel(6)
+    fakeModel.selCount = "5"
+    fakeModel.queueCount = ""
+    compare(sel.text, "Selection 5")
+    compare(q.text, "Queue")
+  }
+
+  function test_header_fits() {
+    var h = byName(card, "header")
+    verify(h.implicitWidth <= h.width, "the tab row fits at 800 px")
   }
 }

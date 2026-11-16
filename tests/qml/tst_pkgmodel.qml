@@ -321,4 +321,28 @@ TestCase {
     m.checkResult = { verdict: "fails", summary: "bad", at: { file: "a.nix", line: 4 } }
     compare(m.queueRows()[0].text, "fails: bad (a.nix:4, as checked)")
   }
+
+  function test_tab_counts() {
+    m.state = { packages: [{}, {}] }
+    compare(m.tabCount(2), "2")
+    m.setTab(2); m.query = "x"
+    m.results = [{}, {}, {}, {}, {}]
+    compare(m.tabCount(2), "2", "a search does not change the selection's count")
+    m.query = ""
+    m.state = { packages: [] }
+    compare(m.tabCount(2), "0")
+    m.state = {}
+    compare(m.tabCount(2), "")
+    m.queued = 3
+    compare(m.tabCount(6), "3")
+    m.queued = 0
+    compare(m.tabCount(6), "")
+    m.queued = -1; m.queueError = ""
+    compare(m.tabCount(6), "")
+    m.queueError = "boom"
+    compare(m.tabCount(6), "?")
+    compare(m.tabCount(0), "")
+    compare(m.tabCount(4), "")
+    m.results = []
+  }
 }

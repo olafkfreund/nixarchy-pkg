@@ -27,6 +27,13 @@ QtObject {
 
   readonly property var tabs: ["Apps", "Services", "Selection", "Options", "Drafts", "Flakes", "Queue"]
   property int tab: 0
+  // The number a tab label carries, or "" for none. Same rule as the bar badge.
+  function tabCount(i) {
+    if (i === 2) return state && state.packages ? String(state.packages.length) : ""
+    if (i === 6) return queued > 0 ? String(queued)
+                      : (queued === -1 && queueError ? "?" : "")
+    return ""
+  }
   readonly property string tabName: tabs[tab]
 
   // What the catalogue tabs draw, straight from `state`.

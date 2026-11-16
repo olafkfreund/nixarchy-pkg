@@ -90,6 +90,7 @@ Item {
 
   Row {
     id: header
+    objectName: "header"
     anchors { top: parent.top; left: parent.left; right: parent.right }
     height: Style.font.heading + Style.space(14)
     spacing: Style.space(14)
@@ -117,7 +118,10 @@ Item {
         Text {
           id: label
           anchors.verticalCenter: parent.verticalCenter
-          text: parent.modelData
+          text: {
+            const n = root.model ? root.model.tabCount(tabItem.index) : ""
+            return tabItem.modelData + (n ? " " + n : "")
+          }
           textFormat: Text.PlainText
           font.family: root.fontFamily
           font.pixelSize: Style.font.heading
