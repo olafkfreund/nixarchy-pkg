@@ -1,0 +1,3 @@
+module Quickshell.Wayland
+# Test-only singleton; no Wayland connection loads.
+singleton WlrLayershell 1.0 WlrLayershell.qml

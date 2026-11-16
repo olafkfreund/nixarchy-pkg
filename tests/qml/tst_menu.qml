@@ -1,0 +1,219 @@
+import QtQuick
+import QtTest
+
+TestCase {
+  name: "Menu"
+  when: windowShown
+  width: 800; height: 600
+  visible: true
+
+  Component { id: menuC; Menu {} }
+  property var menu: null
+  property var pkg: null
+  property var panel: null
+  property var keys: null
+  property var search: null
+  property var form: null
+
+  function walk(o, test, acc) {
+    acc = acc || []
+    if (!o) return acc
+    if (test(o)) acc.push(o)
+    var k = o.children || []
+    for (var i = 0; i < k.length; i++) walk(k[i], test, acc)
+    return acc
+  }
+  function fresh() {
+    if (menu) { panel.contentItem.parent = null; menu.destroy() }
+    menu = menuC.createObject(this)
+    pkg = null; panel = null
+    for (var i = 0; i < menu.data.length; i++) {
+      var d = menu.data[i]
+      if (d && d.tabs !== undefined && d.rowAt) pkg = d
+      if (d && d.contentItem !== undefined) panel = d
+    }
+    panel.contentItem.parent = this
+    panel.contentItem.anchors.fill = this
+    keys = walk(panel.contentItem, function (o) { return String(o).indexOf("QQuickFocusScope") === 0 && o.children.length > 3 })[0]
+    search = walk(keys, function (o) { return o.placeholderText !== undefined })[0]
+    form = walk(keys, function (o) { return o.begin !== undefined && o.finish !== undefined })[0]
+    menu.open("{}")
+    wait(30)
+    pkg._reader.deliver(JSON.stringify({ok:true, apps:[{id:"a",label:"A",kind:"app",enabled:false},{id:"b",label:"B",kind:"app",enabled:false},{id:"c",label:"C",kind:"app",enabled:false}],services:[],packages:[],options:[],drafts:[]}))
+  }
+  function cleanup() {
+    if (menu) { panel.contentItem.parent = null; menu.destroy() }
+    menu = null; pkg = null; panel = null; keys = null; search = null; form = null
+  }
+  function plainFlick() { return walk(keys, function (o) { return String(o).indexOf("QQuickFlickable") === 0 && o.visible && o.parent === keys })[0] }
+  function longText() { var a = []; for (var i = 0; i < 120; i++) a.push("line " + i); return a.join("\n") }
+  function flick() { return walk(keys, function (o) { return o.followTail !== undefined })[0] }
+
+  function test_a_open_form_owns_the_keyboard() {
+    fresh()
+    verify(keys.activeFocus)
+    form.begin({ path: "services.x.enable" })
+    verify(form.open)
+    keyClick(Qt.Key_Down); keyClick(Qt.Key_J); keyClick(Qt.Key_Right); keyClick(Qt.Key_Question)
+    keyClick(Qt.Key_A, Qt.ShiftModifier)
+    compare(pkg.cursor, 0); compare(pkg.tab, 0); compare(menu.keysOpen, false); compare(pkg.armingState, "")
+    keyClick(Qt.Key_Escape); verify(!form.open)
+    wait(30)
+    verify(keys.activeFocus && !search.activeFocus, "list has the keyboard again")
+  }
+  function test_b_key_sheet() {
+    fresh()
+    menu.keysOpen = true
+    keyClick(Qt.Key_Down); compare(menu.keysOpen, true); compare(pkg.cursor, 0)
+    keyClick(Qt.Key_X); compare(menu.keysOpen, false); compare(pkg.cursor, 0)
+  }
+  function test_c_detail() {
+    fresh()
+    pkg.detailText = "d"
+    keyClick(Qt.Key_Shift); compare(pkg.detailText, "d")
+    keyClick(Qt.Key_Down); compare(pkg.detailText, "d")
+    keyClick(Qt.Key_X); compare(pkg.detailText, ""); compare(pkg.cursor, 0)
+  }
+  function test_d_log() {
+    fresh()
+    pkg.applying = true; pkg._apply.running = true; pkg.applyLog = ["l1", "l2"]
+    verify(pkg.showingLog)
+    var lv = flick(); verify(lv, "log view")
+    keyClick(Qt.Key_Down); compare(lv.followTail, false); compare(pkg.cursor, 0)
+    keyClick(Qt.Key_End); compare(lv.followTail, true)
+    keyClick(Qt.Key_X); compare(pkg.showingLog, true)
+    keyClick(Qt.Key_Escape)
+    compare(pkg.showingLog, false); compare(pkg.logDetached, true)
+    compare(pkg.applying, true); compare(pkg._apply.running, true)
+  }
+  function test_e_armed() {
+    fresh()
+    pkg.armingState = "armed"; pkg.armedKind = "here"; pkg.armedApply = "here"
+    keyClick(Qt.Key_Shift); compare(pkg.armedApply, "here")
+    keyClick(Qt.Key_Down); compare(pkg.armedApply, "")
+    pkg.armingState = "armed"; pkg.armedKind = "here"; pkg.armedApply = "here"
+    keyClick(Qt.Key_A)
+    compare(pkg.applying, true, "A confirmed the armed apply")
+  }
+  function test_f_naming() {
+    fresh()
+    pkg.setTab(5); wait(30)
+    verify(search.activeFocus, "flakes puts the keyboard in the field")
+    pkg.inspected = { ok: true, ref: "github:o/r", rows: [] }
+    search.text = "github:o/r"
+    var s = pkg.beginNaming(); verify(pkg.naming)
+    search.text = s
+    keyClick(Qt.Key_Escape)
+    compare(pkg.naming, false); compare(search.text, "github:o/r")
+  }
+  function test_g_search_field() {
+    fresh()
+    keyClick(Qt.Key_Slash); verify(search.activeFocus)
+    keyClick(Qt.Key_L); compare(search.text, "l"); compare(pkg.tab, 0)
+    keyClick(Qt.Key_Tab); compare(pkg.tab, 1); verify(!search.activeFocus); verify(keys.activeFocus)
+  }
+  function test_h_focus_tabs() {
+    fresh()
+    pkg.setTab(5); wait(30); verify(search.activeFocus)
+    pkg.setTab(0); wait(30); verify(keys.activeFocus); verify(!search.activeFocus)
+  }
+  function test_i_escape_ladder() {
+    fresh()
+    keyClick(Qt.Key_Slash); keyClick(Qt.Key_X); compare(search.text, "x")
+    keyClick(Qt.Key_Escape)
+    compare(search.text, ""); verify(menu.opened); verify(keys.activeFocus && !search.activeFocus)
+    keyClick(Qt.Key_Escape); compare(menu.opened, false)
+  }
+  function test_j_close_finishes_form() {
+    fresh()
+    form.begin({ path: "services.x.enable" }); menu.close()
+    verify(!form.open); compare(menu.opened, false)
+  }
+
+  function test_k_search_hands_back_on_down() {
+    fresh()
+    keyClick(Qt.Key_Slash); verify(search.activeFocus)
+    keyClick(Qt.Key_Down)
+    verify(!search.activeFocus); verify(keys.activeFocus); compare(pkg.cursor, 1)
+  }
+  function test_l_search_return_hands_back() {
+    fresh()
+    keyClick(Qt.Key_Slash); keyClick(Qt.Key_Return)
+    verify(!search.activeFocus); verify(keys.activeFocus)
+    compare(pkg._writer.running, true)
+  }
+
+  function test_m_key_sheet_scrolls() {
+    fresh()
+    menu.keyText = longText(); menu.keysOpen = true
+    var v = plainFlick(); verify(v, "key sheet view"); verify(v.contentHeight > v.height)
+    keyClick(Qt.Key_Down); verify(v.contentY > 0); var y = v.contentY
+    keyClick(Qt.Key_Up); verify(v.contentY < y)
+    keyClick(Qt.Key_End); compare(v.contentY, v.contentHeight - v.height)
+    keyClick(Qt.Key_Home); compare(v.contentY, 0)
+    compare(menu.keysOpen, true); compare(pkg.cursor, 0)
+  }
+  function test_n_detail_scrolls() {
+    fresh()
+    pkg.detailText = longText()
+    var v = plainFlick(); verify(v, "detail view"); verify(v.contentHeight > v.height)
+    keyClick(Qt.Key_J); verify(v.contentY > 0)
+    keyClick(Qt.Key_PageDown); verify(v.contentY > 0)
+    keyClick(Qt.Key_Home); compare(v.contentY, 0)
+    compare(pkg.detailText, longText()); compare(pkg.cursor, 0)
+  }
+  function test_o_armed_cancelled_by_a_non_moving_key() {
+    fresh()
+    pkg.armingState = "armed"; pkg.armedKind = "here"; pkg.armedApply = "here"
+    keyClick(Qt.Key_Slash)
+    compare(pkg.armedApply, ""); compare(pkg.armingState, "")
+    pkg.armingState = "reading"
+    keyClick(Qt.Key_Question)
+    compare(pkg.armingState, "")
+  }
+  function test_p_naming_return() {
+    fresh()
+    pkg.setTab(5); wait(30)
+    pkg.inspected = { ok: true, ref: "github:o/r", rows: [] }
+    search.text = "github:o/r"
+    search.text = pkg.beginNaming(); search.text = "myname"
+    pkg.busy = true
+    keyClick(Qt.Key_Return)
+    compare(pkg.naming, true); compare(search.text, "myname")
+    pkg.busy = false
+    keyClick(Qt.Key_Return)
+    compare(pkg.naming, false); compare(search.text, "")
+    compare(pkg._writer.command.slice(1).join(" "), "flake add myname github:o/r")
+  }
+  function test_q_search_forwards_up_and_enter() {
+    fresh()
+    pkg.cursor = 2
+    keyClick(Qt.Key_Slash); verify(search.activeFocus)
+    keyClick(Qt.Key_Up); verify(!search.activeFocus); compare(pkg.cursor, 1)
+    keyClick(Qt.Key_Slash); verify(search.activeFocus)
+    keyClick(Qt.Key_Enter); verify(!search.activeFocus); compare(pkg._writer.running, true)
+  }
+  function test_r_escape_ladder_in_full() {
+    fresh()
+    search.text = "x"
+    pkg.inspected = { ok: true, ref: "github:o/r", rows: [] }
+    pkg.checkRunning = true; pkg._check.running = true
+    keyClick(Qt.Key_Escape)
+    compare(pkg._check.running, false); verify(pkg.inspected !== null); compare(search.text, "x")
+    pkg.checkRunning = false
+    keyClick(Qt.Key_Escape)
+    compare(pkg.inspected, null); compare(search.text, "x"); verify(menu.opened)
+    keyClick(Qt.Key_Escape); compare(search.text, ""); verify(menu.opened)
+    keyClick(Qt.Key_Escape); compare(menu.opened, false)
+  }
+  function test_s_reopens_fresh() {
+    fresh()
+    keyClick(Qt.Key_Right); compare(pkg.tab, 1)
+    keyClick(Qt.Key_Slash); keyClick(Qt.Key_X)
+    menu.close()
+    verify(!keys.visible); compare(menu.opened, false)
+    menu.open("{}"); wait(30)
+    compare(pkg.tab, 0); compare(search.text, ""); compare(menu.keysOpen, false)
+    verify(keys.activeFocus); verify(!search.activeFocus)
+  }
+}

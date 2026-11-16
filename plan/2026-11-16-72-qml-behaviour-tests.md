@@ -599,3 +599,5 @@ Only 1 is in the approved spec. 2 and 3 are follow-ups the spec's decisions
    the string field and the scaffold editor of `OptionForm.qml`. Decide per
    line: delete it, or keep it as a deliberate belt-and-braces and add a
    comment. Separate change, with its own tests. Not blocking.
+
+(Deviation, step 0-4: main moved past the plan. Menu.qml gained `keyCancelsFlakeArm`, Space arming on a declared flake row and `search.text = ""` in `onTabChanged` (#63 A), yet all 21 Menu tests pass unchanged. Baseline totals are Card 36 and PkgModel 54, not 33 and 41. `tst_panel.qml` gained the `{ ok: false }` no-error case, `tst_menu.qml` gained `cleanup()` and the RETURN-acts-on-list assertion, as the plan required. Main moved again to 20816d5 (#88) after the rebase and changed `tst_optionform.qml`, so the branch needs another rebase.)
