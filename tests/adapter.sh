@@ -37,6 +37,12 @@ for n in omarchy-notification-send notify-send; do
   printf '#!/bin/sh\nexit 0\n' >"$QUIET/$n"; chmod +x "$QUIET/$n"
 done
 PATH="$QUIET:$PATH"; export PATH
+# A catalogue of our own: the adapter only reads the `optionsjson=` line of
+# nixarchy-search, so the option-form checks need no real index (#61).
+FIXSTUB=$(mktemp -d)
+printf '#!/bin/sh\noptionsjson=%s\n' "$HERE/tests/fixtures/options.json" >"$FIXSTUB/nixarchy-search"
+chmod +x "$FIXSTUB/nixarchy-search"
+fx() { PATH="$FIXSTUB:$PATH" "$ADAPTER" "$@"; }
 
 # A selection of this machine's own catalogue, in a directory that is thrown
 # away afterwards.
@@ -227,6 +233,8 @@ merged=$(printf '{ a = { x = 1; }; a.y = 2; }' | nix-instantiate --eval --strict
 check "a path assignment merges with an existing attrset" \
   test "$merged" = '{ a = { x = 1; y = 2; }; }'
 
+# The build sandbox has no network or writable nix store; CI and developer machines run these.
+if [ "${NIXARCHY_PKG_TEST_OFFLINE:-0}" != 1 ]; then
 FK=$(fresh_flake)
 out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake add lib "path:$FLAKE_TMP/lib" 2>&1 || true)
 check "declares an input"            jq -e '.ok == true'          <<<"$out"
@@ -319,6 +327,7 @@ out=$("$ADAPTER" flake show "path:$FLAKE_TMP/lib" 2>&1 || true)
 check "enumerates nixosModules"      jq -e '.nixosModules | index("default")' <<<"$out"
 check "sees the alias too"           jq -e '.nixosModules | index("thing")'   <<<"$out"
 check "reports opaque namespaces as a list" jq -e '.opaque | type == "array"' <<<"$out"
+else echo "  skip: needs a writable nix store or the network (flake inputs)"; fi
 check "says so when a flake cannot be read" \
   jq -e '.ok == false and (.message | length > 0)' \
   <<<"$("$ADAPTER" flake show "path:$FLAKE_TMP/nowhere" 2>&1 || true)"
@@ -398,6 +407,12 @@ check "pkg remove takes it out"     jq -e '.packages | map(.attr) | index("ripgr
 check "apps.nix still parses"       nix-instantiate --parse "$CONFIG/nixarchy/apps.nix"
 rm -rf "$CONFIG"
 
+echo "fixture options"
+check "the fixture catalogue answers a boolean" \
+  jq -e '.ok == true and .widget == "boolean"' <<<"$(fx opt describe t.bool)"
+check "and says so for an option it lacks" \
+  jq -e '.ok == false' <<<"$(fx opt describe t.nope)"
+
 echo "options"
 if [ -n "$(command -v nixarchy-search)" ]; then
   d=$("$ADAPTER" opt describe services.openssh.enable)
@@ -463,7 +478,9 @@ APPSNIX="$CONFIG/nixarchy/apps.nix"
 check "spaces inside a string survive" grep -qF 'networking.hostName = "a  b";' "$APPSNIX"
 before=$(md5sum < "$APPSNIX")
 out=$("$ADAPTER" opt set environment.etc.x.text $'{\n  a = \x27\x27x\x27\x27;\n}')
-check "a multi-line '' string is refused"  jq -e '.ok == false' <<<"$out"
+check "a multi-line attrset with a string is written" jq -e '.ok == true' <<<"$out"
+check "its value is on one line" grep -qF "environment.etc.x.text = {   a = ''x''; };" "$APPSNIX"
+before=$(md5sum < "$APPSNIX")
 out=$("$ADAPTER" opt set environment.etc.y.text $'{ # c\n  a = 1;\n}')
 check "a multi-line value with # is refused" jq -e '.ok == false' <<<"$out"
 check "and the file is untouched"          test "$(md5sum < "$APPSNIX")" = "$before"
@@ -480,6 +497,66 @@ check "the value line is byte-exact" \
 check "and it can still be removed" not grep -q '#@opt programs.htop.enable' "$APPSNIX"
 check "leaving a file that parses"  nix-instantiate --parse "$APPSNIX"
 rm -rf "$CONFIG"
+
+# Multi-line values are either re-emitted as one string, flattened with the
+# same Nix tree, or refused without touching apps.nix.
+check_one_line() {
+  local mode=$1 name=$2 value=$3 expected=$4 out before
+  CONFIG=$(mktemp -d); export XDG_CONFIG_HOME="$CONFIG"
+  mkdir -p "$CONFIG/nixarchy"
+  APPSNIX="$CONFIG/nixarchy/apps.nix"
+  printf '{ ... }:\n{\n}\n' > "$APPSNIX"
+  if [ "$mode" = replace ]; then
+    "$ADAPTER" opt set x.y true >/dev/null
+  fi
+  before=$(md5sum < "$APPSNIX")
+  out=$("$ADAPTER" opt "$mode" x.y "$value" 2>&1)
+  if [ "$expected" = refused ]; then
+    check "$mode $name refuses once" jq -se 'length == 1 and .[0].ok == false and (.[0].error | type == "string")' <<<"$out"
+    if [ "$name" = 'decoded marker' ]; then
+      check "$mode $name names the marker" jq -e '.error | contains("#@")' <<<"$out"
+    fi
+    check "$mode $name leaves apps.nix unchanged" test "$(md5sum < "$APPSNIX")" = "$before"
+  else
+    check "$mode $name succeeds" jq -e '.ok == true' <<<"$out"
+    check "$mode $name writes one line" grep -qF "x.y = $expected;" "$APPSNIX"
+  fi
+  rm -rf "$CONFIG"
+}
+
+literal=$'\x27\x27\n  a "q"\n  \x27\x27${x}\n\x27\x27'
+# shellcheck disable=SC2016 # ${x} belongs to Nix, not bash.
+expected_literal='"a \"q\"\n\${x}\n"'
+for mode in set replace; do
+  check_one_line "$mode" 'list whitespace' $'[ 1\n 2 ]' '[ 1  2 ]'
+  check_one_line "$mode" 'newline in list string' $'[ "a\nb" ]' refused
+  check_one_line "$mode" 'comment in attrset' $'{ a = 1; # c\n b = 2; }' refused
+  check_one_line "$mode" 'indented string literal' "$literal" "$expected_literal"
+  check_one_line "$mode" 'expression with getEnv' $'"a" +\n builtins.getEnv "X" + ""' '"a" +  builtins.getEnv "X" + ""'
+  check_one_line "$mode" 'decoded marker' $'"#\\@pkg x\n"' refused
+  check_one_line "$mode" 'control character' $'"a\nb\001"' refused
+  check_one_line "$mode" 'tab escape' $'"a\n\tb"' '"a\n\tb"'
+  check_one_line "$mode" 'carriage return escape' $'"a\n\\rb"' '"a\n\rb"'
+done
+for mode in set replace; do
+  CONFIG=$(mktemp -d); export XDG_CONFIG_HOME="$CONFIG"
+  mkdir -p "$CONFIG/nixarchy"
+  APPSNIX="$CONFIG/nixarchy/apps.nix"
+  if [ "$mode" = replace ]; then
+    printf '{ ... }:\n{ x.y = true;  #@opt x.y\n} # end\n' > "$APPSNIX"
+  else
+    printf '{ ... }:\n{ } # end\n' > "$APPSNIX"
+  fi
+  before=$(md5sum < "$APPSNIX")
+  out=$("$ADAPTER" opt "$mode" x.y $'[ 1\n 2 ]' 2>&1)
+  check "$mode missing probe insertion refuses once" jq -se 'length == 1 and .[0].ok == false and (.[0].error | type == "string")' <<<"$out"
+  check "$mode missing probe insertion gives the one-line refusal" jq -se '.[0].error | contains("on one line")' <<<"$out"
+  check "$mode missing probe insertion leaves apps.nix unchanged" test "$(md5sum < "$APPSNIX")" = "$before"
+  rm -rf "$CONFIG"
+done
+check "literal evaluation matches re-emitted value" test \
+  "$(nix-instantiate --eval --strict --json -E "$literal" 9>&- 8>&-)" = \
+  "$(nix-instantiate --eval --strict --json -E "$expected_literal" 9>&- 8>&-)"
 
 CONFIG=$(fresh_config); export XDG_CONFIG_HOME="$CONFIG"
 set_out=$("$ADAPTER" opt set services.openssh.settings.PermitRootLogin '"no"')
@@ -1201,8 +1278,12 @@ check "and the file is byte-identical"       test "$(md5sum < "$APPSNIX")" = "$b
 # The two refusals must stay distinct: telling someone who forged a marker to
 # put their value on one line is wrong advice.
 out=$("$ADAPTER" opt set my.opt "$(printf "''a\nb''")" 2>&1 || true)
-check "a multi-line value keeps its own refusal" \
-  jq -e '.error | contains("multi-line")' <<<"$out"
+check "a multi-line string is written" jq -e '.ok == true' <<<"$out"
+check "its newline is escaped" grep -qF 'my.opt = "a\nb";' "$APPSNIX"
+before=$(md5sum < "$APPSNIX")
+out=$("$ADAPTER" opt set my.list $'[ "a\nb" ]' 2>&1 || true)
+check "a nonliteral multiline string is refused" jq -e '.error | contains("one line")' <<<"$out"
+check "that refusal leaves the file unchanged" test "$(md5sum < "$APPSNIX")" = "$before"
 
 # Narrow on purpose: a # inside a string is legitimate Nix, and a hex colour
 # is the commonest option value there is.
@@ -1230,6 +1311,7 @@ else
   echo "skip: needs $TEMPLATES (not a nixarchy machine)"
 fi
 
+if [ "${NIXARCHY_PKG_TEST_OFFLINE:-0}" != 1 ]; then
 # "nothing was changed" has to mean it. A failed add used to leave behind
 # both a mode change and a flake.lock that nix created on its way to
 # failing.
@@ -1253,6 +1335,7 @@ NIXARCHY_FLAKE="$FKS" "$ADAPTER" flake remove lib >/dev/null 2>&1 || true
 check "flake remove takes the line out"   \
   test "$(grep -c '#@flake-input lib$' "$FKS/flake.nix" || true)" = 0
 check "and keeps flake.nix's mode"        test "$(stat -c %a "$FKS/flake.nix")" = 644
+else echo "  skip: needs a writable nix store or the network (flake inputs)"; fi
 
 # draft and reindex had no test at all, though draft calls writers that
 # create and mutate package files -- the same risk class as `pkg add` and
@@ -1313,6 +1396,150 @@ out=$(PATH="$DSTUB:$PATH" XDG_CACHE_HOME="$RCACHE" XDG_CONFIG_HOME="$DCFG" \
       "$ADAPTER" reindex 2>&1 || true)
 check "reindex over a no-op search reports failure" jq -e '.ok == false' <<<"$out"
 check "and says the index is still stale"           jq -e '.indexStale == true' <<<"$out"
+# The index object (#69): how old, and what changed.
+# stub_search_vars DIR NIXPKGS -- a nixarchy-search the adapter can read
+# inputs from; it does nothing when run.
+stub_search_vars() {
+  cat > "$1/nixarchy-search" <<SEOF
+#!/usr/bin/env bash
+nixpkgs=$2
+walk=/nix/store/w-pkg-index.nix
+optionsjson=/nix/store/o-options.json/share/doc/nixos/options.json
+appindex=/nix/store/a-nixarchy-app-index.tsv
+apptable=/nix/store/t-nixarchy-app-attrs.tsv
+flatpakrows=/nix/store/f-nixarchy-flatpak-rows.tsv
+pkgnewrow=/nix/store/n-nixarchy-pkg-new-row.tsv
+exit 0
+SEOF
+  chmod +x "$1/nixarchy-search"
+}
+# stamp_of NIXPKGS [WALK] -- the seven stamp lines; the rest match the stub.
+stamp_of() {
+  printf '%s\n' "$1" "${2:-/nix/store/w-pkg-index.nix}" \
+    /nix/store/o-options.json/share/doc/nixos/options.json \
+    /nix/store/a-nixarchy-app-index.tsv /nix/store/t-nixarchy-app-attrs.tsv \
+    /nix/store/f-nixarchy-flatpak-rows.tsv /nix/store/n-nixarchy-pkg-new-row.tsv
+}
+NOSEARCH=$(mktemp -d)
+IFS=: read -ra _dirs <<<"$PATH"
+for _d in "${_dirs[@]}"; do
+  for _f in "$_d"/*; do
+    [ -e "$_f" ] || continue
+    _n=${_f##*/}
+    [ "$_n" = nixarchy-search ] || [ -e "$NOSEARCH/$_n" ] || ln -s "$_f" "$NOSEARCH/$_n"
+  done
+done
+check "the no-search PATH really has none" \
+  not env PATH="$NOSEARCH" bash -c 'command -v nixarchy-search'
+
+ISTUB=$(mktemp -d); stub_search_vars "$ISTUB" /nix/store/n1-n1-source
+# icase NAME SEARCHPATH -- a fresh cache dir in $IC, with an index row.
+icase() { IC=$(mktemp -d); mkdir -p "$IC/nixarchy"; printf 'pkg\tfoo\tFoo thing\t\t\n' > "$IC/nixarchy/index.tsv"; }
+istate() { PATH="$1:$PATH" XDG_CACHE_HOME="$IC" XDG_CONFIG_HOME="$DCFG" "$ADAPTER" state; }
+istate_ns() { PATH="$NOSEARCH" XDG_CACHE_HOME="$IC" XDG_CONFIG_HOME="$DCFG" "$ADAPTER" state; }
+
+IC=$(mktemp -d)
+out=$(istate "$ISTUB")
+check "no index: status missing, no builtAt" \
+  jq -e '.index.status == "missing" and .index.builtAt == null and .indexStale' <<<"$out"
+mkdir -p "$IC/nixarchy"; : > "$IC/nixarchy/index.tsv"
+out=$(istate "$ISTUB")
+check "a 0-byte index is missing too" \
+  jq -e '.index.status == "missing" and .index.builtAt == null and .indexStale' <<<"$out"
+rm -rf "$IC"
+
+icase; stamp_of /nix/store/n1-n1-source > "$IC/nixarchy/stamp"; out=$(istate "$ISTUB")
+check "a matching stamp is fresh" \
+  jq -e '.index.status == "fresh" and .index.changed == null and (.indexStale | not)' <<<"$out"
+rm -rf "$IC"
+
+icase; stamp_of /nix/store/n0-n0-source /nix/store/w0-pkg-index.nix > "$IC/nixarchy/stamp"; out=$(istate "$ISTUB")
+check "two inputs differ: both named, in order" \
+  jq -e '.index.changed == ["nixpkgs", "index builder"] and .indexStale' <<<"$out"
+rm -rf "$IC"
+
+icase
+{ stamp_of /nix/store/n1-n1-source | sed -e '4s/a-/b-/' -e '5s/t-/u-/'; } > "$IC/nixarchy/stamp"; out=$(istate "$ISTUB")
+check "the two app inputs are one name" \
+  jq -e '.index.changed == ["app list"]' <<<"$out"
+rm -rf "$IC"
+
+icase; out=$(istate "$ISTUB")
+check "an index with no stamp is stale, with a builtAt and no names" \
+  jq -e '.index.status == "stale" and .index.changed == null and (.index.builtAt | type == "number")' <<<"$out"
+rm -rf "$IC"
+
+icase; stamp_of /nix/store/n0-n0-source | head -6 > "$IC/nixarchy/stamp"; out=$(istate "$ISTUB")
+check "a six-line stamp names nothing" jq -e '.index.changed == null and .indexStale' <<<"$out"
+rm -rf "$IC"
+
+icase; stamp_of /nix/store/n0-n0-source /nix/store/x-other.nix > "$IC/nixarchy/stamp"; out=$(istate "$ISTUB")
+check "an unrecognised stamp line names nothing" jq -e '.index.changed == null and .indexStale' <<<"$out"
+rm -rf "$IC"
+
+OSTUB=$(mktemp -d); stub_search_vars "$OSTUB" /nix/store/n1-n1-source
+sed -i 's|^optionsjson=.*|optionsjson=|' "$OSTUB/nixarchy-search"
+icase; stamp_of /nix/store/n1-n1-source | sed '3s|.*||' > "$IC/nixarchy/stamp"; out=$(istate "$OSTUB")
+check "an empty options line is fresh when it matches" jq -e '.index.status == "fresh"' <<<"$out"
+stamp_of /nix/store/n0-n0-source | sed '3s|.*||' > "$IC/nixarchy/stamp"; out=$(istate "$OSTUB")
+check "an empty options line still names a changed nixpkgs" \
+  jq -e '.index.status == "stale" and .index.changed == ["nixpkgs"]' <<<"$out"
+rm -rf "$IC" "$OSTUB"
+
+icase; stamp_of /nix/store/n0-n0-source > "$IC/nixarchy/stamp"; out=$(istate_ns)
+check "no nixarchy-search: stale, no names" jq -e '.index.status == "stale" and .index.changed == null' <<<"$out"
+rm -rf "$IC"
+
+icase; out=$(istate_ns)
+check "no nixarchy-search and no stamp reads fresh (kept corner case)" jq -e '.index.status == "fresh"' <<<"$out"
+rm -rf "$IC"
+
+icase; stamp_of /nix/store/n1-n1-source > "$IC/nixarchy/stamp"
+out=$(PATH="$ISTUB:$PATH" XDG_CACHE_HOME="$IC" XDG_CONFIG_HOME="$DCFG" "$ADAPTER" search foo)
+check "search carries the index object" jq -e '.index.status == "fresh"' <<<"$out"
+rm -rf "$IC" "$ISTUB"
+
+# reindex: the reason a failed rebuild gives, minus the builder's noise.
+# rstub STDERR_TEXT EXIT -- a nixarchy-search that writes no index.
+rstub() {
+  printf '#!/usr/bin/env bash\ncat >&2 <<'"'"'EOT'"'"'\n%s\nEOT\nexit %s\n' "$1" "$2" > "$DSTUB/nixarchy-search"
+  chmod +x "$DSTUB/nixarchy-search"
+}
+rre() { IC=$(mktemp -d); PATH="$DSTUB:$PATH" XDG_CACHE_HOME="$IC" XDG_CONFIG_HOME="$DCFG" "$ADAPTER" reindex 2>&1 || true; rm -rf "$IC"; }
+
+rstub "" 0; out=$(rre)
+check "a silent no-op: error names the log" jq -e '.ok == false and (.error | contains("index-errors.log")) and .detail == []' <<<"$out"
+
+rstub 'Building the search index. This happens when nixpkgs changes.
+  indexing nixpkgs (this takes about a minute)...
+inappropriate ioctl for device' 0; out=$(rre)
+check "progress and picker noise leave no detail" \
+  jq -e '.detail == [] and (.error | contains("nixarchy-search gave no reason"))' <<<"$out"
+
+rstub '  indexing nixpkgs failed; the end of /x/index-errors.log:
+boom' 1; out=$(rre)
+check "the builder's own reason is the error" \
+  jq -e '(.error | contains("boom")) and .detail == ["indexing nixpkgs failed; the end of /x/index-errors.log:", "boom"]' <<<"$out"
+
+rstub '  indexing nixpkgs failed; the end of /x/index-errors.log:
+evaluation warning: x
+evaluation warning: x
+evaluation warning: x
+evaluation warning: x
+evaluation warning: x' 1; out=$(rre)
+check "evaluation warnings are dropped" \
+  jq -e '.detail == ["indexing nixpkgs failed; the end of /x/index-errors.log:"] and (.error | contains("gave no reason"))' <<<"$out"
+cat > "$DSTUB/nixarchy-search" <<'SEOF'
+#!/usr/bin/env bash
+head -c 200000 /dev/zero | tr '\0' x >&2
+printf '\nfinal failure\n' >&2
+exit 1
+SEOF
+chmod +x "$DSTUB/nixarchy-search"
+out=$(rre)
+check "oversized stderr still produces a JSON answer" \
+  jq -e '.ok == false and (.error | contains("final failure")) and .detail[-1] == "final failure"' <<<"$out"
+rm -rf "$NOSEARCH"
 rm -rf "$DSTUB" "$DCFG" "$RCACHE"
 
 echo "a write that fails or races leaves the files recoverable (#59)"
@@ -1452,6 +1679,7 @@ kill "$lockpid" 2>/dev/null || true; wait "$lockpid" 2>/dev/null || true
 rm -f "$W59/held"
 left_nothing "apply lock"
 
+if [ "${NIXARCHY_PKG_TEST_OFFLINE:-0}" != 1 ]; then
 mkdir -p "$W59/fk" "$W59/dep"
 printf '{\n  outputs = { self }: { };\n}\n' > "$W59/fk/flake.nix"
 printf '{\n  outputs = { self }: { nixosModules.default = { }; };\n}\n' > "$W59/dep/flake.nix"
@@ -1505,6 +1733,7 @@ check "read-only lock: refused, no failed undo" jq -e '.ok == false and (.error 
 check "read-only lock: unchanged" test "$(md5sum < "$W59/fk/flake.lock")" = "$before_lock"
 chmod 644 "$W59/fk/flake.lock"
 left_nothing "read-only lock"
+else echo "  skip: needs a writable nix store or the network (flake inputs)"; fi
 
 # A dangling symlink is refused, never recorded as absent and deleted.
 reset_apps; mv "$A59" "$W59/real.nix"; ln -s "$W59/gone.nix" "$A59"
@@ -1803,6 +2032,6 @@ echo
 check "no catalogue toggle wrote into HOME" \
   test -z "$(find "$THOME" -mindepth 1 -print -quit)"
 find "$THOME" -mindepth 1 -printf '  in the scratch HOME: %P\n'
-rm -rf "$XDG_STATE_HOME" "$THOME" "$QUIET"
+rm -rf "$XDG_STATE_HOME" "$THOME" "$QUIET" "$FIXSTUB"
 if [ "$fails" -gt 0 ]; then echo "$fails failed"; exit 1; fi
 echo "all passed"
