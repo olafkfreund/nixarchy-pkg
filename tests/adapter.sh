@@ -29,6 +29,14 @@ not() { ! "$@"; }
 XDG_STATE_HOME=$(mktemp -d); export XDG_STATE_HOME
 # A HOME for catalogue toggles only (ctoggle), so no writer reaches ~.
 THOME=$(mktemp -d)
+# The writers announce every toggle on the desktop. A test run is not news:
+# silent stand-ins first on PATH, or each run floods the user's real
+# notification centre with "queued -- not installed yet".
+QUIET=$(mktemp -d)
+for n in omarchy-notification-send notify-send; do
+  printf '#!/bin/sh\nexit 0\n' >"$QUIET/$n"; chmod +x "$QUIET/$n"
+done
+PATH="$QUIET:$PATH"; export PATH
 
 # A selection of this machine's own catalogue, in a directory that is thrown
 # away afterwards.
@@ -1538,6 +1546,6 @@ echo
 check "no catalogue toggle wrote into HOME" \
   test -z "$(find "$THOME" -mindepth 1 -print -quit)"
 find "$THOME" -mindepth 1 -printf '  in the scratch HOME: %P\n'
-rm -rf "$XDG_STATE_HOME" "$THOME"
+rm -rf "$XDG_STATE_HOME" "$THOME" "$QUIET"
 if [ "$fails" -gt 0 ]; then echo "$fails failed"; exit 1; fi
 echo "all passed"
