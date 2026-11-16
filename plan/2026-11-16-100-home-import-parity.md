@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 100
 spec: spec/2026-11-16-100-home-import-parity.md
 coders:
