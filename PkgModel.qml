@@ -191,10 +191,10 @@ QtObject {
       }
       var pkgs = inspected.packages || []
       for (var p = 0; p < pkgs.length; p++)
-        rows.push({ kind: "package", label: pkgs[p] })
+        rows.push({ kind: "package", name: pkgs[p], label: pkgs[p] + " (package)" })
       var overlays = inspected.overlays || []
       for (var o = 0; o < overlays.length; o++)
-        rows.push({ kind: "overlay", label: overlays[o] })
+        rows.push({ kind: "overlay", name: overlays[o], label: overlays[o] + " (overlay)" })
       if (pkgs.length === 0 && inspected.otherCount > 0)
         rows.push({ kind: "note", label: inspected.otherCount + " packages for other systems, none for this one" })
       // Named, never drawn as an empty list. `nix flake show` types
@@ -216,7 +216,7 @@ QtObject {
                 + " NIXARCHY_FLAKE (programs.nixarchy.flake sets it); it must be set in the"
                 + " session the shell runs in, not only in a terminal." })
     if (state.flakesStale)
-      out.push({ kind: "note", label: "flake.lock is older than flake.nix, so this list may be out of date -- the next apply locks it" })
+      out.push({ kind: "note", label: "a declared input is missing from flake.lock -- the next apply locks it" })
     return out.concat(have.map(function (f) {
       return { kind: "declared", label: f.name, name: f.name, url: f.url,
                mine: f.mine, follows: f.follows, locked: f.locked,
@@ -745,8 +745,8 @@ QtObject {
     if (naming) { namingName = q; return }
     // On Flakes, a different ref is a different question: RETURN must never
     // act on what the field held before (#29).
-    if (flakeTab && inspected !== null && !inspected.declaredAs
-        && q !== String(inspected.ref)) invalidateInspection()
+    if (flakeTab && inspected !== null && (inspected.declaredAs ? q !== "" : q !== String(inspected.ref)))
+      invalidateInspection()
     query = q
     cursor = 0
     if (indexTab) _debounce.restart()
@@ -812,10 +812,10 @@ QtObject {
         if (row.kind === "declared") inspectRow(row)
         else if (row.kind === "declare") { if (host && host.startNaming) host.startNaming() }
         else if (row.kind === "module" || row.kind === "package" || row.kind === "overlay") {
-          var n = inspected.declaredAs || suggestInputName(inspected.ref)
+          var n = attrName(inspected.declaredAs || suggestInputName(inspected.ref))
           var line = row.kind === "module" ? "inputs." + n + ".nixosModules." + attrName(row.name)
-                   : row.kind === "package" ? "inputs." + n + ".packages.${pkgs.stdenv.hostPlatform.system}." + attrName(row.label)
-                   : "inputs." + n + ".overlays." + attrName(row.label)
+                   : row.kind === "package" ? "inputs." + n + ".packages.${pkgs.stdenv.hostPlatform.system}." + attrName(row.name)
+                   : "inputs." + n + ".overlays." + attrName(row.name)
           var where = row.kind === "module" ? "the host's imports"
                     : row.kind === "package" ? "environment.systemPackages" : "nixpkgs.overlays"
           message = line + " goes in " + where + " -- this tool does not know which file that is"
@@ -965,9 +965,9 @@ QtObject {
         if (root._inspectRun !== root._inspectToken) return
         root.inspecting = false
         try {
-          root.inspected = JSON.parse(text)
-          if (root._inspectAs && root.inspected.ok === true)
-            root.inspected.declaredAs = root._inspectAs
+          var r = JSON.parse(text)
+          if (root._inspectAs && r.ok === true) r.declaredAs = root._inspectAs
+          root.inspected = r
           root.message = ""
         } catch (e) {
           root.inspected = null

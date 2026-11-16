@@ -1435,7 +1435,7 @@ cmd_flake_remove() {
     die "that would have left $file unparseable, so nothing was changed: $(nix_why "$err")"
   fi
   cp "$tmp" "$file"   # not mv; see cmd_opt_set (#39)
-  if ! timeout 120 "${NIX[@]}" flake lock "$dir" >/dev/null 2>"$err" 9>&- 8>&-; then
+  if ! timeout -k 10 120 "${NIX[@]}" flake lock "$dir" >/dev/null 2>"$err" 9>&- 8>&-; then
     die "could not lock the flake without '$name', so nothing was changed: $(nix_why "$err")"
   fi
   if ! timeout -k 10 120 "${NIX[@]}" flake metadata "$dir" >/dev/null 2>"$err" 9>&- 8>&-; then
@@ -1450,12 +1450,11 @@ cmd_flake_remove() {
 
 # Root inputs from the lock, plus marked lines not locked yet.
 cmd_flake_list() {
-  local dir="${NIXARCHY_FLAKE:-/etc/nixos}" file lock source stale=false
+  local dir="${NIXARCHY_FLAKE:-/etc/nixos}" file lock source
   file="$dir/flake.nix"; lock="$dir/flake.lock"; source=/dev/null
   [ -r "$file" ] || { jq -nc --arg dir "$dir" '{ok: true, dir: $dir, stale: false, inputs: []}'; return; }
-  [ -r "$lock" ] && source="$lock" || stale=true
-  [ "$stale" = true ] || [ ! "$lock" -ot "$file" ] || stale=true
-  jq -nc --arg dir "$dir" --argjson stale "$stale" \
+  [ -r "$lock" ] && source="$lock"
+  jq -nc --arg dir "$dir" \
     --rawfile marks <(awk '
       /#@flake-input [A-Za-z_][A-Za-z0-9_-]*$/ {
         n = $0; sub(/^.*#@flake-input /, "", n)
@@ -1492,7 +1491,7 @@ cmd_flake_list() {
     | (reduce ($marks | split("\n")[] | select(length > 0) | split("\t")) as $m
         ({}; .[$m[0]] = (if ($m[1] // "") != "" then $m[1] else (.[ $m[0] ] // "") end))) as $marked
     | (($l.nodes // {})[($l.root // "root")].inputs // {}) as $root
-    | {ok: true, dir: $dir, stale: $stale,
+    | {ok: true, dir: $dir, stale: ([$marked | keys[] | select($root[.] == null)] | length > 0),
        inputs: ((($root | keys) + ($marked | keys) | unique | sort) | map(
          . as $name | $root[$name] as $entry
          | (if ($entry | type) == "string" then $l.nodes[$entry] else null end) as $node

@@ -12,6 +12,7 @@ TestCase {
   when: windowShown
 
   PkgModel { id: m }
+  property var boundRows: m.rows()
 
   function cleanup() {
     m.busy = false
@@ -743,6 +744,26 @@ TestCase {
     compare(m.flakeRows()[0].label, "inputs.t = path:/t")
   }
 
+  function test_declared_inspection_updates_bound_rows() {
+    m.setTab(5)
+    m.state = { flakeDir: "/f", flakeFound: true, flakes:
+      [{ name: "tool", url: "path:/t", mine: true, locked: true, inspectable: true, flake: true }] }
+    m.cursor = 1
+    m.activate()
+    m._inspector.deliver(JSON.stringify({ ok: true, ref: "path:/t", nixosModules: ["default"] }))
+    tryCompare(boundRows[0], "label", "inputs.tool = path:/t")
+    compare(boundRows.filter(function (r) { return r.kind === "declare" }).length, 0)
+    compare(boundRows.filter(function (r) { return r.kind === "module" })[0].label,
+            "inputs.tool.nixosModules.default")
+  }
+
+  function test_typing_ref_discards_declared_inspection() {
+    m.setTab(5)
+    m.inspected = { ok: true, ref: "path:/old", declaredAs: "tool", nixosModules: ["default"] }
+    m.setQuery("path:/new")
+    compare(m.inspected, null)
+  }
+
   function test_declared_inspection_waits_for_previous_process() {
     m.setTab(5)
     m.setQuery("path:/a")
@@ -758,22 +779,24 @@ TestCase {
 
   function test_flake_rows_and_lines() {
     m.setTab(5)
-    m.inspected = { ok: true, ref: "path:/t", declaredAs: "t", nixosModules: ["foo.bar"],
-                    packages: ["hello"], overlays: ["default"], otherCount: 1 }
+    m.inspected = { ok: true, ref: "path:/t", declaredAs: "foo.bar", nixosModules: ["foo.bar"],
+                    packages: ["same"], overlays: ["same"], otherCount: 1 }
     var rows = m.flakeRows()
     compare(rows.filter(function (r) { return r.kind === "declare" }).length, 0)
     compare(rows.filter(function (r) { return r.kind === "package" }).length, 1)
+    compare(rows[2].label, "same (package)")
+    compare(rows[3].label, "same (overlay)")
     m.cursor = 1
     m.activate()
-    verify(m.message.indexOf('nixosModules."foo.bar"') >= 0)
+    verify(m.message.indexOf('inputs."foo.bar".nixosModules."foo.bar"') >= 0)
     m.cursor = 2
     m.activate()
-    verify(m.message.indexOf("environment.systemPackages") >= 0)
+    verify(m.message.indexOf('inputs."foo.bar".packages.${pkgs.stdenv.hostPlatform.system}.same') >= 0)
     m.cursor = 3
     m.activate()
-    verify(m.message.indexOf("nixpkgs.overlays") >= 0)
+    verify(m.message.indexOf('inputs."foo.bar".overlays.same') >= 0)
     compare(m.attrName("foo.bar"), '"foo.bar"')
-    compare(m.attrName("hello"), "hello")
+    compare(m.attrName("same"), "same")
   }
 
   function test_unowned_input_cannot_be_removed_but_can_be_updated() {

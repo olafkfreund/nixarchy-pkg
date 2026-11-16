@@ -27,7 +27,7 @@ What comes back is a list of what the flake exposes:
 · github:nix-community/nixvim
 · nixosModules.default
 · nixosModules.nixvim
-· hello (package for this system)
+· hello (package)
 · default (overlay)
 · homeManagerModules — exists, contents cannot be read
 · homeModules — exists, contents cannot be read
@@ -128,8 +128,8 @@ in the session the shell runs in, not only in a terminal.
 
 The list shows every input in `flake.lock`, including inputs this tool did
 not write. Those are dimmed and marked. A marked input not yet in the lock
-also appears. If `flake.lock` is older than `flake.nix`, a note warns that
-the list may be out of date until the next apply locks it.
+also appears. If a marked input has no node in `flake.lock`, a note warns
+that the next apply will lock it.
 
 `RETURN` on a declared input inspects it again under its declared name.
 Packages for this system and overlays appear by name. The panel shows the
