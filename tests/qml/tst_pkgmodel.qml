@@ -61,12 +61,39 @@ TestCase {
     m.optionsSource = ""
     m.optionsStale = false
     m.optionsError = ""
+    m.userScope = ({ available: false, reason: "user scope is not available yet" })
     m._optionsAuto = false
     m._optionsRefresh.running = false
     m._optionsRefresh.command = []
     m._reader.running = false
+    m._writer.running = false
+    m._writer.command = []
     m._reader.command = []
     m._searcher.running = false
+  }
+
+  function test_user_scope_package_identity_and_refusal() {
+    m.state = { packages: [{ attr: "git", scope: "system" }, { attr: "git", scope: "user" }] }
+    m.setTab(2)
+    m.cursor = 1
+    m.activate()
+    compare(m.message, "user scope is not available yet")
+    compare(m._writer.running, false)
+    m.userScope = { available: true, reason: "" }
+    m.activate()
+    compare(m._writer.command.slice(1), ["pkg", "remove", "--scope", "user", "git"])
+  }
+
+  function test_user_scope_add_key() {
+    m.setTab(2)
+    m.query = "git"
+    m.results = [{ name: "git", scope: "system" }]
+    m.addInUserScope()
+    compare(m._writer.running, false)
+    compare(m.message, "user scope is not available yet")
+    m.userScope = { available: true, reason: "" }
+    m.addInUserScope()
+    compare(m._writer.command.slice(1), ["pkg", "add", "--scope", "user", "git"])
   }
 
   function pend(o) {

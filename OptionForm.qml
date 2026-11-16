@@ -4,7 +4,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 
-// One NixOS option, with a widget chosen from its declared type.
+// One system or user option, with a widget chosen from its declared type.
 //
 // The widgets are the shell's own -- Toggle, TextField,
 // Dropdown -- so an option here looks like every other control on this
@@ -34,6 +34,7 @@ FocusScope {
   property bool open: false
   property var option: ({})
   property string path: ""
+  property string scope: "system"
   property string error: ""
   property bool armedRemove: false
 
@@ -51,6 +52,7 @@ FocusScope {
   // The path a write in flight is for. A result for any other form -- this
   // one closed and another opened meanwhile -- is not this form's (#28).
   property string writingPath: ""
+  property string writingScope: ""
   readonly property string fontFamily: Style.font.family
   // Alpha, not darkening: darkening inverts the hierarchy on light themes.
   readonly property color dim: Qt.rgba(Commons.Color.menu.text.r, Commons.Color.menu.text.g, Commons.Color.menu.text.b, 0.6)
@@ -85,7 +87,7 @@ FocusScope {
         var data
         try { data = JSON.parse(text) } catch (e) { data = null }
         // Late: the form closed, or moved on to another option.
-        if (!root.open || (data && data.path && data.path !== root.path)) return
+        if (!root.open || (data && data.path && (data.path !== root.path || (data.scope || "system") !== root.scope))) return
         if (!data || data.ok === false) {
           root.error = data && data.error ? String(data.error) : "could not read that option"
           root.option = ({})
@@ -114,7 +116,7 @@ FocusScope {
         if (root.model) root.model.busy = false
         var data
         try { data = JSON.parse(text) } catch (e) { data = null }
-        if (!root.open || root.writingPath !== root.path) {
+        if (!root.open || root.writingPath !== root.path || root.writingScope !== root.scope) {
           // The form moved on, but the write still happened -- the adapter
           // had written the file before this answer was sent. The panel
           // must not go on showing pre-write state just because nobody is
@@ -156,13 +158,14 @@ FocusScope {
     var p = row ? (row.path || row.name || "") : ""
     if (!p) return
     root.path = p
+    root.scope = (row && row.scope) || "system"
     root.forceScaffold = false
     root.armedRemove = false
     root.error = ""
     root.option = ({})
     root.open = true
     describe.command = [root.model.script, "opt", "describe",
-                        "--scope", (row && row.scope) || "system", p]
+                        "--scope", root.scope, p]
     describe.running = true
     // Take the keyboard now, not only in seed(): a describe that fails never
     // seeds, and the menu ignores keys while the form is open, so ESC went
@@ -178,6 +181,7 @@ FocusScope {
     // arrived after the form closed still matched once the SAME option was
     // reopened, and closed the form the user was typing into (#43).
     root.writingPath = ""
+    root.writingScope = ""
     // Let go of the keyboard. A hidden Item keeps focus and still gets keys,
     // so a form closed while focused went on eating ESC (#27).
     textField.focus = false
@@ -320,7 +324,8 @@ FocusScope {
     var verb = (current.state === "set" || current.state === "scaffold") ? "replace" : "set"
     root.model.busy = true
     root.writingPath = root.path
-    writeProc.command = [root.model.script, "opt", verb, root.path, value]
+    root.writingScope = root.scope
+    writeProc.command = [root.model.script, "opt", verb, "--scope", root.scope, root.path, value]
     writeProc.running = true
   }
 
@@ -358,7 +363,7 @@ FocusScope {
 
   function armRemove() {
     root.armedRemove = true
-    root.error = "DEL again removes " + path + " from apps.nix; ESC keeps it"
+    root.error = "DEL again removes " + path + " from " + (scope === "user" ? "home.nix" : "apps.nix") + "; ESC keeps it"
   }
 
   function disarmRemove() {
@@ -376,7 +381,8 @@ FocusScope {
     if (root.model.busy) { root.error = "still writing \u2014 try again in a moment"; return true }
     root.model.busy = true
     root.writingPath = root.path
-    writeProc.command = [root.model.script, "opt", "remove", root.path]
+    root.writingScope = root.scope
+    writeProc.command = [root.model.script, "opt", "remove", "--scope", root.scope, root.path]
     writeProc.running = true
     return true
   }

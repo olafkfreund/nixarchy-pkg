@@ -272,6 +272,9 @@ Item {
             case Qt.Key_Backtab: pkg.setTab(pkg.tab - 1); event.accepted = true; return
             case Qt.Key_Return:
             case Qt.Key_Enter:
+              if (event.modifiers & Qt.ControlModifier) {
+                pkg.addInUserScope(); event.accepted = true; return
+              }
               // SHIFT is the variant, the way SHIFT+A is the variant of `a`
               // below. Straight to the model rather than through
               // activateRow(), which detours tab 3 into the option form --
@@ -391,7 +394,7 @@ Item {
           anchors { top: parent.top; left: parent.left; right: parent.right }
           placeholderText: pkg.naming ? "input name"
                          : pkg.flakeTab ? "github:owner/repo\u2026"
-                         : pkg.tab === 3 ? "search NixOS options\u2026"
+                         : pkg.tab === 3 ? "search options\u2026"
                          : pkg.indexTab ? "search nixpkgs\u2026" : "filter\u2026"
           foreground: Commons.Color.menu.text
           onTextChanged: pkg.setQuery(text)
@@ -550,6 +553,10 @@ Item {
     var row = pkg.rowAt(pkg.cursor)
     if (!row) return
     if (pkg.tab === 3) {
+      if (row.scope === "user" && !pkg.userScope.available) {
+        pkg.message = pkg.userScope.reason
+        return
+      }
       form.begin(row)
       return
     }

@@ -72,6 +72,7 @@ SETTLE_FAILED=false
 readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/nixarchy"
 readonly CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/nixarchy"
 readonly APPS="$CONFIG_DIR/apps.nix"
+readonly HOME_NIX="$CONFIG_DIR/home.nix"
 readonly SERVICES="$CONFIG_DIR/services.nix"
 readonly INDEX="$CACHE_DIR/index.tsv"
 readonly STAMP="$CACHE_DIR/stamp"
@@ -354,6 +355,49 @@ searched() {
   sed -n "s/^${var}=\\(.*\\)$/\\1/p" "$path" | head -1
 }
 
+# Empty means the installed apply and this host can handle home.nix.
+user_scope() {
+  local apply meta user
+  apply=$(command -v nixarchy-apply 2>/dev/null) || :
+  if [ -z "$apply" ] || ! grep -qE '^for part in .*\bhome\b' "$apply"; then
+    printf '%s' 'this nixarchy has no Home Manager part; update nixarchy first'
+    return
+  fi
+  options_resolve
+  meta=${OPT_DIR:+$OPT_DIR/meta.json}
+  if [ -z "$meta" ] || [ ! -f "$meta" ]; then
+    printf '%s' 'no options were read from your flake yet -- run options refresh'
+    return
+  fi
+  if ! jq -e '.homeManager == true' "$meta" >/dev/null 2>&1; then
+    printf '%s' 'this host has no Home Manager (home-manager.users) in its configuration'
+    return
+  fi
+  user=$(id -un)
+  if ! jq -e --arg u "$user" '.users | index($u) != null' "$meta" >/dev/null 2>&1; then
+    printf '%s' "$user is not in home-manager.users"
+  fi
+}
+
+scope_args() {
+  SCOPE=system; ARGS=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --scope) [ $# -ge 2 ] || die '--scope needs a value'; SCOPE=$2; shift 2 ;;
+      --scope=*) SCOPE=${1#*=}; shift ;;
+      *) ARGS+=("$1"); shift ;;
+    esac
+  done
+  case "$SCOPE" in system|user) ;; *) die "--scope takes system or user, not '$SCOPE'" ;; esac
+  TARGET=$APPS
+  if [ "$SCOPE" = user ]; then
+    local reason
+    reason=$(user_scope)
+    [ -z "$reason" ] || die "$reason"
+    TARGET=$HOME_NIX
+  fi
+}
+
 
 # nixarchy's own staleness test, reproduced rather than guessed: the stamp
 # holds what the index was built FROM, so an index built by an older
@@ -476,13 +520,15 @@ rows_tsv() {
 # they are what the user added themselves. An option line is either a set
 # value or a commented scaffold, and the panel needs to tell them apart.
 extras_tsv() {
-  [ -f "$APPS" ] || return 0
-  awk '
+  local file
+  for file in "$APPS" "$HOME_NIX"; do
+  [ -f "$file" ] || continue
+  awk -v scope="$([ "$file" = "$APPS" ] && echo system || echo user)" '
     match($0, /#@pkg-other [^ \t]+/) {
-      print "pkg\t" substr($0, RSTART + 12, RLENGTH - 12) "\tother"; next
+      print "pkg\t" substr($0, RSTART + 12, RLENGTH - 12) "\tother\t" scope; next
     }
     match($0, /#@pkg [^ \t]+/) {
-      print "pkg\t" substr($0, RSTART + 6, RLENGTH - 6) "\tdefault"; next
+      print "pkg\t" substr($0, RSTART + 6, RLENGTH - 6) "\tdefault\t" scope; next
     }
     match($0, /#@opt [^ \t]+/) {
       path = substr($0, RSTART + 6, RLENGTH - 6)
@@ -491,12 +537,13 @@ extras_tsv() {
       sub(/[[:space:]]*#@opt .*$/, "", body)
       sub(/^[[:space:]]*#[[:space:]]?/, "", body)
       gsub(/\t/, " ", body)
-      print "opt\t" path "\t" set "\t" body; next
+      print "opt\t" path "\t" set "\t" body "\t" scope; next
     }
     match($0, /#@draft [^ \t]+/) {
       print "draft\t" substr($0, RSTART + 8, RLENGTH - 8) "\t"; next
     }
-  ' "$APPS"
+  ' "$file"
+  done
 }
 
 # Index rows needed by state, with a kind column: app labels and selected
@@ -549,22 +596,23 @@ cmd_search() {
   case "$kind" in ''|pkg|opt|app) ;; *) die "--kind takes pkg, opt or app, not '$kind'" ;; esac
   [ -s "$INDEX" ] || die "no search index yet -- run: nixarchy-pkg reindex"
 
-  local facts stale rowsfile=""
+  local facts stale rowsfile="" user_reason user_available=false
   facts=$(index_facts)
   stale=$(jq -r '.status != "fresh"' <<<"$facts")
   options_resolve
+  user_reason=$(user_scope)
+  [ -n "$user_reason" ] || user_available=true
   [ -z "$OPT_DIR" ] || [ ! -f "$OPT_DIR/rows.tsv" ] || rowsfile=$OPT_DIR/rows.tsv
 
   jq -n \
     --rawfile rows <(
-      awk -F'\t' -v OFS='\t' -v q="$query" -v want="$kind" -v lim="$limit" -v idx="$INDEX" -v rows="$rowsfile" '
+      awk -F'\t' -v OFS='\t' -v q="$query" -v want="$kind" -v lim="$limit" -v idx="$INDEX" -v rows="$rowsfile" -v user_available="$user_available" '
         BEGIN { n = split(tolower(q), w, " ") }
         want != "" && $1 != want { next }
-        # Option rows come from the flake when its cache is usable, and only
-        # the system ones for now: the panel lists user-scope options once it
-        # can write them.
+        # Option rows come from the flake when its cache is usable. Hide user
+        # rows until the installed writer and this host can handle them.
         FILENAME == idx && rows != "" && $1 == "opt" { next }
-        FILENAME != idx && $6 != "system" { next }
+        FILENAME != idx && $6 != "system" && user_available != "true" { next }
         {
           name = tolower($2); sum = tolower($3); best = 9
           for (i = 1; i <= n; i++) {
@@ -584,11 +632,12 @@ cmd_search() {
     --argjson stale "$stale" \
     --argjson index "$facts" \
     --argjson options "$OPT_JSON" \
+    --argjson userAvailable "$user_available" --arg userReason "$user_reason" \
     --arg query "$query" \
     "$UNTAG_JQ"'
     def lines: split("\n") | map(select(length > 0));
     ($extras | lines | map(split("\t") | select(.[0] == "opt")
-      | {key: .[1], value: {set: (.[2] == "true"),
+      | {key: ((.[4] // "system") + "\t" + .[1]), value: {set: (.[2] == "true"),
                             line: (if .[2] == "true" then (.[1] as $k | .[3] | sub("^[[:space:]]+"; "") | ltrimstr($k + " = ") | sub(";[[:space:]]*$"; ""))
                                    else .[3] end)}}) | from_entries) as $m |
     {
@@ -596,6 +645,7 @@ cmd_search() {
       indexStale: $stale,
       index: $index,
       options: $options,
+      userScope: {available:$userAvailable, reason:$userReason},
       query: $query,
       rows: ($rows | lines | map(split("\t")) | map(
         (if .[0] == "opt" then []
@@ -619,8 +669,8 @@ cmd_search() {
         # it as plain text.
         preview: ((.[4] // "") | gsub("\\\\n"; "\n"))
       } + (if .[0] == "opt" then
-        {set: (if $m[.[1]] == null then null else $m[.[1]].set end),
-         current: (if $m[.[1]] == null then null else $m[.[1]].line end)}
+        {set: (if $m[(.[5] // "system") + "\t" + .[1]] == null then null else $m[(.[5] // "system") + "\t" + .[1]].set end),
+         current: (if $m[(.[5] // "system") + "\t" + .[1]] == null then null else $m[(.[5] // "system") + "\t" + .[1]].line end)}
         else {} end)))
     }'
 }
@@ -700,6 +750,10 @@ cmd_toggle() {
 
 cmd_pkg() {
   local action=${1-}; shift || true
+  scope_args "$@"
+  set -- "${ARGS[@]}"
+  local home=()
+  [ "$SCOPE" = system ] || home=(--home)
   case "$action" in
     add)
       local channel=() attrs=()
@@ -713,16 +767,16 @@ cmd_pkg() {
       [ ${#attrs[@]} -gt 0 ] || die "usage: nixarchy-pkg pkg add <attr> [--stable|--unstable]"
       need nixarchy-pkg-add
       begin_write
-      guard "$APPS"
-      run_writer nixarchy-pkg-add "${channel[@]}" "${attrs[@]}"
+      guard "$TARGET"
+      run_writer nixarchy-pkg-add "${home[@]}" "${channel[@]}" "${attrs[@]}"
       writer_finished
       ;;
     remove)
       [ $# -gt 0 ] || die "usage: nixarchy-pkg pkg remove <attr>"
       need nixarchy-pkg-remove
       begin_write
-      guard "$APPS"
-      run_writer nixarchy-pkg-remove "$@"
+      guard "$TARGET"
+      run_writer nixarchy-pkg-remove "${home[@]}" "$@"
       writer_finished
       ;;
     *) die "pkg takes add or remove, not '${action:-nothing}'" ;;
@@ -816,16 +870,10 @@ opt_meta() {
 }
 
 cmd_opt_describe() {
-  local path="" scope=system
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --scope) [ $# -ge 2 ] || die "--scope needs a value"; scope=$2; shift 2 ;;
-      --scope=*) scope=${1#*=}; shift ;;
-      *) path=$1; shift ;;
-    esac
-  done
+  scope_args "$@"
+  set -- "${ARGS[@]}"
+  local path=${1-} scope=$SCOPE
   [ -n "$path" ] || die "usage: nixarchy-pkg opt describe [--scope system|user] <path>"
-  case "$scope" in system|user) ;; *) die "--scope takes system or user, not '$scope'" ;; esac
   options_resolve
   if [ "$scope" = user ] && { [ -z "$OPT_DIR" ] || [ ! -f "$OPT_DIR/user.json" ]; }; then
     local why="no options were read from your flake yet"
@@ -845,13 +893,13 @@ cmd_opt_describe() {
     return
   fi
 
-  # What apps.nix already says about it, so the form can open on the value
+  # What the scope's selection file says, so the form can open on the value
   # that is there rather than on the default (#28). Found by the writers'
   # own rule -- the marker at the END of the line, compared as a string,
   # never a pattern -- and reported as the local expression, verbatim:
   # `lib.mkDefault true` is text here, not a boolean.
   local found="" cstate=absent cvalue=""
-  if [ "$scope" = system ] && [ -f "$APPS" ]; then
+  if [ -f "$TARGET" ]; then
     found=$(NIXARCHY_PKG_PATH="$path" awk '
       BEGIN { p = ENVIRON["NIXARCHY_PKG_PATH"]; m = "#@opt " p }
       length($0) >= length(m) && substr($0, length($0) - length(m) + 1) == m {
@@ -868,7 +916,7 @@ cmd_opt_describe() {
         # hand. It is set; its value is everything before the marker.
         sub(/[ \t]*#@opt .*$/, "", line)
         print "set"; print line; exit
-      }' "$APPS")
+      }' "$TARGET")
   fi
   if [ -n "$found" ]; then
     cstate=${found%%$'\n'*}
@@ -906,7 +954,7 @@ same_tree() {
       }
       { print }
       END { if (!ins) exit 1 }
-    ' "$APPS" > "$file"; then
+    ' "$TARGET" > "$file"; then
       die "$FLAT_REFUSAL"
     fi
     if ! nix-instantiate --parse "$file" > "$WORK/probe-$i.tree" 2> "$WORK/probe-$i.err" 9>&- 8>&-; then
@@ -967,7 +1015,7 @@ decimal_lt() {
 check_literal() {
   local path=$1 value=$2 meta min max integer_type item nullable v
   local -a fields
-  meta=$(opt_meta "$path")
+  meta=$(opt_meta "$path" "$SCOPE")
   [ "$meta" != null ] || return 0
   mapfile -t fields < <(jq -r '[.min // "", .max // "",
     (.type | test("^(null or )?(signed integer|unsigned integer|positive integer|integer between|[0-9]+ bit unsigned integer)")),
@@ -1003,13 +1051,14 @@ check_literal() {
 #   <path> = <value>;  #@opt <path>       a set value
 #   # <path> = ;  #@opt <path>            a scaffold's marked line
 #
-# It goes into apps.nix, where nixarchy-search puts option lines and where
-# nixarchy-opt-remove looks for them -- not advanced.nix, which would be a
-# line no remover could find.
+# It goes into the scope's selection file, where nixarchy's remover looks for
+# the marked line -- not advanced.nix, which would be a line it could not find.
 #
 # An empty value writes NOTHING and says so. A copied-out default is a line
 # that reads as a choice and is not one.
 cmd_opt_set() {
+  scope_args "$@"
+  set -- "${ARGS[@]}"
   local path=${1-} value=${2-}
   [ -n "$path" ] || die "usage: nixarchy-pkg opt set <path> <nix-value>"
 
@@ -1025,13 +1074,13 @@ cmd_opt_set() {
   fi
 
   begin_write
-  [ -f "$APPS" ] || die "no $APPS -- log in again to have it created"
+  [ -f "$TARGET" ] || die "no $TARGET -- log in again to have it created"
   one_line value
   check_literal "$path" "$value"
-  if grep -q "#@opt ${path//./\\.}\$" "$APPS"; then
-    die "$path is already in $APPS -- remove it first"
+  if grep -q "#@opt ${path//./\\.}\$" "$TARGET"; then
+    die "$path is already in $TARGET -- remove it first"
   fi
-  guard "$APPS"
+  guard "$TARGET"
 
   local tmp; tmp=$(mktemp)
   # Through the environment, not `awk -v`: -v processes escape sequences in
@@ -1051,7 +1100,7 @@ cmd_opt_set() {
       ins = 1
     }
     { print }
-  ' "$APPS" > "$tmp"
+  ' "$TARGET" > "$tmp"
 
   # awk only inserts before a line that is exactly `}`. A module closing
   # `}  # the end` matched nothing, the file was copied through unchanged,
@@ -1059,7 +1108,7 @@ cmd_opt_set() {
   # `set ...` over a file it never touched. `opt replace` has always
   # re-checked; this one never did (#39).
   if ! grep -q "#@opt ${path//./\\.}\$" "$tmp"; then
-    die "could not find where to add $path in $APPS -- its module does not close on a line of its own. Nothing was changed."
+    die "could not find where to add $path in $TARGET -- its module does not close on a line of its own. Nothing was changed."
   fi
 
   # Nix's own words, not a guess at them. `--parse` also resolves names, so
@@ -1086,7 +1135,7 @@ cmd_opt_set() {
   # come out user-owned, and a symlinked apps.nix would be replaced by a
   # real file with the dotfiles original left untouched. cp truncates in
   # place, so inode, mode, owner and the symlink all survive (#39).
-  cp "$tmp" "$APPS"
+  cp "$tmp" "$TARGET"
   committed
 
   state_with true "set $path = $value"
@@ -1106,6 +1155,8 @@ cmd_opt_set() {
 # is a useful guard against a caller clobbering a line somebody wrote by
 # hand, and keeping a separate verb keeps the guard.
 cmd_opt_replace() {
+  scope_args "$@"
+  set -- "${ARGS[@]}"
   local path=${1-} value=${2-}
   [ -n "$path" ] && [ $# -ge 2 ] ||
     die "usage: nixarchy-pkg opt replace <path> <nix-value>"
@@ -1117,14 +1168,14 @@ cmd_opt_replace() {
   flat_value "$value"
 
   begin_write
-  [ -f "$APPS" ] || die "no $APPS -- log in again to have it created"
+  [ -f "$TARGET" ] || die "no $TARGET -- log in again to have it created"
   one_line value
   check_literal "$path" "$value"
-  grep -q "#@opt ${path//./\\.}\$" "$APPS" ||
-    die "$path is not in $APPS -- use 'opt set' to add it"
+  grep -q "#@opt ${path//./\\.}\$" "$TARGET" ||
+    die "$path is not in $TARGET -- use 'opt set' to add it"
 
   # BEFORE anything is touched. This is the whole point of the command.
-  guard "$APPS"
+  guard "$TARGET"
 
   # Keyed on the marker rather than on position: the line is wherever the
   # person moved it to, and the marker is what finds it. Through the
@@ -1144,7 +1195,7 @@ cmd_opt_replace() {
       }
       print
     }
-  ' "$APPS" > "$tmp"
+  ' "$TARGET" > "$tmp"
 
   if ! grep -q "#@opt ${path//./\\.}\$" "$tmp"; then
     die "could not find $path to replace after all. Nothing was changed."
@@ -1163,7 +1214,7 @@ cmd_opt_replace() {
     die "that value was refused, so nothing was changed. ${why:-nix could not parse the result}"
   fi
 
-  cp "$tmp" "$APPS"   # not mv; see cmd_opt_set (#39)
+  cp "$tmp" "$TARGET"   # not mv; see cmd_opt_set (#39)
   committed
 
   state_with true "replaced $path = $value"
@@ -1176,11 +1227,14 @@ cmd_opt() {
     set)      cmd_opt_set "$@" ;;
     replace)  cmd_opt_replace "$@" ;;
     remove)
+      scope_args "$@"
+      set -- "${ARGS[@]}"
       [ $# -gt 0 ] || die "usage: nixarchy-pkg opt remove <path>"
       need nixarchy-opt-remove
       begin_write
-      guard "$APPS"
-      run_writer nixarchy-opt-remove "$@"
+      guard "$TARGET"
+      if [ "$SCOPE" = user ]; then run_writer nixarchy-opt-remove --home "$@"
+      else run_writer nixarchy-opt-remove "$@"; fi
       writer_finished
       ;;
     *) die "opt takes describe, set, replace or remove, not '${action:-nothing}'" ;;
@@ -1714,7 +1768,7 @@ private_dir() {
 snapshot_selection() {
   local p f
   mkdir -p "$1/packages" || die "cannot create $1"
-  for p in apps services advanced flatsnap; do
+  for p in apps services advanced flatsnap home; do
     f=$CONFIG_DIR/$p.nix
     [ -e "$f" ] || continue
     [ -r "$f" ] || die "cannot read $f"
@@ -1733,14 +1787,14 @@ fingerprint() {
     sha256sum | cut -d' ' -f1
 }
 
-# pins_json DIR -- hashes or empty strings for the four parts in a snapshot.
+# pins_json DIR -- hashes or empty strings for each part in a snapshot.
 pins_json() {
   local p args=()
-  for p in apps services advanced flatsnap; do
+  for p in apps services advanced flatsnap home; do
     if [ -f "$1/$p.nix" ]; then args+=(--arg "$p" "$(sha256sum <"$1/$p.nix" | cut -d' ' -f1)")
     else args+=(--arg "$p" ""); fi
   done
-  jq -nc "${args[@]}" '{apps:$apps, services:$services, advanced:$advanced, flatsnap:$flatsnap}'
+  jq -nc "${args[@]}" '{apps:$apps, services:$services, advanced:$advanced, flatsnap:$flatsnap, home:$home}'
 }
 
 # Which channel this machine follows, so the panel can name the OTHER one
@@ -1824,7 +1878,7 @@ pending_file() {
   jq -nc --arg file "$file" --arg label "$label" --arg path "$live" \
     --arg status "$status" --arg conflict "$conflict" --argjson unmarked "$unmarked" \
     --arg hunk "$hunk" \
-    '{file:$file, label:$label, path:(if $path == "" then null else $path end),
+    '{file:$file, label:$label, scope:(if $file == "home" then "user" else "system" end), path:(if $path == "" then null else $path end),
       status:$status, unmarked:$unmarked, hunk:$hunk,
       conflict:(if $conflict == "" then null else $conflict end)}' >>"$READDIR/files.jsonl"
 }
@@ -1852,7 +1906,7 @@ cmd_pending() {
   : >"$READDIR/changes.jsonl"
   : >"$READDIR/lines.jsonl"
 
-  for p in apps services advanced flatsnap; do
+  for p in apps services advanced flatsnap home; do
     src=$READDIR/$p.nix
     dst=$base/nixarchy/$p.nix
     live=""; [ -e "$CONFIG_DIR/$p.nix" ] && live=$CONFIG_DIR/$p.nix
@@ -1917,7 +1971,7 @@ cmd_pending() {
                           elif ($row.marker | startswith(":")) then "on" else "added" end)}
         else $minus[$i] + {change:(if ($minus[$i].marker | startswith(":")) then "off" else "removed" end)} end
       ]) | add // [] | .[] |
-      {marker, file, line, change,
+      {marker, file, line, change, scope:(if .file == "home" then "user" else "system" end),
        lineNo:(if .sign == "+" then
          (.["file"] as $file | .index as $index |
           [$lines[] | select(.file == $file and .index == $index) | .lineNo] | first // null)
@@ -1935,14 +1989,15 @@ cmd_pending() {
     --arg apps "$([ ! -e "$CONFIG_DIR/apps.nix" ] || printf '%s' "$CONFIG_DIR/apps.nix")" \
     --arg services "$([ ! -e "$CONFIG_DIR/services.nix" ] || printf '%s' "$CONFIG_DIR/services.nix")" \
     --arg advanced "$([ ! -e "$CONFIG_DIR/advanced.nix" ] || printf '%s' "$CONFIG_DIR/advanced.nix")" \
-    --arg flatsnap "$([ ! -e "$CONFIG_DIR/flatsnap.nix" ] || printf '%s' "$CONFIG_DIR/flatsnap.nix")" '
+    --arg flatsnap "$([ ! -e "$CONFIG_DIR/flatsnap.nix" ] || printf '%s' "$CONFIG_DIR/flatsnap.nix")" \
+    --arg home "$([ ! -e "$HOME_NIX" ] || printf '%s' "$HOME_NIX")" '
     ($files | map(.file as $name | . + {explained:(.status == "modified" and .unmarked == 0 and
                                   any($changes[]; .file == $name))})) as $f |
     {ok:true, neverApplied:$never, base:$base, writing:$writing,
      count:($changes|length), changes:$changes, files:$f,
      total:(($changes|length) + ($f | map(select(.explained|not)) | length)),
      fingerprint:$fingerprint, pins:$pins,
-     sources:({apps:$apps, services:$services, advanced:$advanced, flatsnap:$flatsnap} |
+     sources:({apps:$apps, services:$services, advanced:$advanced, flatsnap:$flatsnap, home:$home} |
        with_entries(.value |= if . == "" then null else . end)),
      unpinned:{drafts:$drafts, flake:true}}
   '
@@ -2306,12 +2361,12 @@ cmd_check() {
   check_symlinks "$copy" "$br"
   mkdir -p "$cb/nixarchy/packages" || die "cannot create $cb/nixarchy/packages"
   imports=""
-  for p in apps services advanced flatsnap; do
+  for p in apps services advanced flatsnap home; do
     f=$CHECKDIR/snap/$p.nix
     [ -f "$f" ] || continue
     rm -f "$cb/nixarchy/$p.nix" || die "cannot replace $cb/nixarchy/$p.nix"
     cp "$f" "$cb/nixarchy/$p.nix" 9>&- 8>&- || die "cannot copy $f"
-    imports="$imports ./nixarchy/$p.nix"
+    [ "$p" = home ] || imports="$imports ./nixarchy/$p.nix"
   done
   for f in "$CHECKDIR/snap/packages"/*.nix; do
     [ -f "$f" ] || continue
@@ -2319,8 +2374,17 @@ cmd_check() {
     cp "$f" "$cb/nixarchy/packages/${f##*/}" 9>&- 8>&- || die "cannot copy $f"
   done
   rm -f "$cb/nixarchy-apps.nix" || die "cannot replace $cb/nixarchy-apps.nix"
-  printf '# Generated by nixarchy-apply. Do not edit -- your files\n# are ~/.config/nixarchy/{apps,services,advanced,flatsnap}.nix and\n# this is regenerated from them on every apply.\n{\n  imports = [%s ];\n}\n' \
-    "$imports" >"$cb/nixarchy-apps.nix" || die "cannot write $cb/nixarchy-apps.nix"
+  local parts=apps,services,advanced,flatsnap
+  [ ! -f "$CHECKDIR/snap/home.nix" ] || parts=$parts,home
+  printf '# Generated by nixarchy-apply. Do not edit -- your files\n# are ~/.config/nixarchy/{%s}.nix and\n# this is regenerated from them on every apply.\n{\n  imports = [%s ];\n' \
+    "$parts" "$imports" >"$cb/nixarchy-apps.nix" || die "cannot write $cb/nixarchy-apps.nix"
+  if [ -f "$CHECKDIR/snap/home.nix" ]; then
+    local home_user
+    home_user=$(id -un)
+    [[ $home_user =~ ^[a-z_][a-z0-9_-]*$ ]] || die "invalid user name: $home_user"
+    printf '  home-manager.users."%s".imports = [ ./nixarchy/home.nix ];\n' "$home_user" >>"$cb/nixarchy-apps.nix"
+  fi
+  printf '}\n' >>"$cb/nixarchy-apps.nix"
 
   rc=0
   setsid timeout 300 "${NIX[@]}" flake metadata --json "path:$copy" \
@@ -2394,8 +2458,8 @@ cmd_apply() {
     case $1 in
       --pin)
         pin=${2-}
-        [[ $pin =~ ^(apps|services|advanced|flatsnap)=([0-9a-f]{64})?$ ]] \
-          || die "--pin takes <apps|services|advanced|flatsnap>=<64 hex digits, or nothing>, not '$pin'"
+        [[ $pin =~ ^(apps|services|advanced|flatsnap|home)=([0-9a-f]{64})?$ ]] \
+          || die "--pin takes <apps|services|advanced|flatsnap|home>=<64 hex digits, or nothing>, not '$pin'"
         pins+=(--expect-sha256 "$pin"); shift 2 ;;
       *) die "apply takes only --pin <part>=<sha256>, not '$1'" ;;
     esac
@@ -2480,10 +2544,12 @@ cmd_reindex() {
 }
 
 cmd_state() {
-  local facts stale
+  local facts stale user_reason user_available=false
   facts=$(index_facts)
   stale=$(jq -r '.status != "fresh"' <<<"$facts")
   options_resolve
+  user_reason=$(user_scope)
+  [ -n "$user_reason" ] || user_available=true
 
   # Process substitution swallows a callee's exit status, so a read that
   # fails inside the jq below cannot be noticed there -- `$(cat <(f))` is 0
@@ -2493,6 +2559,7 @@ cmd_state() {
   local unreadable=()
   [ -e "$APPS" ]     && [ ! -r "$APPS" ]     && unreadable+=("$APPS")     || :
   [ -e "$SERVICES" ] && [ ! -r "$SERVICES" ] && unreadable+=("$SERVICES") || :
+  [ -e "$HOME_NIX" ] && [ ! -r "$HOME_NIX" ] && unreadable+=("$HOME_NIX") || :
   local unread_msg=""
   [ ${#unreadable[@]} -gt 0 ] && unread_msg="could not read ${unreadable[*]} -- it exists but is not readable, so what it holds is not shown here" || :
   local rpaths rrc=0 rfiles='[]'
@@ -2504,7 +2571,7 @@ cmd_state() {
 
   local want=""
   if ! $stale; then
-    want=$(extras_tsv | awk -F'\t' '$1 == "pkg" && $3 == "default" { print $2 }') || want=""
+    want=$(extras_tsv | awk -F'\t' '$1 == "pkg" && $3 == "default" && $4 == "system" { print $2 }') || want=""
   fi
 
   jq -n \
@@ -2515,6 +2582,7 @@ cmd_state() {
     --argjson stale "$stale" \
     --argjson index "$facts" \
     --argjson options "$OPT_JSON" \
+    --argjson userAvailable "$user_available" --arg userReason "$user_reason" \
     --arg appsFile "$APPS" \
     --arg servicesFile "$SERVICES" \
     --arg unreadable "$unread_msg" \
@@ -2541,9 +2609,10 @@ cmd_state() {
       ok: true,
       indexStale: $stale,
       index: $index,
-      # `options` below is the rows set in apps.nix, so where the option
+      # `options` below holds selected rows, so where the option
       # list came from is optionsInfo.
       optionsInfo: $options,
+      userScope: {available:$userAvailable, reason:$userReason},
       files: { apps: $appsFile, services: $servicesFile },
       channel: $channel,
       flakeDir: $flakeDir,
@@ -2557,28 +2626,28 @@ cmd_state() {
     + {
       # What this tool declared in the system flake. Read from the same
       # command a terminal calls, so the two cannot disagree.
-      flakes: (($flakes | fromjson).inputs // []),
+      flakes: ((($flakes | fromjson).inputs // []) | map(. + {scope:"system"})),
       flakesStale: (($flakes | fromjson).stale // false),
       apps: ($apps | cols | map({
-        id: .[1], category: (.[2] // ""), enabled: (.[3] == "true"),
+        id: .[1], scope:"system", category: (.[2] // ""), enabled: (.[3] == "true"),
         line: (.[4] // ""), note: (.[5] // ""),
         label: ($label[.[1]] // .[1]),
         settings: (.[1] | test("\\.settings$"))
       })),
       services: ($services | cols | map({
-        id: .[1], category: (.[2] // ""), enabled: (.[3] == "true"),
+        id: .[1], scope:"system", category: (.[2] // ""), enabled: (.[3] == "true"),
         line: (.[4] // ""), note: (.[5] // ""),
         label: ($label[.[1]] // .[1]),
         settings: (.[1] | test("\\.settings$"))
       })),
       packages: ($extras | cols | map(select(.[0] == "pkg") | {
-        attr: .[1], channel: (.[2] // "default")
+        attr: .[1], channel: (.[2] // "default"), scope:(.[3] // "system")
       } + (if .[2] == "default" and $fact[.[1]]
            then $fact[.[1]] | with_entries(select(.value != "")) else {} end))),
       options: ($extras | cols | map(select(.[0] == "opt") | {
-        path: .[1], set: (.[2] == "true"), line: (.[3] // "")
+        path: .[1], set: (.[2] == "true"), line: (.[3] // ""), scope:(.[4] // "system")
       })),
-      drafts: ($extras | cols | map(select(.[0] == "draft") | { name: .[1] }))
+      drafts: ($extras | cols | map(select(.[0] == "draft") | { name: .[1], scope:"system" }))
     }'
 }
 

@@ -4,14 +4,13 @@ title: NixOS options
 
 # NixOS options
 
-Every NixOS option there is — about 25,500 of them, including over 2,000
-`services.*.enable`. This is how you reach a service the curated catalogue
-does not carry, which is most of them.
+This tab lists options discovered from your host's flake, including NixOS
+options and, when available, Home Manager options for your user. This is how
+you reach a service the curated catalogue does not carry.
 
 ![Searching options](../img/07-options-search.png)
 
-`/` searches. Each row shows the option's path and its type, read from
-nixpkgs' own `options.json` rather than guessed.
+`/` searches. Each row shows the option's path and its declared type.
 
 ## Where the options come from
 
@@ -95,3 +94,9 @@ own text to edit.
 
 `SPACE` on an option row that is already set removes it. The option reverts
 to its default, which is what it was before you touched it.
+
+## User scope
+
+Home Manager options appear with a **user** badge. They are written to `home.nix` for the account running the panel. This requires Home Manager as a NixOS module, that account in `home-manager.users`, and a nixarchy version with the Home Manager part. A disabled row shows the reason.
+
+Removing a selection can leave a declaration elsewhere in the flake in effect. `check` evaluates the combined configuration and reports conflicting option values.

@@ -109,7 +109,7 @@ TestCase {
     tryCompare(field, "activeFocus", true)
     field.text = "example"
     keyClick(Qt.Key_Return)
-    compare(writeProcess().command.slice(1, 4).join(" "), "opt set t.password")
+    compare(writeProcess().command.slice(1, 6).join(" "), "opt set --scope system t.password")
     writeProcess().deliver(JSON.stringify({ ok: true }))
     form.begin({ path: "t.bool" })
     describeProc().deliver(JSON.stringify({ ok: true, path: "t.bool", widget: "boolean",
@@ -171,14 +171,14 @@ TestCase {
   function test_touched_boolean_sets() {
     open({ widget: "boolean", default: "false" })
     keyClick(Qt.Key_Space); keyClick(Qt.Key_Return)
-    compare(writeProc().command.slice(1).join(" "), "opt set p.q true")
+    compare(writeProc().command.slice(1).join(" "), "opt set --scope system p.q true")
     compare(fakeModel.busy, true)
   }
   function test_held_value_replaces() {
     open({ widget: "boolean", default: "false", current: { state: "set", value: "false" } })
     compare(form.boolValue, false)
     keyClick(Qt.Key_Space); keyClick(Qt.Key_Return)
-    compare(writeProc().command.slice(1).join(" "), "opt replace p.q true")
+    compare(writeProc().command.slice(1).join(" "), "opt replace --scope system p.q true")
   }
   function test_scaffold_state_replaces() {
     open({ widget: "boolean", default: "false", current: { state: "scaffold" } })
@@ -218,7 +218,7 @@ TestCase {
     keyClick(Qt.Key_K); compare(form.enumIndex, 2)
     keyClick(Qt.Key_Up); compare(form.enumIndex, 1)
     keyClick(Qt.Key_Return)
-    compare(writeProc().command[4], "b")
+    compare(writeProc().command[6], "b")
   }
   function test_string_quoting() {
     open({ widget: "string", default: "" })
@@ -233,7 +233,7 @@ TestCase {
     open({ widget: "string", default: "" })
     keyClick("h"); keyClick("i")
     keyClick(Qt.Key_Return)
-    compare(writeProc().command.slice(1).join(" "), "opt set p.q \"hi\"")
+    compare(writeProc().command.slice(1).join(" "), "opt set --scope system p.q \"hi\"")
     form.finish(); fakeModel.busy = false; writeProc().running = false; writeProc().command = []
     open({ widget: "string", default: "" })
     keyClick("h"); keyClick("i"); keyClick(Qt.Key_Escape)
@@ -250,7 +250,7 @@ TestCase {
     compare(ed.text.length, before + 1)
     verify(form.nixValue().length > 0)
     keyClick(Qt.Key_Return, Qt.ControlModifier)
-    compare(writeProc().command[2], "replace"); compare(writeProc().command[3], "p.q")
+    compare(writeProc().command[2], "replace"); compare(writeProc().command[5], "p.q")
     form.finish(); fakeModel.busy = false; writeProc().running = false; writeProc().command = []
     open({ widget: "boolean", default: "false", current: { state: "set", value: "lib.mkDefault true" } })
     keyClick(Qt.Key_Escape); verify(!form.open); compare(writeProc(), null)
@@ -263,6 +263,28 @@ TestCase {
     form.finish()
     form.begin({ path: "programs.git.enable" })
     compare(describeProc().command.join(" "), "nixarchy-pkg opt describe --scope system programs.git.enable")
+  }
+
+  function test_late_describe_matches_scope_and_path() {
+    form.begin({ path: "programs.git.enable", scope: "user" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "programs.git.enable", scope: "system", widget: "boolean" }))
+    compare(form.option.path, undefined)
+    describeProc().deliver(JSON.stringify({ ok: true, path: "programs.git.enable", scope: "user", widget: "boolean", current: { state: "absent" } }))
+    compare(form.option.path, "programs.git.enable")
+  }
+
+  function test_user_scope_write_and_remove() {
+    form.begin({ path: "p.q", scope: "user" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "p.q", scope: "user", widget: "boolean",
+      default: "false", current: { state: "absent" } }))
+    keyClick(Qt.Key_Space); keyClick(Qt.Key_Return)
+    compare(writeProc().command.slice(1), ["opt", "set", "--scope", "user", "p.q", "true"])
+    writeProc().deliver(JSON.stringify({ ok: true }))
+    form.begin({ path: "p.q", scope: "user" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "p.q", scope: "user", widget: "boolean",
+      current: { state: "set", value: "true" } }))
+    keyClick(Qt.Key_Delete); keyClick(Qt.Key_Delete)
+    compare(writeProc().command.slice(1), ["opt", "remove", "--scope", "user", "p.q"])
   }
 
   function test_integer_focus_steps_and_bounds() {

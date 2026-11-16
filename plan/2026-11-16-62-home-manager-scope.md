@@ -331,3 +331,5 @@ Deviation: state reports cache provenance as `optionsInfo` because its existing
 under `options`.
 
 (Review fixes, round 2: the options staleness stamp is taken before the flake eval starts; a failed options refresh's error stays until a later successful refresh; a successful background refresh re-runs the visible option search; refresh, options refresh and search queue one rerun instead of dropping a request while running; the footer lays out queue status, index-stale text, options status and hints without overlap; generation pruning resolves symlinked cache dirs; reindex shows "reading your flake" and no longer promises 45 s. Codex wrote the edits; the lead verified them.)
+
+(Deviation, nixarchy C is not installed: slice-2 writer tests use stub writers and a home-template fixture; the generated import is compared with a fixture of spec C's form.)

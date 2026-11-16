@@ -62,11 +62,19 @@ TestCase {
     property bool indexStale: false
     property string optionsStatus: ""
     property bool optionsError: false
+    property var userScope: ({ available: false, reason: "Home Manager part is missing" })
     function indexLine(now) { return "index built 14 days ago \u2014 r to rebuild \u2014 nixpkgs and 4 more changed" }
     property bool neverApplied: false
     property bool showingLog: false
     property string applyLog: ""
     property bool applying: false
+  }
+
+  function test_user_badge_and_disabled_reason() {
+    compare(card.tagsOf({ attr: "git", scope: "user", flags: [] }), ["user"])
+    fakeModel.tab = 2
+    theRows = [{ attr: "git", scope: "user" }]
+    compare(card.previewText, "Home Manager part is missing")
   }
 
   Window {
