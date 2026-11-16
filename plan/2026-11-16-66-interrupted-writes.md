@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 66
 also: 67
 spec: spec/2026-11-16-66-interrupted-writes.md
