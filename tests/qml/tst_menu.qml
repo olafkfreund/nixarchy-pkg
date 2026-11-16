@@ -237,4 +237,24 @@ TestCase {
     keyClick(Qt.Key_A, Qt.ShiftModifier)
     compare(pkg.armingState, "reading"); compare(pkg.armedKind, "terminal")
   }
+  function test_u_shift_return_declares_without_follows() {
+    fresh()
+    pkg.setTab(5); wait(30)
+    pkg.inspected = { ok: true, ref: "path:/tool", nixosModules: [] }
+    search.text = "path:/tool"
+    search.text = pkg.beginNaming(); search.text = "tool"
+    keyClick(Qt.Key_Return, Qt.ShiftModifier)
+    compare(pkg._writer.command.slice(1), ["flake", "add", "--no-follows", "tool", "path:/tool"])
+  }
+  function test_v_u_twice_updates_declared_input() {
+    fresh()
+    pkg.setTab(5); wait(30)
+    pkg.state = { flakeDir: "/f", flakeFound: true,
+                  flakes: [{ name: "tool", url: "path:/tool", locked: true, mine: true, inspectable: true, flake: true }] }
+    pkg.cursor = 1
+    search.focus = false; keys.forceActiveFocus()
+    keyClick(Qt.Key_U)
+    keyClick(Qt.Key_U)
+    compare(pkg._writer.command.slice(1), ["flake", "update", "tool"])
+  }
 }

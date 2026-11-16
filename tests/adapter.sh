@@ -438,6 +438,10 @@ out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake remove plain)
 check "remove deletes both non-flake lines" test "$(grep -c '#@flake-input plain$' "$FK/flake.nix" || true)" = 0
 out=$("$ADAPTER" flake show "path:$FLAKE_TMP/plain")
 check "show identifies a non-flake" jq -e '.ok == false and .notFlake == true' <<<"$out"
+mkdir -p "$FLAKE_TMP/nested"
+printf '{ inputs.b.url = "path:%s"; outputs = { self, ... }: {}; }\n' "$FLAKE_TMP/plain" > "$FLAKE_TMP/nested/flake.nix"
+out=$("$ADAPTER" flake show "path:$FLAKE_TMP/nested")
+check "nested non-flake does not label its parent" jq -e '.ok == false and (has("notFlake") | not)' <<<"$out"
 out=$("$ADAPTER" flake show "path:$FLAKE_TMP/no-such-source")
 check "unresolvable source is not called non-flake" jq -e '.ok == false and (has("notFlake") | not)' <<<"$out"
 check "flags after ref are refused" jq -e '.ok == false and (.error | startswith("usage:"))' \
@@ -453,6 +457,19 @@ FK_ARRAY=$(fresh_flake)
 sed -i "s|nixpkgs.url = \"github:nixos/nixpkgs/nixos-unstable\";|other.url = \"path:$FLAKE_TMP/np\"; nixpkgs.follows = \"other\";|" "$FK_ARRAY/flake.nix"
 out=$(NIXARCHY_FLAKE="$FK_ARRAY" "$ADAPTER" flake add lib2 "path:$FLAKE_TMP/lib2")
 check "root nixpkgs follows array does not enable follows" jq -e '.ok and .follows == false' <<<"$out"
+before_nix=$(md5sum < "$FK_ARRAY/flake.nix"); before_lock=$(md5sum < "$FK_ARRAY/flake.lock")
+out=$(NIXARCHY_FLAKE="$FK_ARRAY" "$ADAPTER" flake update nixpkgs)
+check "follows-only root input update is refused" jq -e '.ok == false and (.error | contains("follows"))' <<<"$out"
+check "follows-only refusal preserves both files" test "$(md5sum < "$FK_ARRAY/flake.nix") $(md5sum < "$FK_ARRAY/flake.lock")" = "$before_nix $before_lock"
+
+FK_BASELINE=$(fresh_flake)
+sed -i "s|github:nixos/nixpkgs/nixos-unstable|path:$FLAKE_TMP/np|" "$FK_BASELINE/flake.nix"
+nix flake lock "$FK_BASELINE" >/dev/null 2>&1
+sed -i "/nixpkgs.url =/a\\    other.url = \"path:$FLAKE_TMP/lib\";" "$FK_BASELINE/flake.nix"
+before_nix=$(md5sum < "$FK_BASELINE/flake.nix"); before_lock=$(md5sum < "$FK_BASELINE/flake.lock")
+out=$(NIXARCHY_FLAKE="$FK_BASELINE" "$ADAPTER" flake update nixpkgs)
+check "baseline metadata locking another input is refused" jq -e '.ok == false and (.error | contains("Nothing was changed."))' <<<"$out"
+check "baseline refusal preserves both files" test "$(md5sum < "$FK_BASELINE/flake.nix") $(md5sum < "$FK_BASELINE/flake.lock")" = "$before_nix $before_lock"
 
 printf 'changed\n' > "$FLAKE_TMP/lib2/new"
 out=$(NIXARCHY_FLAKE="$FK" "$ADAPTER" flake update lib2)
@@ -495,10 +512,15 @@ exec "$REAL_NIX" "$@"
 SH
 chmod +x "$FLAKE_TMP/wrap/nix"
 for mode in existing absent; do
-  for failure in second-lock final-metadata update; do
+  for failure in second-lock final-metadata update update-final-metadata; do
+    [ "$mode" != absent ] || [ "$failure" != update-final-metadata ] || continue
     FK=$(fresh_flake)
     sed -i "s|github:nixos/nixpkgs/nixos-unstable|path:$FLAKE_TMP/np|" "$FK/flake.nix"
-    if [ "$mode" = existing ]; then nix flake lock "$FK" >/dev/null 2>&1; fi
+    if [ "$mode" = existing ] || [ "$failure" = update-final-metadata ]; then nix flake lock "$FK" >/dev/null 2>&1; fi
+    if [ "$failure" = update-final-metadata ]; then
+      NIXARCHY_FLAKE="$FK" "$ADAPTER" flake add lib2 "path:$FLAKE_TMP/lib2" >/dev/null
+      printf 'changed for %s\n' "$mode" > "$FLAKE_TMP/lib2/update-final-$mode"
+    fi
     before_nix=$(md5sum < "$FK/flake.nix")
     before_lock=absent
     [ ! -e "$FK/flake.lock" ] || before_lock=$(md5sum < "$FK/flake.lock")
@@ -507,8 +529,10 @@ for mode in existing absent; do
       second-lock) kind=lock; nth=2; action=add ;;
       final-metadata) kind=metadata; nth=2; action=add ;;
       update) kind=update; nth=1; action=update ;;
+      update-final-metadata) kind=metadata; nth=2; action=update ;;
     esac
     if [ "$action" = add ]; then set -- add lib2 "path:$FLAKE_TMP/lib2"
+    elif [ "$failure" = update-final-metadata ]; then set -- update lib2
     else set -- update nixpkgs; fi
     out=$(PATH="$FLAKE_TMP/wrap:$PATH" REAL_NIX="$REAL_NIX" FAIL_KIND="$kind" FAIL_NTH="$nth" FAIL_COUNT="$count_file" \
       NIXARCHY_FLAKE="$FK" "$ADAPTER" flake "$@")

@@ -1290,7 +1290,10 @@ cmd_flake_show() {
   if [ "$rc" != 0 ]; then
     local why; why=$(nix_why "$err")
     local not_flake=false
-    [[ $why =~ [Pp]ath\ \'[^\']*flake\.nix\'\ does\ not\ exist ]] && not_flake=true
+    if [[ $why =~ [Pp]ath\ \'[^\']*flake\.nix\'\ does\ not\ exist ]] &&
+       ! grep -Eq 'while (fetching|updating) (the )?(flake )?input ' "$err"; then
+      not_flake=true
+    fi
     jq -nc --arg ref "$ref" --arg why "${why:-could not inspect $ref}" --argjson nf "$not_flake" \
       '{ok: false, ref: $ref, message: $why} + (if $nf then {notFlake: true} else {} end)'
     return 0
@@ -1564,6 +1567,9 @@ cmd_flake_update() {
   err=$(mktemp)
   if ! (cd "$dir" && timeout -k 10 120 "${NIX[@]}" flake metadata) >/dev/null 2>"$err" 9>&- 8>&-; then
     die "this flake does not evaluate as it stands, so I have changed nothing rather than update a broken file: $(nix_why "$err")"
+  fi
+  if ! cmp -s "$snap" "$lock"; then
+    die "metadata changed other inputs in flake.lock; update them separately. Nothing was changed."
   fi
   if ! (cd "$dir" && timeout -k 10 120 "${NIX[@]}" flake update "$name") >/dev/null 2>"$err" 9>&- 8>&-; then
     die "could not update $name, so nothing was changed: $(nix_why "$err")"
