@@ -127,8 +127,9 @@
                 touch "$out"
               '';
 
-          # The adapter suite, minus what needs the network or a writable nix store
-          # (NIXARCHY_PKG_TEST_OFFLINE). Measured: 366 checks, about 20 s.
+          # The adapter suite skips network and writable-store cases in the sandbox
+          # (NIXARCHY_PKG_TEST_OFFLINE). Catalogue sections need /etc/nixarchy;
+          # they and the live search-index section run only on a nixarchy machine.
           adapter =
             pkgs.runCommand "nixarchy-pkg-adapter-tests"
               {
