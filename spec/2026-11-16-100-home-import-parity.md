@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 100
 intent: intent/2026-11-16-100-home-import-parity.md
 ---
