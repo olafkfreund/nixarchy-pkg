@@ -184,6 +184,10 @@ QtObject {
   // The Queue tab. The model builds every text; the view only draws it.
   function queueRows() {
     var out = []
+    if (queueError) {
+      out.push({ kind: "note", text: queueError, path: null, detail: "" })
+      return out
+    }
     var cr = checkResult
     if (cr) {
       var t
@@ -299,7 +303,6 @@ QtObject {
       return true
     }
     if (armingState === "reading") { message = "still reading the queue"; return false }
-    if (queued === -1 && queueError) { message = "queue unknown -- open the Queue tab and press r"; return false }
     disarm()
     armingState = "reading"
     armedKind = kind
@@ -430,6 +433,11 @@ QtObject {
     } else {
       queued = -1
       queueError = data.error || "could not read the queue"
+    }
+
+    if (armingState === "armed" && (data.ok !== true || data.writing === true)) {
+      disarm()
+      message = data.ok !== true ? queueError : "a write is in progress -- try again in a moment"
     }
 
     if (checkResult && checkResult.fingerprint && data.fingerprint

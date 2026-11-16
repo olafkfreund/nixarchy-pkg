@@ -49,8 +49,10 @@ umask 077
 readonly STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/nixarchy"
 readonly LOCK="$STATE_DIR/applied/lock"   # nixarchy-apply's lock, same expression
 readonly TXN="$STATE_DIR/pkg-recovery"    # one write at a time, under the lock
+readonly CHILDREN="$STATE_DIR/pkg-children.lock"
 # This script is not on PATH; a hint to run it must name it the way it was run.
 SELF=$0; case $SELF in /*) ;; *) SELF=$PWD/$SELF ;; esac; readonly SELF
+readonly SETTLE_NOTE="something this write started is still running, so nothing was undone. Your backup is kept: run $SELF recover when it has finished."
 WORK=""
 READDIR=""
 CHECKDIR=""
@@ -61,6 +63,7 @@ PENDING=false
 GUARDED=false        # true only while pkg-recovery/open belongs to this call
 ROLLBACK_NOTE=""
 WRITING=false        # true from begin_write on, so on_exit can answer for it
+SETTLE_FAILED=false
 
 readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/nixarchy"
 readonly CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/nixarchy"
@@ -125,6 +128,7 @@ on_exit() {
   local d
   for d in "$WORK" "$READDIR" "$CHECKDIR" "$APPLYDIR"; do
     [ -n "$d" ] || continue
+    [ "$d" = "$WORK" ] && $SETTLE_FAILED && continue
     chmod -R u+w "$d" 2>/dev/null || :   # nix leaves read-only dirs behind
     rm -rf "$d" 2>/dev/null || :
   done
@@ -136,7 +140,7 @@ trap 'exit 143' TERM INT HUP
 # Every write starts here, after its argument-only checks.
 # begin_write recover  -- the one caller allowed past an interrupted write.
 begin_write() {
-  local mode=${1-} d
+  local mode=${1-} d p
   WRITING=true
   mkdir -p "$STATE_DIR/applied" "$TXN" ||
     die "cannot create $STATE_DIR (disk full?). Nothing was changed."
@@ -144,6 +148,10 @@ begin_write() {
   flock -w 5 9 ||
     die "another write or an apply is running -- try again when it finishes. Nothing was changed."
   export NIXARCHY_LOCK_HELD=1
+  exec 7>>"$CHILDREN" || die "cannot open $CHILDREN. Nothing was changed."
+  # Children inherit fd 7; a write killed outright leaves them holding it.
+  flock -w 1 7 ||
+    die "something an interrupted write started is still running. Try again when it has finished. Nothing was changed."
   # We hold the lock: any other working dir is from a write that died.
   for d in "$STATE_DIR"/pkg-work.*; do
     [ -e "$d" ] || continue
@@ -157,8 +165,29 @@ begin_write() {
   # write was final. Neither needs anything from the user.
   rm -rf "$TXN/new" "$TXN/done" 2>/dev/null || :
   if [ -e "$TXN/open" ] && [ "$mode" != recover ]; then
-    die "an earlier write was interrupted. To put back what was there before, run: $SELF recover. If the files look right as they are, run: $SELF recover --discard. Nothing was changed."
+    local paths=""
+    for p in "$TXN/open"/*.path; do [ -e "$p" ] && paths+=$(cat "$p")$'\n'; done
+    die "$(recovery_message "$paths") Nothing was changed."
   fi
+}
+
+# Prints guarded paths and returns 0 for a leftover write, 1 for none, or
+# 2 when a writer holds the lock (or the lock is missing).
+interrupted() {
+  [ -e "$TXN/open" ] || return 1
+  [ -e "$LOCK" ] || return 2
+  ( exec 6<"$LOCK" || exit 2
+    flock -s -n 6 || exit 2
+    [ -d "$TXN/open" ] || exit 1
+    cat "$TXN/open"/*.path 2>/dev/null; exit 0
+  )
+}
+
+recovery_message() {
+  local list=${1%$'\n'}
+  list=${list//$'\n'/, }
+  printf 'an earlier write was interrupted (%s). To put back what was there before, run: %s recover. If the files look right as they are, run: %s recover --discard.' \
+    "$list" "$SELF" "$SELF"
 }
 
 # guard FILE...  -- every file one write may change, in one call.
@@ -194,6 +223,7 @@ guard() {
 # GUARDED changes in this shell.
 rollback() {
   local p i f failed=()
+  if ! settle; then GUARDED=false; ROLLBACK_NOTE=$SETTLE_NOTE; return 0; fi
   for p in "$TXN/open"/*.path; do
     [ -e "$p" ] || continue
     i=${p%.path}
@@ -223,10 +253,22 @@ rollback() {
 # because a failed mv in an && list is exempt from errexit and the EXIT trap
 # would then undo a write already reported as done.
 committed() {
+  if ! settle; then
+    GUARDED=false   # keep open/: neither committed nor undone
+    die "something this write started is still running, so the write was neither kept nor undone. When it has finished, run $SELF recover --discard to keep the change, or $SELF recover to put back what was there before."
+  fi
   mv "$TXN/open" "$TXN/done" ||
     die "could not record that the write finished (disk full?), so it was undone."
   GUARDED=false
   rm -rf "$TXN/done" 2>/dev/null || :
+}
+
+# A fresh open can take the lock only after every child has closed fd 7.
+settle() {
+  exec 7>&-
+  if ( flock -w 5 6 ) 6>>"$CHILDREN"; then return 0; fi
+  SETTLE_FAILED=true
+  return 1
 }
 
 # After run_writer: keep the writer's change, or undo it, and answer.
@@ -1131,7 +1173,7 @@ cmd_flake_add() {
 
   local err; err=$(mktemp)
 
-  if ! timeout 120 nix flake metadata "$dir" >/dev/null 2>"$err" 9>&-; then
+  if ! timeout -k 10 120 nix flake metadata "$dir" >/dev/null 2>"$err" 9>&-; then
     die "this flake does not evaluate as it stands, so I have changed nothing rather than add to a broken file: $(nix_why "$err")"
   fi
 
@@ -1150,11 +1192,11 @@ cmd_flake_add() {
   fi
   cp "$tmp" "$file"   # not mv; see cmd_opt_set (#39)
 
-  if ! timeout 120 nix flake lock "$dir" >/dev/null 2>"$err" 9>&-; then
+  if ! timeout -k 10 120 nix flake lock "$dir" >/dev/null 2>"$err" 9>&-; then
     die "could not lock '$ref', so nothing was changed: $(nix_why "$err")"
   fi
 
-  if ! timeout 120 nix flake metadata "$dir" >/dev/null 2>"$err" 9>&-; then
+  if ! timeout -k 10 120 nix flake metadata "$dir" >/dev/null 2>"$err" 9>&-; then
     die "the flake stopped evaluating with '$name' in it, so nothing was changed: $(nix_why "$err")"
   fi
   committed
@@ -1195,7 +1237,7 @@ cmd_flake_remove() {
   # The same baseline as add: a flake that was already broken is not this
   # removal's fault, and must not look like it (#29).
   local err; err=$(mktemp)
-  if ! timeout 120 nix flake metadata "$dir" >/dev/null 2>"$err" 9>&-; then
+  if ! timeout -k 10 120 nix flake metadata "$dir" >/dev/null 2>"$err" 9>&-; then
     die "this flake does not evaluate as it stands, so I have changed nothing rather than remove from a broken file: $(nix_why "$err")"
   fi
 
@@ -1252,7 +1294,7 @@ cmd_flake_remove() {
     die "that would have left $file unparseable, so nothing was changed: $(nix_why "$err")"
   fi
   cp "$tmp" "$file"   # not mv; see cmd_opt_set (#39)
-  if ! timeout 120 nix flake metadata "$dir" >/dev/null 2>"$err" 9>&-; then
+  if ! timeout -k 10 120 nix flake metadata "$dir" >/dev/null 2>"$err" 9>&-; then
     die "the flake stopped evaluating without '$name', so nothing was changed: $(nix_why "$err")"
   fi
   committed
@@ -1429,9 +1471,17 @@ cmd_pending() {
   [ -d "$base/nixarchy" ] && never=false
   private_dir READDIR pkg-read
   export TMPDIR=$READDIR
-  [ -e "$TXN/open" ] && writing=true
+  local rpaths rrc=0
+  rpaths=$(interrupted) || rrc=$?
+  case $rrc in 0) die "$(recovery_message "$rpaths")" ;; 2) writing=true ;; esac
   snapshot_selection "$READDIR"
-  [ -e "$TXN/open" ] && writing=true
+  if [ -e "$TXN/open" ]; then
+    rrc=0; rpaths=$(interrupted) || rrc=$?
+    case $rrc in
+      0) die "$(recovery_message "$rpaths")" ;;
+      *) writing=true ;;   # 1: a live write committed during the probe
+    esac
+  fi
   : >"$READDIR/files.jsonl"
   : >"$READDIR/marked.jsonl"
   : >"$READDIR/changes.jsonl"
@@ -1862,6 +1912,16 @@ cmd_apply() {
       *) die "apply takes only --pin <part>=<sha256>, not '$1'" ;;
     esac
   done
+  local rpaths rrc=0 refuse=""
+  rpaths=$(interrupted) || rrc=$?
+  case $rrc in
+    0) refuse=$(recovery_message "$rpaths") ;;
+    2) refuse="a write is in progress or was interrupted -- try again in a moment" ;;
+  esac
+  if [ -n "$refuse" ]; then
+    jq -nc --arg m "$refuse" '{nixarchyPkgApply: {ok: false, exit: null, message: $m}}'
+    return 0
+  fi
   private_dir APPLYDIR pkg-apply
   export TMPDIR=$APPLYDIR
   flag=$APPLYDIR/mismatch
@@ -1922,6 +1982,12 @@ cmd_state() {
   [ -e "$SERVICES" ] && [ ! -r "$SERVICES" ] && unreadable+=("$SERVICES") || :
   local unread_msg=""
   [ ${#unreadable[@]} -gt 0 ] && unread_msg="could not read ${unreadable[*]} -- it exists but is not readable, so what it holds is not shown here" || :
+  local rpaths rrc=0 rfiles='[]'
+  rpaths=$(interrupted) || rrc=$?
+  if [ "$rrc" = 0 ]; then
+    unread_msg=${unread_msg:+$unread_msg -- }$(recovery_message "$rpaths")
+    rfiles=$(printf '%s' "$rpaths" | jq -Rsc 'split("\n") | map(select(length > 0))')
+  fi
 
   jq -n \
     --rawfile apps <(rows_tsv "$APPS" app) \
@@ -1932,6 +1998,7 @@ cmd_state() {
     --arg appsFile "$APPS" \
     --arg servicesFile "$SERVICES" \
     --arg unreadable "$unread_msg" \
+    --argjson rfiles "$rfiles" \
     --arg channel "$(machine_channel)" \
     --rawfile flakes <(cmd_flake_list) \
     '
@@ -1950,6 +2017,7 @@ cmd_state() {
       # the tabs that were fine, or the panel they would fix it from (#41).
     }
     + (if $unreadable == "" then {} else { message: $unreadable } end)
+    + (if $rfiles == [] then {} else { recovery: { files: $rfiles } } end)
     + {
       # What this tool declared in the system flake. Read from the same
       # command a terminal calls, so the two cannot disagree.

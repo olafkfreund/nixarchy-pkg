@@ -62,20 +62,45 @@ Next time on this machine, use `SHIFT+A` instead of `a` from the start.
 A write — a toggle, a package, an option, a draft or an input — was cut off
 before it finished, and the next one says so:
 
-> an earlier write was interrupted. To put back what was there before, run:
-> …/nixarchy-pkg recover. If the files look right as they are, run:
-> …/nixarchy-pkg recover --discard. Nothing was changed.
+> an earlier write was interrupted (…/apps.nix). To put back what was there
+> before, run: …/nixarchy-pkg recover. If the files look right as they are,
+> run: …/nixarchy-pkg recover --discard. Nothing was changed.
 
-The message names the script's full path. It is the plugin's own script, not
-a command on your `PATH`:
+The panel also shows this message in the footer and in the bar's tooltip, and
+refuses `a` and `SHIFT+A` until you run `recover` or `recover --discard`. The
+message names the script's full path — it is the plugin's own script, not a
+command on your `PATH`:
 
 ```bash
 ~/.config/omarchy/plugins/nixarchy.pkg/bin/nixarchy-pkg recover            # put back what was there before
 ~/.config/omarchy/plugins/nixarchy.pkg/bin/nixarchy-pkg recover --discard  # keep the files as they are
 ```
 
+After recovering in a terminal, press `r` (or reopen the menu).
+
 If the message is instead "another write or an apply is running -- try again
 when it finishes", something else holds the lock. Wait for it and try again.
+
+If the message is "something an interrupted write started is still running.
+Try again when it has finished. Nothing was changed.", a process that the
+interrupted write started is still alive. There is no fixed time limit: a Nix
+call is stopped after about two minutes, but a writer, or something either of
+them started, can run longer. Nothing needs killing unless it never ends; to
+see what holds the lock:
+
+```bash
+fuser -v ~/.local/state/nixarchy/pkg-children.lock
+```
+
+If a write ends with "something this write started is still running, so
+nothing was undone. Your backup is kept: run …/nixarchy-pkg recover when it
+has finished.", a child outlived a write that failed, so nothing was undone.
+Run `recover` once it has finished.
+
+If it says "so the write was neither kept nor undone", the write itself
+succeeded but a child was still running. Once it has finished, run
+`recover --discard` to keep the change, or `recover` to put back what was
+there before.
 
 The backup is in `~/.local/state/nixarchy/pkg-recovery/open/` (or under
 `XDG_STATE_HOME`). Each file has an `N.path` naming its live file, and an

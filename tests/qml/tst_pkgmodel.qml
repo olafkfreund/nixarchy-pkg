@@ -209,11 +209,42 @@ TestCase {
     verify(m.message.indexOf("the queue changed") >= 0)
   }
 
-  function test_arming_refused_when_queue_unknown() {
-    m._pending.deliver(JSON.stringify({ ok: false, error: "boom" }))
+  function test_arming_reads_afresh_when_queue_unknown() {
+    var bad = JSON.stringify({ ok: false, error: "an earlier write was interrupted (x)" })
+    m._pending.deliver(bad)
     compare(m.armApply("here"), false)
+    compare(m.armingState, "reading")
+    m._pending.deliver(bad)
     compare(m.armingState, "")
-    verify(m.message.indexOf("queue unknown") >= 0)
+    compare(m.message, "an earlier write was interrupted (x)")
+  }
+
+  function test_armed_then_interrupted_says_why() {
+    m.armApply("here")
+    m._pending.deliver(pend({}))
+    compare(m.armingState, "armed")
+    m._pending.deliver(JSON.stringify({ ok: false, error: "an earlier write was interrupted (x)" }))
+    compare(m.armingState, "")
+    compare(m.message, "an earlier write was interrupted (x)")
+  }
+
+  function test_armed_then_writing_disarms() {
+    m.armApply("here")
+    m._pending.deliver(pend({}))
+    compare(m.armingState, "armed")
+    m._pending.deliver(pend({ writing: true }))
+    compare(m.armingState, "")
+    compare(m.message, "a write is in progress -- try again in a moment")
+  }
+
+  function test_queue_error_is_one_note_row() {
+    m._pending.deliver(pend({ changes: [{ kind: "app", id: "x", path: "a", detail: "d" }] }))
+    m.checkResult = { verdict: "evaluates", fingerprint: "f1" }
+    m._pending.deliver(JSON.stringify({ ok: false, error: "an earlier write was interrupted (x)" }))
+    var r = m.queueRows()
+    compare(r.length, 1)
+    compare(r[0].kind, "note")
+    compare(r[0].text, "an earlier write was interrupted (x)")
   }
 
   function test_apply_sends_the_frozen_pins() {

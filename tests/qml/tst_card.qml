@@ -543,4 +543,22 @@ TestCase {
       compare(realList().currentIndex, 0)
     })
   }
+
+  // #66: an interrupted write's reason is long; the footer status must stop
+  // where the key hints begin.
+  function test_long_queue_error_does_not_run_under_the_hints() {
+    fakeModel.queued = -1
+    fakeModel.queueError = "an earlier write was interrupted (/home/u/.config/nixarchy/apps.nix). To put back what was there before, run: /nix/store/x/bin/nixarchy-pkg recover. If the files look right as they are, run: /nix/store/x/bin/nixarchy-pkg recover --discard."
+    try {
+      var st = byName(card, "queueStatus"), h = byName(card, "hints")
+      verify(st && h)
+      var stRight = st.mapToItem(card, st.width, 0).x
+      var hLeft = h.mapToItem(card, 0, 0).x
+      verify(stRight <= hLeft, "status ends at " + stRight + ", hints start at " + hLeft)
+      verify(st.truncated, "the long reason is elided")
+    } finally {
+      fakeModel.queueError = ""
+      fakeModel.queued = 0
+    }
+  }
 }

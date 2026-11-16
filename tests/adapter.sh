@@ -671,7 +671,12 @@ check 'draft changes fingerprint but not part pins' jq -e --arg old "$old_finger
 
 q_reset
 mkdir -p "$Q/state/nixarchy/pkg-recovery/open"
+# A live writer holds the lock; without one this is an interrupted write (#66).
+: >"$Q/state/nixarchy/applied/lock"
+( flock 9; touch "$Q/ready"; exec sleep 20 ) 9>"$Q/state/nixarchy/applied/lock" & qholder=$!
+for ((i = 0; i < 100; i++)); do [ -e "$Q/ready" ] && break; sleep 0.05; done
 q_answer writing
+kill "$qholder" 2>/dev/null || :; wait "$qholder" 2>/dev/null || :
 check 'open recovery marks queue as writing' jq -e '.writing == true' <<<"$QOUT"
 
 q_reset
@@ -1501,6 +1506,227 @@ check "recover --discard gives one answer" one_json "$out"
 check "recover --discard keeps the files" jq -e '.ok == true' <<<"$out"
 left_nothing "killed during a writer"
 rm -rf "$W59" "$ADAPTER_TMP"
+
+echo "a killed write leaves nothing to race the next one (#67)"
+rm -rf "$XDG_STATE_HOME"
+XDG_STATE_HOME=$(mktemp -d); export XDG_STATE_HOME
+W67=$(mktemp -d)
+mkdir -p "$W67/cfg/nixarchy" "$W67/stub" "$W67/fk"
+A67="$W67/cfg/nixarchy/apps.nix"
+printf '{ ... }:\n{\n  # foo.enable = true;  #@ foo\n}\n' > "$A67"
+printf '{ ... }:\n{\n}\n' > "$W67/cfg/nixarchy/services.nix"
+run67() { XDG_CONFIG_HOME="$W67/cfg" PATH="$W67/stub:$PATH" "$ADAPTER" "$@"; }
+wait67_file() {
+  local i
+  for ((i = 0; i < 100; i++)); do
+    [ -s "$1" ] && break
+    sleep 0.01
+  done
+  test -s "$1"
+}
+wait67_done() {
+  local i
+  for ((i = 0; i < 300; i++)); do
+    [ -s "$1" ] && break
+    sleep 0.05
+  done
+  test -s "$1"
+}
+wait67_child() {
+  local pid=$1 i
+  kill "$pid" 2>/dev/null || :
+  for ((i = 0; i < 100; i++)); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.05
+  done
+  for ((i = 0; i < 100; i++)); do
+    flock -n "$(st)/pkg-children.lock" true && return 0
+    sleep 0.05
+  done
+  return 1
+}
+
+# A killed adapter must leave its Nix child holding fd 7 until it exits.
+printf '{\n  outputs = { self }: { };\n}\n' > "$W67/fk/flake.nix"
+git -C "$W67/fk" init -q .
+git -C "$W67/fk" add flake.nix
+printf '{"nodes":{"root":{}},"root":"root","version":7}\n' > "$W67/fk/flake.lock"
+before_nix=$(md5sum < "$W67/fk/flake.nix"); before_lock=$(md5sum < "$W67/fk/flake.lock")
+cat > "$W67/stub/nix" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1 $2" = 'flake lock' ]; then
+  echo $$ > "$STUB67/nix.pid"
+  exec sleep 30
+fi
+exit 0
+EOF
+chmod +x "$W67/stub/nix"
+STUB67="$W67" NIXARCHY_FLAKE="$W67/fk" XDG_CONFIG_HOME="$W67/cfg" PATH="$W67/stub:$PATH" \
+  "$ADAPTER" flake add foo github:a/b > "$W67/add.out" 2>&1 & adapter=$!
+check "killed flake add reaches nix" wait67_file "$W67/nix.pid"
+kill -9 "$adapter" 2>/dev/null || :; wait "$adapter" 2>/dev/null || :
+out=$(run67 toggle app foo)
+check "nix child blocks the next write" jq -e '.ok == false and (.error | contains("still running"))' <<<"$out"
+check "nix child keeps its working directory" compgen -G "$(st)/pkg-work.*"
+out=$(run67 recover)
+check "nix child blocks recovery" jq -e '.ok == false and (.error | contains("still running"))' <<<"$out"
+check "killed nix child releases its lock" wait67_child "$(cat "$W67/nix.pid")"
+out=$(run67 recover)
+check "nix child recovery succeeds" jq -e '.ok == true' <<<"$out"
+check "nix child recovery restores flake.nix" test "$(md5sum < "$W67/fk/flake.nix")" = "$before_nix"
+check "nix child recovery restores flake.lock" test "$(md5sum < "$W67/fk/flake.lock")" = "$before_lock"
+rm -f "$W67/stub/nix"
+
+# The external writers inherit the same lock.
+cat > "$W67/stub/nixarchy-app-enable" <<'EOF'
+#!/usr/bin/env bash
+echo $$ > "$STUB67/writer.pid"
+exec sleep 30
+EOF
+chmod +x "$W67/stub/nixarchy-app-enable"
+STUB67="$W67" XDG_CONFIG_HOME="$W67/cfg" PATH="$W67/stub:$PATH" \
+  "$ADAPTER" toggle app foo > "$W67/toggle.out" 2>&1 & adapter=$!
+check "killed writer starts" wait67_file "$W67/writer.pid"
+kill -9 "$adapter" 2>/dev/null || :; wait "$adapter" 2>/dev/null || :
+out=$(run67 toggle app foo)
+check "writer child blocks the next write" jq -e '.ok == false and (.error | contains("still running"))' <<<"$out"
+check "killed writer releases its lock" wait67_child "$(cat "$W67/writer.pid")"
+out=$(run67 recover)
+check "writer child recovery succeeds" jq -e '.ok == true' <<<"$out"
+rm -f "$W67/stub/nixarchy-app-enable"
+
+# The writer exits first; its background child keeps fd 7 and edits later.
+before=$(md5sum < "$A67")
+STUB67=$W67; APPS67=$A67; export STUB67 APPS67
+GC_DELAY67=2; export GC_DELAY67
+cat > "$W67/stub/nixarchy-app-enable" <<'EOF'
+#!/usr/bin/env bash
+( printf 'started\n' > "$STUB67/gc.started"; sleep "${GC_DELAY67:-1}"; printf 'x\n' >> "$APPS67"; printf 'done\n' > "$STUB67/gc.done" ) >/dev/null 2>&1 &
+exit "${WRITER_RC67:-1}"
+EOF
+chmod +x "$W67/stub/nixarchy-app-enable"
+out=$(run67 toggle app foo)
+check "rollback waits for a grandchild" test -e "$W67/gc.done"
+check "failed writer reports failure" jq -e '.ok == false' <<<"$out"
+check "rollback follows the grandchild edit" test "$(md5sum < "$A67")" = "$before"
+check "rollback closes recovery" not test -e "$(st)/pkg-recovery/open"
+check "rollback grandchild finishes" wait67_done "$W67/gc.done"
+check "rollback leaves original bytes" test "$(md5sum < "$A67")" = "$before"
+rm -f "$W67/gc.done" "$W67/gc.started"
+
+WRITER_RC67=0; export WRITER_RC67
+out=$(run67 toggle app foo)
+check "commit waits for a grandchild" test -e "$W67/gc.done"
+check "successful writer reports success" jq -e '.ok == true' <<<"$out"
+check "commit keeps the grandchild edit" grep -qx 'x' "$A67"
+check "commit closes recovery" not test -e "$(st)/pkg-recovery/open"
+check "commit grandchild finishes" wait67_done "$W67/gc.done"
+rm -f "$W67/gc.done" "$W67/gc.started"
+
+# TERM during settle must answer once and keep both the backup and WORK.
+# Bash handles TERM after flock's wait; the child must outlast both waits.
+GC_DELAY67=12; export GC_DELAY67
+XDG_CONFIG_HOME="$W67/cfg" PATH="$W67/stub:$PATH" \
+  "$ADAPTER" toggle app foo > "$W67/term.out" 2>&1 & adapter=$!
+check "TERM fixture starts grandchild" wait67_file "$W67/gc.started"
+sleep 1
+kill -TERM "$adapter" 2>/dev/null || :; wait "$adapter" 2>/dev/null || :
+out=$(cat "$W67/term.out")
+check "TERM while settling gives one answer" one_json "$out"
+check "TERM while settling reports the child" jq -e '.ok == false and (.error | contains("still running"))' <<<"$out"
+check "TERM keeps recovery open" test -e "$(st)/pkg-recovery/open"
+check "TERM keeps its working directory" compgen -G "$(st)/pkg-work.*"
+check "TERM grandchild finishes" wait67_done "$W67/gc.done"
+out=$(run67 recover)
+check "TERM recovery succeeds" jq -e '.ok == true' <<<"$out"
+rm -f "$W67/gc.done" "$W67/gc.started"
+
+# A child that runs beyond settle's five seconds must keep the backup.
+before=$(md5sum < "$A67")
+WRITER_RC67=1
+GC_DELAY67=7
+out=$(run67 toggle app foo)
+check "long grandchild reports an unfinished write" jq -e '.ok == false and (.message | contains("still running") and contains("recover"))' <<<"$out"
+check "long grandchild keeps recovery open" test -e "$(st)/pkg-recovery/open"
+check "long grandchild finishes" wait67_done "$W67/gc.done"
+out=$(run67 recover)
+check "long grandchild recovery succeeds" jq -e '.ok == true' <<<"$out"
+check "long grandchild recovery restores apps.nix" test "$(md5sum < "$A67")" = "$before"
+check "timeout -k covers five write-time calls" test "$(grep -c 'timeout -k 10 120 nix flake' "$ADAPTER")" = 5
+check "no write-time call has the old timeout" test "$(grep -c 'timeout 120 nix flake \(metadata\|lock\)' "$ADAPTER" || :)" = 0
+rm -rf "$W67"
+
+echo "an interrupted write stops apply (#66)"
+rm -rf "$XDG_STATE_HOME"
+XDG_STATE_HOME=$(mktemp -d); export XDG_STATE_HOME
+W66=$(mktemp -d)
+mkdir -p "$W66/cfg/nixarchy" "$W66/stub" "$W66/tmp"
+A66="$W66/cfg/nixarchy/apps.nix"
+printf '{ ... }:\n{\n  # foo.enable = true;  #@ foo\n}\n' > "$A66"
+printf '{ ... }:\n{\n}\n' > "$W66/cfg/nixarchy/services.nix"
+# shellcheck disable=SC2016  # the stub expands STUB_DIR itself.
+printf '#!/usr/bin/env bash\necho ran > "$STUB_DIR/argv"\n' >"$W66/stub/nixarchy-apply"; chmod +x "$W66/stub/nixarchy-apply"
+run66() { XDG_CONFIG_HOME="$W66/cfg" NIXARCHY_FLAKE="$W66/fk" TMPDIR="$W66/tmp" PATH="$W66/stub:$PATH" STUB_DIR="$W66/stub" STUB_MODE="" "$ADAPTER" "$@"; }
+# A killed write: open/ with a guarded path, and a lock nobody holds.
+fixture66() {
+  rm -rf "$XDG_STATE_HOME/nixarchy" "$W66/stub/argv"
+  mkdir -p "$XDG_STATE_HOME/nixarchy/applied" "$XDG_STATE_HOME/nixarchy/pkg-recovery/open"
+  : >"$XDG_STATE_HOME/nixarchy/applied/lock"
+  printf '%s' "$A66" >"$XDG_STATE_HOME/nixarchy/pkg-recovery/open/0.path"
+  printf 'old\n' >"$XDG_STATE_HOME/nixarchy/pkg-recovery/open/0.data"
+}
+holder66=""
+hold66() {   # hold66 [-s]: hold the apply lock from a background process
+  rm -f "$W66/ready"
+  ( flock "$@" 9; touch "$W66/ready"; exec sleep 20 ) 9>"$XDG_STATE_HOME/nixarchy/applied/lock" & holder66=$!
+  wait67_file "$W66/ready" || :
+}
+release66() { kill "$holder66" 2>/dev/null || :; wait "$holder66" 2>/dev/null || :; holder66=""; }
+
+fixture66
+out=$(run66 pending)
+# shellcheck disable=SC2016  # jq variables are literal in its filter.
+check "interrupted: pending is an error naming recover and the file" jq -e --arg p "$A66" '.ok == false and (.error | contains("recover") and contains($p))' <<<"$out"
+out=$(run66 state)
+# shellcheck disable=SC2016  # jq variables are literal in its filter.
+check "interrupted: state keeps ok and lists the files" jq -e --arg p "$A66" '.ok == true and .recovery.files == [$p] and (.message | contains("recover"))' <<<"$out"
+out=$(run66 apply)
+check "interrupted: apply is one refusal record" jq -e '.nixarchyPkgApply | .ok == false and .exit == null and (.message | contains("recover"))' <<<"$out"
+check "interrupted: apply is the only line" test "$(wc -l <<<"$out")" = 1
+check "interrupted: nixarchy-apply was not run" not test -e "$W66/stub/argv"
+
+fixture66
+hold66
+out=$(run66 pending)
+check "running: pending says writing" jq -e '.ok == true and .writing == true' <<<"$out"
+out=$(run66 state)
+check "running: state has no recovery key" jq -e 'has("recovery") | not' <<<"$out"
+out=$(run66 apply)
+check "running: apply says in progress" jq -e '.nixarchyPkgApply | .ok == false and (.message | contains("in progress"))' <<<"$out"
+check "running: nixarchy-apply was not run" not test -e "$W66/stub/argv"
+release66
+
+fixture66
+hold66 -s
+out=$(run66 apply)
+check "a shared holder does not hide the interruption" jq -e '.nixarchyPkgApply | .ok == false and (.message | contains("an earlier write was interrupted"))' <<<"$out"
+check "shared holder: nixarchy-apply was not run" not test -e "$W66/stub/argv"
+release66
+
+fixture66
+rm -f "$XDG_STATE_HOME/nixarchy/applied/lock"
+out=$(run66 pending)
+check "missing lock: pending says writing" jq -e '.writing == true and .ok != false' <<<"$out"
+check "missing lock: the probe did not create it" not test -e "$XDG_STATE_HOME/nixarchy/applied/lock"
+
+fixture66
+tout=$(run66 toggle app foo)
+pout=$(run66 pending)
+# shellcheck disable=SC2016  # jq variables are literal in its filter.
+check "toggle refuses with the one message" jq -e --arg p "$A66" '.ok == false and (.error | contains("an earlier write was interrupted (" + $p))' <<<"$tout"
+# shellcheck disable=SC2016  # jq variables are literal in its filter.
+check "pending uses the same message" jq -e --arg p "$A66" '.ok == false and (.error | contains("an earlier write was interrupted (" + $p))' <<<"$pout"
+rm -rf "$W66"
 
 # A pipeline whose FIRST command exits non-zero on a normal outcome --
 # `diff` finding differences, `grep` finding nothing, `head` closing the pipe
