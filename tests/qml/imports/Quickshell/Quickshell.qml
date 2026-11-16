@@ -1,8 +1,7 @@
-// As Quickshell's singleton, reduced to what Card binds. Only "two" has an
-// icon here; every other one is missing, which Card must draw as nothing.
 pragma Singleton
 import QtQuick
-
+// Screens and icon-path shape only; no host shell runs.
 QtObject {
+  property var screens: []
   function iconPath(icon, check) { return icon === "two" ? "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" : "" }
 }

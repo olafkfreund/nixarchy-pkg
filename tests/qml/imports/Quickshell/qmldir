@@ -1,2 +1,5 @@
 module Quickshell
+# Test-only shell types; no host shell implementation loads.
 singleton Quickshell 1.0 Quickshell.qml
+singleton ExclusionMode 1.0 ExclusionMode.qml
+PanelWindow 1.0 PanelWindow.qml
