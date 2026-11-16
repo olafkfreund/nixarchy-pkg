@@ -91,7 +91,11 @@ FocusScope {
         if (!root.open || (data && data.path && data.path !== root.path)) return
         if (!data || data.ok === false) {
           root.error = data && data.error ? String(data.error) : "could not read that option"
+          root.awaitingConcrete = false
+          root.concreteValue = null
+          root.path = root.templatePath
           root.option = ({})
+          root.touched = false
           return
         }
         root.error = ""
@@ -266,7 +270,9 @@ FocusScope {
   property bool touched: false
 
   readonly property var choices: option.choices || []
-  readonly property var nameSlots: templatePath.match(/(^|\.)(<name>|\*)(?=\.|$)/g) || []
+  readonly property var nameSlots: templatePath.split(".").map(function (part, i, parts) {
+    return part === "<name>" || part === "*" ? (parts[i - 1] || "option") : null
+  }).filter(function (part) { return part !== null })
 
   function concretePath() {
     var i = 0
@@ -310,12 +316,13 @@ FocusScope {
   }
 
   function commit() {
+    if (root.awaitingConcrete) return
     if (root.path === root.templatePath && root.option.template === null && root.nameSlots.length > 0) {
       for (var i = 0; i < root.nameSlots.length; i++) {
         var name = nameFields.itemAt(i).text
         if (!name) { root.error = "name every <name> first"; return }
-        if (/["\\$\t\n]/.test(name) || name.indexOf("#@") >= 0) {
-          root.error = "that name cannot contain a quote, backslash, dollar sign, tab, newline or #@"
+        if (/["\\$\x00-\x1f\x7f]/.test(name) || name.indexOf("#@") >= 0) {
+          root.error = "that name cannot contain a quote, backslash, dollar sign, control character or #@"
           return
         }
       }
@@ -433,6 +440,11 @@ FocusScope {
   Keys.onPressed: function (event) {
     // A closed form handles nothing: every key belongs to the list.
     if (!root.open) return
+    if (event.key === Qt.Key_Backtab && root.path === root.templatePath && nameFields.count > 0) {
+      nameFields.itemAt(nameFields.count - 1).forceActiveFocus()
+      event.accepted = true
+      return
+    }
     if (root.removeKey(event)) return
     root.disarmRemove()
     switch (event.key) {
@@ -573,11 +585,18 @@ FocusScope {
         model: root.option.template === null ? root.nameSlots.length : 0
         delegate: TextField {
           width: column.width
-          placeholderText: "name for " + root.nameSlots[index].replace(/^\./, "")
+          placeholderText: "name for <name> " + (index + 1) + " of " + nameFields.count + ": " + root.nameSlots[index]
           Keys.onReturnPressed: root.commit()
           Keys.onEnterPressed: root.commit()
           Keys.onTabPressed: {
             if (index + 1 < nameFields.count) nameFields.itemAt(index + 1).forceActiveFocus()
+            else {
+              focus = false
+              if (root.widget === "string") textField.forceActiveFocus()
+              else if (root.widget === "integer") integerField.forceActiveFocus()
+              else if (root.widget === "scaffold") scaffoldField.forceActiveFocus()
+              else root.forceActiveFocus()
+            }
           }
         }
       }

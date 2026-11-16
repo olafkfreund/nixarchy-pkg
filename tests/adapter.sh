@@ -823,7 +823,8 @@ check "named password points to its concrete file option" jq -e \
   '.template == "users.users.<name>.hashedPassword" and .fileOption == "users.users.alice.hashedPasswordFile"' \
   <<<"$(fx opt describe users.users.alice.hashedPassword)"
 for bad in 'services.123.x' 'services.if.x' 'users.users.<name>.shell' 'services."bad\key".x' \
-           "services.\"bad\$key\".x" 'services."bad#@key".x'; do
+           "services.\"bad\$key\".x" 'services."bad#@key".x' \
+           $'services."bad\001key".x' $'services."bad\rkey".x' $'services."bad\177key".x'; do
   before=$(sha256sum "$APPSNIX")
   check "invalid path refuses: $bad" jq -e '.ok == false and (.error | contains("not an option path"))' \
     <<<"$(fx opt set "$bad" true)"

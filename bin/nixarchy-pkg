@@ -1398,7 +1398,7 @@ valid_path_part() {
     if|then|else|assert|with|let|in|rec|inherit|or|\<name\>|\*) return 1 ;;
   esac
   if [[ $part == '"'* ]]; then
-    [[ $part == '"'*'"' && $part != *\\* && $part != *\$* && $part != *$'\t'* && $part != *$'\n'* && $part != *'#@'* ]]
+    [[ $part == '"'*'"' && $part != *\\* && $part != *\$* && $part != *[$'\001'-$'\037'$'\177']* && $part != *'#@'* ]]
   else
     [[ $part =~ $ident_re ]]
   fi
