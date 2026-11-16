@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 75
 intent: intent/2026-11-16-75-cursor-desync.md
 ---
