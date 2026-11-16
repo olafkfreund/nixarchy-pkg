@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 71
 spec: spec/2026-11-16-71-selection-rows.md
 coders:
