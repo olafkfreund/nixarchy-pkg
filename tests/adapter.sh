@@ -1509,7 +1509,7 @@ exit 0
 SEOF
 chmod +x "$DSTUB/nixarchy-search"
 RCACHE=$(mktemp -d)
-out=$(PATH="$DSTUB:$PATH" XDG_CACHE_HOME="$RCACHE" XDG_CONFIG_HOME="$DCFG" \
+out=$(PATH="$DSTUB:$PATH" XDG_CACHE_HOME="$RCACHE" XDG_CONFIG_HOME="$DCFG" NIXARCHY_FLAKE="$RCACHE/no-flake" \
       "$ADAPTER" reindex 2>&1 || true)
 check "reindex over a no-op search reports failure" jq -e '.ok == false' <<<"$out"
 check "and says the index is still stale"           jq -e '.indexStale == true' <<<"$out"
@@ -2138,6 +2138,140 @@ renames_onto_a_config() {
 edits_in_place() { code | grep -qE '\bsed[[:space:]]+-i\b'; }
 check "no mv onto a file the adapter owns" not renames_onto_a_config
 check "no sed -i"                          not edits_in_place
+
+echo "options discovered from the flake (#62)"
+# A stub nix that prints a canned `out.json`, so no real flake is ever
+# evaluated: NIXARCHY_FLAKE points at a throwaway directory, never /etc/nixos.
+O62=$(mktemp -d); mkdir -p "$O62/bin" "$O62/fl" "$O62/fl2" "$O62/cache" "$O62/state"
+touch "$O62/fl/flake.nix" "$O62/fl2/flake.nix"
+echo lock-one >"$O62/fl/flake.lock"; echo lock-one >"$O62/fl2/flake.lock"
+cat >"$O62/bin/nix" <<'NEOF'
+#!/usr/bin/env bash
+echo run >>"$O62/nix.calls"
+case "${NIX_MODE-ok}" in
+  change-lock) echo lock-during-eval >"$O62/fl/flake.lock" ;;
+  fail)  echo "error: attribute 'x' missing" >&2; exit 1 ;;
+  nohost) echo "error: flake does not provide attribute 'nixosConfigurations.\"h\"'" >&2; exit 1 ;;
+  sleep) sleep 5 ;;
+  nohm)  echo '{"nixos":[{"name":"programs.git.enable","type":"boolean","description":"","default":null,"example":null,"declarations":[],"readOnly":false}],"homeManager":false,"users":[],"perUser":false,"home":null}'; exit 0 ;;
+esac
+cat <<JSON
+{"nixos":[{"name":"programs.git.enable","type":"boolean","description":"Whether to\nenable git","default":{"_type":"literalExpression","text":"false"},"example":null,"declarations":["/m.nix"],"readOnly":false}],
+ "homeManager":true,"users":["$(command id -un)"],"perUser":true,
+ "home":[{"name":"programs.hm.enable","type":"boolean","description":"hm","default":null,"example":null,"declarations":[],"readOnly":false}]}
+JSON
+NEOF
+chmod +x "$O62/bin/nix"
+export O62
+opt62() { env PATH="$O62/bin:$PATH" XDG_STATE_HOME="$O62/state" XDG_CACHE_HOME="${CACHE62:-$O62/cache}" \
+  NIXARCHY_FLAKE="${FLAKE62:-$O62/fl}" "$ADAPTER" "$@"; }
+mkdir -p "$O62/cache/nixarchy"
+printf 'pkg\tgit\tthe git\tflags\tprev\nopt\tprograms.git.enable\tstale row\tboolean\tOLD\n' >"$O62/cache/nixarchy/index.tsv"
+OC=$O62/cache/nixarchy
+
+out=$(opt62 search git --kind opt)
+check "without a cache, search says source system and keeps the index rows" \
+  jq -e '.options.source == "system" and .rows[0].summary == "stale row" and .rows[0].scope == "system"' <<<"$out"
+
+out=$(opt62 options refresh)
+check "refresh answers ok from the flake" jq -e '.ok and .source == "flake" and .counts.system == 1 and .counts.user == 1 and .homeManager' <<<"$out"
+check "it publishes system.json, user.json, rows.tsv and meta.json" \
+  test -f "$OC/options/system.json" -a -f "$OC/options/user.json" -a -f "$OC/options/rows.tsv" -a -f "$OC/options/meta.json"
+# shellcheck disable=SC2016 # awk program, not shell
+check "rows.tsv rows have six columns, the last the scope" \
+  awk -F'\t' 'NF != 6 || ($6 != "system" && $6 != "user") { exit 1 }' "$OC/options/rows.tsv"
+check "meta.json carries the stamp, flake, host and user" \
+  jq -e '(.stamp | length == 64) and .flake == "'"$O62"'/fl" and .host != null and .user != null' "$OC/options/meta.json"
+
+out=$(opt62 search git --kind opt)
+check "search takes option rows from the cache, not the index" \
+  jq -e '.options.source == "flake" and (.rows | length == 1) and .rows[0].summary == "Whether to enable git" and .rows[0].scope == "system"' <<<"$out"
+check "state reports where the options came from" \
+  jq -e '.optionsInfo.source == "flake" and .optionsInfo.stale == false' <<<"$(opt62 state)"
+out=$(NIX_MODE=change-lock opt62 options refresh)
+check "refresh succeeds when the lock changes during eval" jq -e '.ok == true' <<<"$out"
+check "a lock changed during eval leaves state options stale" \
+  jq -e '.optionsInfo.source == "flake" and .optionsInfo.stale == true' <<<"$(opt62 state)"
+echo lock-one >"$O62/fl/flake.lock"
+opt62 options refresh >/dev/null
+check "describe reads the cached system.json" \
+  jq -e '.ok and .source == "flake" and .scope == "system" and .default == "false"' <<<"$(opt62 opt describe programs.git.enable)"
+check "describe --scope user reads user.json" \
+  jq -e '.ok and .scope == "user" and .path == "programs.hm.enable"' <<<"$(opt62 opt describe --scope user programs.hm.enable)"
+
+# A changed lock makes the cache stale, not unusable.
+echo lock-two >"$O62/fl/flake.lock"
+check "a changed flake.lock marks the cache stale" \
+  jq -e '.options.source == "flake" and .options.stale == true' <<<"$(opt62 search git)"
+echo lock-one >"$O62/fl/flake.lock"
+
+# Another flake with the identical lock must not borrow this cache.
+out=$(FLAKE62=$O62/fl2 opt62 search git --kind opt)
+check "a cache built for another flake is not used" \
+  jq -e '.options.source == "system" and .rows[0].summary == "stale row"' <<<"$out"
+
+# Failure and timeout leave the published cache byte-identical.
+before=$(readlink "$OC/options"; cat "$OC/options"/*)
+out=$(NIX_MODE=fail opt62 options refresh)
+check "a failed refresh answers ok:false with nix's words" jq -e '.ok == false and (.error | contains("attribute"))' <<<"$out"
+printf '#!/bin/sh\nexit 124\n' >"$O62/bin/timeout"; chmod +x "$O62/bin/timeout"
+out=$(opt62 options refresh)
+check "a timed-out refresh answers ok:false" jq -e '.ok == false and (.error | contains("timed out"))' <<<"$out"
+rm "$O62/bin/timeout"
+check "neither moves the published cache" test "$before" = "$(readlink "$OC/options"; cat "$OC/options"/*)"
+out=$(NIX_MODE=nohost opt62 options refresh)
+check "a flake without the host is named" jq -e '.ok == false and (.error | contains("nixosConfigurations"))' <<<"$out"
+mkdir -p "$O62/fl3"; touch "$O62/fl3/flake.nix"
+FLAKE62=$O62/fl3 NIX_MODE=nohm opt62 options refresh >/dev/null
+check "describe --scope user with no user.json refuses, saying why" \
+  jq -e '.ok == false and (.error | contains("no Home Manager"))' <<<"$(FLAKE62=$O62/fl3 opt62 opt describe --scope user programs.git.enable)"
+check "and still describes the system scope from that cache" \
+  jq -e '.ok and .source == "flake"' <<<"$(FLAKE62=$O62/fl3 opt62 opt describe programs.git.enable)"
+
+# An invalid user name is refused before nix runs.
+# shellcheck disable=SC2016 # the stub's own script
+printf '#!/bin/sh\n[ "$1" = -un ] && { echo "Bad;User"; exit 0; }\nexec /usr/bin/env id "$@"\n' >"$O62/bin/id"; chmod +x "$O62/bin/id"
+: >"$O62/nix.calls"
+out=$(opt62 options refresh)
+check "an invalid user name is refused" jq -e '.ok == false and (.error | contains("invalid user"))' <<<"$out"
+check "and nix was never called" test ! -s "$O62/nix.calls"
+rm "$O62/bin/id"
+
+# A second refresh while one runs is refused.
+NIX_MODE="sleep" opt62 options refresh >"$O62/first.out" &
+first=$!
+for _ in $(seq 50); do [ -s "$O62/nix.calls" ] && break; sleep 0.1; done
+out=$(opt62 options refresh)
+check "a second refresh while one runs is refused" jq -e '.ok == false and (.error | contains("already being read"))' <<<"$out"
+wait "$first"
+
+# Killed between building and the rename: the old cache stays published, and
+# the half-built generation is removed.
+gens_before=$(find "$OC/options.d" -mindepth 1 | wc -l)
+# shellcheck disable=SC2016 # the stub's own script
+printf '#!/bin/sh\nkill -TERM $PPID\nsleep 1\nexit 1\n' >"$O62/bin/mv"; chmod +x "$O62/bin/mv"
+before=$(readlink "$OC/options")
+out=$(opt62 options refresh)
+rm "$O62/bin/mv"
+check "a refresh killed before the rename answers ok:false" jq -e '.ok == false' <<<"$out"
+check "the old cache is still the published one" test "$before" = "$(readlink "$OC/options")"
+check "and no half-built generation is left" test "$gens_before" = "$(find "$OC/options.d" -mindepth 1 | wc -l)"
+
+# Two generations are kept, so a reader that resolved the old one is safe.
+first_gen=$(readlink "$OC/options"); sleep 1
+opt62 options refresh >/dev/null; second_gen=$(readlink "$OC/options")
+check "the replaced generation survives one publish" test -d "$first_gen" -a "$first_gen" != "$second_gen"
+sleep 1; opt62 options refresh >/dev/null
+check "and goes after the next" test ! -d "$first_gen"
+# A cache home may itself be a symlink; preserve the previous resolved target.
+mkdir -p "$O62/real-cache"
+ln -s "$O62/real-cache" "$O62/linked-cache"
+CACHE62=$O62/linked-cache opt62 options refresh >/dev/null
+linked_old=$(readlink -f "$O62/linked-cache/nixarchy/options")
+sleep 1
+CACHE62=$O62/linked-cache opt62 options refresh >/dev/null
+check "symlinked cache home keeps the replaced generation" test -d "$linked_old"
+rm -rf "$O62"
 
 echo "failure is a value, not an exit code"
 out=$("$ADAPTER" nosuchcommand); rc=$?

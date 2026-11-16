@@ -151,7 +151,8 @@ FocusScope {
     root.error = ""
     root.option = ({})
     root.open = true
-    describe.command = [root.model.script, "opt", "describe", p]
+    describe.command = [root.model.script, "opt", "describe",
+                        "--scope", (row && row.scope) || "system", p]
     describe.running = true
     // Take the keyboard now, not only in seed(): a describe that fails never
     // seeds, and the menu ignores keys while the form is open, so ESC went

@@ -21,6 +21,7 @@
 #   recover [--discard]          restore or keep an interrupted write
 #   pending                      what is queued but not yet applied
 #   check [--dry-run]            evaluate a private copy of the queued flake
+#   options refresh              read options from the host's flake
 #   apply                        copy into the flake and rebuild; the output
 #                                is the build log as it happens, without
 #                                colour, then ONE line:
@@ -56,10 +57,13 @@ readonly SETTLE_NOTE="something this write started is still running, so nothing 
 WORK=""
 READDIR=""
 CHECKDIR=""
+OPTSDIR=""
+OPTSGEN=""
 APPLYDIR=""
 CHILD=""
 CHECKING=false
 PENDING=false
+OPTIONS_READING=false
 GUARDED=false        # true only while pkg-recovery/open belongs to this call
 ROLLBACK_NOTE=""
 WRITING=false        # true from begin_write on, so on_exit can answer for it
@@ -77,6 +81,29 @@ readonly UNTAG_JQ='def untag($f):
   (if ($f | index("unfree")) then gsub(" *\\[unfree\\]"; "") else . end)
   | (if ($f | index("broken")) then gsub(" *\\[broken\\]"; "") else . end)
   | gsub("^ +| +$"; "");'
+# shellcheck disable=SC2016 # Nix interpolation stays literal until the user is validated.
+readonly DISCOVER='c: let
+  lib = c.pkgs.lib;
+  user = "@USER@";
+  doc = prefix: opts: map (o: {
+      name = lib.removePrefix prefix o.name;
+      type = o.type or ""; description = o.description or "";
+      default = o.default or null; example = o.example or null;
+      declarations = map toString (o.declarations or [ ]);
+      readOnly = o.readOnly or false;
+    }) (builtins.filter (o: (o.visible or true) == true && !(o.internal or false))
+         (lib.optionAttrSetToDocList opts));
+  hm = c.options.home-manager.users or null;
+  perUser = hm != null && (hm.valueMeta.attrs or { }) ? ${user};
+in {
+  nixos = doc "" c.options;
+  homeManager = hm != null;
+  users = if hm == null then [ ] else builtins.attrNames c.config.home-manager.users;
+  inherit perUser;
+  home = if hm == null then null
+    else if perUser then doc "home-manager.users.${user}." hm.valueMeta.attrs.${user}.configuration.options
+    else doc "<name>." (hm.type.getSubOptions [ ]);
+}'
 
 # A write that is still open is undone first, so the one answer says what is
 # true afterwards.
@@ -91,6 +118,7 @@ die() {
     [ -z "$ROLLBACK_NOTE" ] || e="$1 -- but the undo failed. $ROLLBACK_NOTE"
   fi
   PENDING=false
+  OPTIONS_READING=false
   jq -nc --arg e "$e" '{ok: false, error: $e}'
   exit 0
 }
@@ -130,9 +158,15 @@ on_exit() {
   elif $PENDING; then
     jq -nc --arg e "could not read the queue (exit $rc)" '{ok:false, error:$e}'
     rc=0
+  elif $OPTIONS_READING; then
+    jq -nc --arg e "options refresh was interrupted (exit $rc)" '{ok:false, error:$e}'
+    rc=0
+  fi
+  if [ -n "$OPTSGEN" ] && [ "$(readlink "$CACHE_DIR/options" 2>/dev/null || :)" != "$OPTSGEN" ]; then
+    rm -rf -- "$OPTSGEN" 2>/dev/null || :
   fi
   local d
-  for d in "$WORK" "$READDIR" "$CHECKDIR" "$APPLYDIR"; do
+  for d in "$WORK" "$READDIR" "$CHECKDIR" "$OPTSDIR" "$APPLYDIR"; do
     [ -n "$d" ] || continue
     [ "$d" = "$WORK" ] && $SETTLE_FAILED && continue
     chmod -R u+w "$d" 2>/dev/null || :   # nix leaves read-only dirs behind
@@ -515,15 +549,22 @@ cmd_search() {
   case "$kind" in ''|pkg|opt|app) ;; *) die "--kind takes pkg, opt or app, not '$kind'" ;; esac
   [ -s "$INDEX" ] || die "no search index yet -- run: nixarchy-pkg reindex"
 
-  local facts stale
+  local facts stale rowsfile=""
   facts=$(index_facts)
   stale=$(jq -r '.status != "fresh"' <<<"$facts")
+  options_resolve
+  [ -z "$OPT_DIR" ] || [ ! -f "$OPT_DIR/rows.tsv" ] || rowsfile=$OPT_DIR/rows.tsv
 
   jq -n \
     --rawfile rows <(
-      awk -F'\t' -v OFS='\t' -v q="$query" -v want="$kind" -v lim="$limit" '
+      awk -F'\t' -v OFS='\t' -v q="$query" -v want="$kind" -v lim="$limit" -v idx="$INDEX" -v rows="$rowsfile" '
         BEGIN { n = split(tolower(q), w, " ") }
         want != "" && $1 != want { next }
+        # Option rows come from the flake when its cache is usable, and only
+        # the system ones for now: the panel lists user-scope options once it
+        # can write them.
+        FILENAME == idx && rows != "" && $1 == "opt" { next }
+        FILENAME != idx && $6 != "system" { next }
         {
           name = tolower($2); sum = tolower($3); best = 9
           for (i = 1; i <= n; i++) {
@@ -535,12 +576,13 @@ cmd_search() {
             if (r < best) best = r
           }
           # Shorter names first within a rank: "git" beats "gitAndTools.git-extras"
-          print best, length($2), $1, $2, $3, $4, $5
+          print best, length($2), $1, $2, $3, $4, $5, (FILENAME == idx ? "system" : $6)
         }
-      ' "$INDEX" | sort -t"$(printf '\t')" -k1,1n -k2,2n | head -n "$limit" | cut -f3-
+      ' "$INDEX" ${rowsfile:+"$rowsfile"} | sort -t"$(printf '\t')" -k1,1n -k2,2n | head -n "$limit" | cut -f3-
     ) \
     --argjson stale "$stale" \
     --argjson index "$facts" \
+    --argjson options "$OPT_JSON" \
     --arg query "$query" \
     "$UNTAG_JQ"'
     def lines: split("\n") | map(select(length > 0));
@@ -548,6 +590,7 @@ cmd_search() {
       ok: true,
       indexStale: $stale,
       index: $index,
+      options: $options,
       query: $query,
       rows: ($rows | lines | map(split("\t")) | map(
         (if .[0] == "opt" then []
@@ -564,6 +607,7 @@ cmd_search() {
         # flags. Never both.
         type:    (if .[0] == "opt" then (.[3] // "") else "" end),
         flags:   $f,
+        scope:   (.[5] // "system"),
         # Written into the row by the index builder with its newlines
         # escaped, because fzf re-runs a preview on every keystroke and
         # could not afford to look one up. Unescaped here; the panel draws
@@ -716,10 +760,32 @@ cmd_draft() {
 # is not one prompted word and a form that pretended otherwise would write
 # plausible-looking wrong configuration.
 cmd_opt_describe() {
-  local path=${1-}
-  [ -n "$path" ] || die "usage: nixarchy-pkg opt describe <path>"
-  local oj; oj=$(searched optionsjson)
-  [ -n "$oj" ] && [ -f "$oj" ] || die "no options.json on this system -- it builds no manual"
+  local path="" scope=system
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --scope) [ $# -ge 2 ] || die "--scope needs a value"; scope=$2; shift 2 ;;
+      --scope=*) scope=${1#*=}; shift ;;
+      *) path=$1; shift ;;
+    esac
+  done
+  [ -n "$path" ] || die "usage: nixarchy-pkg opt describe [--scope system|user] <path>"
+  case "$scope" in system|user) ;; *) die "--scope takes system or user, not '$scope'" ;; esac
+  options_resolve
+  local oj="" source=system
+  if [ -n "$OPT_DIR" ] && [ -f "$OPT_DIR/$scope.json" ]; then
+    oj=$OPT_DIR/$scope.json; source=flake
+  elif [ "$scope" = user ]; then
+    local why="no options were read from your flake yet"
+    if [ -n "$OPT_DIR" ]; then
+      why=$(jq -r --arg u "$(id -un)" 'if .homeManager != true then "this host has no Home Manager (home-manager.users) in its configuration"
+        elif ((.users | index($u)) == null) then ($u + " is not in home-manager.users")
+        else "no Home Manager options were read for " + $u end' "$OPT_DIR/meta.json")
+    fi
+    die "no Home Manager options for $(id -un) -- $why"
+  else
+    oj=$(searched optionsjson)
+    [ -n "$oj" ] && [ -f "$oj" ] || die "no options.json on this system -- it builds no manual"
+  fi
 
   # What apps.nix already says about it, so the form can open on the value
   # that is there rather than on the default (#28). Found by the writers'
@@ -727,7 +793,7 @@ cmd_opt_describe() {
   # never a pattern -- and reported as the local expression, verbatim:
   # `lib.mkDefault true` is text here, not a boolean.
   local found="" cstate=absent cvalue=""
-  if [ -f "$APPS" ]; then
+  if [ "$scope" = system ] && [ -f "$APPS" ]; then
     found=$(NIXARCHY_PKG_PATH="$path" awk '
       BEGIN { p = ENVIRON["NIXARCHY_PKG_PATH"]; m = "#@opt " p }
       length($0) >= length(m) && substr($0, length($0) - length(m) + 1) == m {
@@ -751,7 +817,7 @@ cmd_opt_describe() {
     [[ $found == *$'\n'* ]] && cvalue=${found#*$'\n'}
   fi
 
-  jq --arg p "$path" --arg cstate "$cstate" --arg cvalue "$cvalue" '
+  jq --arg p "$path" --arg cstate "$cstate" --arg cvalue "$cvalue" --arg scope "$scope" --arg source "$source" '
     def literal: if type == "object" then (.text // tostring) else tojson end;
     # One enum alternative this form can offer and write back verbatim: a
     # quoted string (escapes allowed) or an integer. Non-capturing, because
@@ -769,6 +835,8 @@ cmd_opt_describe() {
         | {
             ok: true,
             path: $p,
+            scope: $scope,
+            source: $source,
             type: $t,
             description: ($o.description // ""),
             readOnly: ($o.readOnly // false),
@@ -1810,6 +1878,129 @@ check_symlinks() {
   fi
 }
 
+# The five lines the options cache was built from. A change in the last two
+# (lock, running generation) marks the cache stale; the first three decide
+# whether it is this flake's at all.
+options_stamp() {
+  local flake=$1 host=$2 user=$3 lock_hash="" system_hash=""
+  [ ! -f "$flake/flake.lock" ] || lock_hash=$(sha256sum "$flake/flake.lock" | awk '{print $1}')
+  [ ! -e /run/current-system ] || system_hash=$(readlink -f /run/current-system)
+  printf '%s\n' "$(readlink -f "$flake")" "$host" "$user" "$lock_hash" "$system_hash" |
+    sha256sum | awk '{print $1}'
+}
+
+# options_resolve -- sets OPT_DIR (the published generation, resolved once so
+# one answer never mixes two), OPT_STALE and OPT_JSON, the `options` object
+# every answer carries. A cache built for another flake, host or user is not
+# used at all: OPT_DIR stays empty and the source is "system".
+OPT_DIR=""
+OPT_STALE=false
+OPT_JSON='{"source":"system","stale":false,"builtAt":null,"user":null,"homeManager":null,"perUser":null}'
+options_resolve() {
+  local d flake host user meta
+  OPT_DIR=""; OPT_STALE=false
+  OPT_JSON='{"source":"system","stale":false,"builtAt":null,"user":null,"homeManager":null,"perUser":null}'
+  d=$(readlink -f "$CACHE_DIR/options" 2>/dev/null) || return 0
+  [ -f "$d/meta.json" ] && [ -f "$d/system.json" ] || return 0
+  meta=$(cat "$d/meta.json" 2>/dev/null) || return 0
+  flake=${NIXARCHY_FLAKE:-/etc/nixos}; host=$(uname -n); user=$(id -un)
+  jq -e --arg f "$(readlink -f "$flake")" --arg h "$host" --arg u "$user" \
+    '.flake == $f and .host == $h and .user == $u' <<<"$meta" >/dev/null 2>&1 || return 0
+  OPT_DIR=$d
+  [ "$(jq -r .stamp <<<"$meta")" = "$(options_stamp "$flake" "$host" "$user")" ] || OPT_STALE=true
+  OPT_JSON=$(jq -c --argjson stale "$OPT_STALE" \
+    '{source:"flake", stale:$stale, builtAt, user, homeManager, perUser}' <<<"$meta")
+}
+
+cmd_options_refresh() {
+  local flake=${NIXARCHY_FLAKE:-/etc/nixos} host user rc=0 started seconds built_at \
+    gen old d stamp counts
+  need nix
+  host=$(uname -n)
+  [ -f "$flake/flake.nix" ] || die "no flake at $flake"
+  user=$(id -un)
+  [[ $user =~ ^[a-z_][a-z0-9_-]*$ ]] || die "invalid user name: $user"
+  mkdir -p "$STATE_DIR" || die "cannot create $STATE_DIR"
+  exec 6>>"$STATE_DIR/pkg-options.lock" || die "cannot open the options lock"
+  flock -n 6 || die "options are already being read"
+  [ ! -e "$TXN/open" ] || die 'a write is in progress or was interrupted -- try again, or run recover'
+  OPTIONS_READING=true
+  private_dir OPTSDIR pkg-options
+  export TMPDIR=$OPTSDIR
+  stamp=$(options_stamp "$flake" "$host" "$user")
+  started=$(date +%s%3N)
+  setsid timeout 300 "${NIX[@]}" eval --json --no-write-lock-file \
+    "$flake#nixosConfigurations.\"$host\"" --apply "${DISCOVER//@USER@/$user}" \
+    >"$OPTSDIR/out.json" 2>"$OPTSDIR/err" 9>&- 8>&- 6>&- &
+  CHILD=$!
+  wait "$CHILD" || rc=$?
+  CHILD=""
+  if [ "$rc" = 124 ]; then die 'timed out after 5 minutes'; fi
+  if [ "$rc" != 0 ]; then
+    if grep -q 'does not provide attribute.*nixosConfigurations' "$OPTSDIR/err"; then
+      die "this flake has no nixosConfigurations.$host"
+    fi
+    die "$(nix_why "$OPTSDIR/err")"
+  fi
+  built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  seconds=$(jq -n --argjson start "$started" --argjson end "$(date +%s%3N)" '($end - $start) / 1000')
+  mkdir -p "$CACHE_DIR/options.d" || die "cannot create $CACHE_DIR/options.d"
+  gen=$CACHE_DIR/options.d/$(date +%s).$$
+  mkdir "$gen" || die "cannot create $gen"
+  OPTSGEN=$gen
+  jq -e '[.nixos[], .home[]?] | all(has("name") and has("type"))' "$OPTSDIR/out.json" >/dev/null ||
+    die 'could not read options from the flake'
+  jq -c '.nixos | map({key:.name, value:{type, description, default, example, declarations, readOnly}}) | from_entries' \
+    "$OPTSDIR/out.json" >"$gen/system.json"
+  if jq -e '.home != null' "$OPTSDIR/out.json" >/dev/null; then
+    jq -c '.home | map({key:.name, value:{type, description, default, example, declarations, readOnly}}) | from_entries' \
+      "$OPTSDIR/out.json" >"$gen/user.json"
+  fi
+  jq -r '
+    def val(x):
+      if x == null then "(none)"
+      elif (x | type) == "object" then (x.text // (x | tostring))
+      else (x | tostring) end;
+    (.nixos[] | [., "system", "NIXOS OPTION  "]),
+    (.home[]? | [., "user", "HOME MANAGER OPTION  "]) |
+    .[0] as $v | .[1] as $scope | .[2] as $heading | $v.name as $k |
+    ["opt", $k,
+      (($v.description // "") | gsub("[\n\t ]+"; " ") | .[0:110]),
+      ($v.type // ""),
+      ($heading + $k
+        + "\n\ntype:     " + ($v.type // "?")
+        + "\ndefault:  " + val($v.default)
+        + (if $v.example == null then "" else "\nexample:  " + val($v.example) end)
+        + "\n\n" + ($v.description // "(undocumented)")
+        + "\n\ndeclared in:\n  " + (($v.declarations // []) | join("\n  "))),
+      $scope] | @tsv' "$OPTSDIR/out.json" >"$gen/rows.tsv"
+  counts=$(jq -c '{system:(.nixos | length), user:(.home // [] | length)}' "$OPTSDIR/out.json")
+  jq -nc --arg builtAt "$built_at" --arg host "$host" --arg user "$user" \
+    --arg flake "$(readlink -f "$flake")" --argjson data "$(jq -c '{homeManager,users,perUser}' "$OPTSDIR/out.json")" \
+    --argjson counts "$counts" --argjson seconds "$seconds" --arg stamp "$stamp" \
+    '{builtAt:$builtAt,host:$host,user:$user,flake:$flake,homeManager:$data.homeManager,users:$data.users,perUser:$data.perUser,counts:$counts,seconds:$seconds,stamp:$stamp}' \
+    >"$gen/meta.json"
+  old=$(readlink -f "$CACHE_DIR/options" 2>/dev/null || :)
+  rm -f -- "$CACHE_DIR/options.tmp" || die 'cannot clear options.tmp'
+  ln -s "$gen" "$CACHE_DIR/options.tmp" || die 'cannot create options.tmp'
+  mv -T "$CACHE_DIR/options.tmp" "$CACHE_DIR/options" || die 'cannot publish options'
+  OPTSGEN=""
+  for d in "$CACHE_DIR"/options.d/*; do
+    [ -e "$d" ] || continue
+    [ "$d" = "$gen" ] || [ "$(readlink -f "$d")" = "$old" ] || rm -rf -- "$d" || :
+  done
+  OPTIONS_READING=false
+  jq -nc --arg host "$host" --arg user "$user" --arg flake "$flake" \
+    --argjson data "$(jq -c '{homeManager,perUser}' "$OPTSDIR/out.json")" \
+    --argjson counts "$counts" --argjson seconds "$seconds" \
+    '{ok:true,source:"flake",host:$host,user:$user,homeManager:$data.homeManager,perUser:$data.perUser,counts:$counts,seconds:$seconds,message:("read \($counts.system) system and \($counts.user) user options from " + $flake)}'
+}
+
+cmd_options() {
+  [ "$#" = 1 ] && [ "$1" = refresh ] || die 'options takes refresh'
+  cmd_options_refresh
+}
+
 cmd_check() {
   local flake=${NIXARCHY_FLAKE:-/etc/nixos} host base br copy cb root="" p f name imports rc=0 \
     verdict=unknown reason="" drvPath="" summary="" error="" at=null dry_run="" dry_error="" \
@@ -2042,16 +2233,20 @@ cmd_reindex() {
   # terminal the picker fails ("inappropriate ioctl for device") and the
   # script still exits 0. So its status says nothing, and the stamp is the
   # judge. stderr is kept for the reason when the index is still stale.
-  local err facts
+  local err facts opts
   err=$(NIXARCHY_IN_PICKER=1 nixarchy-search --reindex </dev/null 2>&1 >/dev/null 9>&- 8>&-) || :
   facts=$(index_facts)
+  # The options come from the host's own flake. Reported beside the index,
+  # never as the index failing.
+  opts=$("$SELF" options refresh </dev/null 2>/dev/null) || opts=""
+  jq -e . >/dev/null 2>&1 <<<"$opts" || opts='{"ok":false,"error":"options refresh gave no answer"}'
   if jq -e '.status == "fresh"' <<<"$facts" >/dev/null; then
-    jq -nc --argjson index "$facts" \
-      '{ok: true, indexStale: false, index: $index, message: "index rebuilt"}'
+    jq -nc --argjson index "$facts" --argjson options "$opts" \
+      '{ok: true, indexStale: false, index: $index, options: $options, message: "index rebuilt"}'
     return 0
   fi
   err=$(tail -n 20 <<<"$err" | tail -c 65536)
-  jq -nc --arg err "$err" --argjson index "$facts" \
+  jq -nc --arg err "$err" --argjson index "$facts" --argjson options "$opts" \
     --arg log "$CACHE_DIR/index-errors.log" '
     ($err | split("\n")
           | map(sub("^\\s+"; "") | sub("\\s+$"; ""))
@@ -2064,7 +2259,7 @@ cmd_reindex() {
               and (startswith("evaluation warning:") | not)))
           | .[-8:]) as $d
     | ([$d[] | select(startswith("indexing nixpkgs failed;") | not)] | last) as $why
-    | {ok: false, indexStale: true, index: $index, detail: $d,
+    | {ok: false, indexStale: true, index: $index, options: $options, detail: $d,
        error: ("the search index is still \($index.status): "
                + ($why // "nixarchy-search gave no reason")
                + " -- see " + $log)}'
@@ -2074,6 +2269,7 @@ cmd_state() {
   local facts stale
   facts=$(index_facts)
   stale=$(jq -r '.status != "fresh"' <<<"$facts")
+  options_resolve
 
   # Process substitution swallows a callee's exit status, so a read that
   # fails inside the jq below cannot be noticed there -- `$(cat <(f))` is 0
@@ -2104,6 +2300,7 @@ cmd_state() {
     --rawfile labels <(labels_tsv "$want") \
     --argjson stale "$stale" \
     --argjson index "$facts" \
+    --argjson options "$OPT_JSON" \
     --arg appsFile "$APPS" \
     --arg servicesFile "$SERVICES" \
     --arg unreadable "$unread_msg" \
@@ -2130,6 +2327,9 @@ cmd_state() {
       ok: true,
       indexStale: $stale,
       index: $index,
+      # `options` below is the rows set in apps.nix, so where the option
+      # list came from is optionsInfo.
+      optionsInfo: $options,
       files: { apps: $appsFile, services: $servicesFile },
       channel: $channel,
       flakeDir: $flakeDir,
@@ -2181,7 +2381,7 @@ cmd_flake() {
 main() {
   need jq
   local cmd=${1-}
-  [ -n "$cmd" ] || die "usage: nixarchy-pkg <state|search|toggle|pkg|opt|draft|flake|recover|pending|check [--dry-run]|apply|reindex>"
+  [ -n "$cmd" ] || die "usage: nixarchy-pkg <state|search|toggle|pkg|opt|draft|flake|recover|pending|check [--dry-run]|options refresh|apply|reindex>"
   shift
   case "$cmd" in
     state) cmd_state "$@" ;;
@@ -2192,6 +2392,7 @@ main() {
     opt)    cmd_opt "$@" ;;
     pending) cmd_pending "$@" ;;
     check)  cmd_check "$@" ;;
+    options) cmd_options "$@" ;;
     apply)   cmd_apply "$@" ;;
     reindex) cmd_reindex "$@" ;;
     flake)   cmd_flake "$@" ;;
