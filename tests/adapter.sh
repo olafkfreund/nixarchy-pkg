@@ -805,6 +805,34 @@ check "unsigned literal can be set" jq -e '.ok' <<<"$(fx opt set t.uint 0)"
 before=$(sha256sum "$APPSNIX")
 check "replace refuses negative unsigned literal" jq -e '.ok == false and (.error | contains("outside"))' <<<"$(fx opt replace t.uint -1)"
 check "refused replace leaves file untouched" test "$before" = "$(sha256sum "$APPSNIX")"
+
+quoted_path='fileSystems."/mnt/usb drive".options'
+check "quoted option path writes" jq -e '.ok == true' <<<"$(fx opt set "$quoted_path" '[ "nofail" ]')"
+# shellcheck disable=SC2016
+check "state keeps the full quoted path" jq -e --arg p "$quoted_path" \
+  '.options | any(.path == $p and .set == true)' <<<"$(fx state)"
+# shellcheck disable=SC2016
+check "describe resolves the quoted path template and value" jq -e --arg p "$quoted_path" \
+  '.path == $p and .template == "fileSystems.<name>.options" and .names == ["\"/mnt/usb drive\""] and .current.state == "set"' \
+  <<<"$(fx opt describe "$quoted_path")"
+check "quoted option path replaces" jq -e '.ok == true' <<<"$(fx opt replace "$quoted_path" '[ "nofail" "noauto" ]')"
+check "named user resolves to its template" jq -e \
+  '.template == "users.users.<name>.shell" and .names == ["alice"]' \
+  <<<"$(fx opt describe users.users.alice.shell)"
+check "named password points to its concrete file option" jq -e \
+  '.template == "users.users.<name>.hashedPassword" and .fileOption == "users.users.alice.hashedPasswordFile"' \
+  <<<"$(fx opt describe users.users.alice.hashedPassword)"
+for bad in 'services.123.x' 'services.if.x' 'users.users.<name>.shell' 'services."bad\key".x' \
+           "services.\"bad\$key\".x" 'services."bad#@key".x'; do
+  before=$(sha256sum "$APPSNIX")
+  check "invalid path refuses: $bad" jq -e '.ok == false and (.error | contains("not an option path"))' \
+    <<<"$(fx opt set "$bad" true)"
+  check "invalid path leaves apps.nix intact: $bad" test "$before" = "$(sha256sum "$APPSNIX")"
+done
+# shellcheck disable=SC2016
+check "installed remover finds quoted marker" jq -e --arg p "$quoted_path" \
+  '.options | all(.path != $p)' <<<"$(fx opt remove "$quoted_path")"
+check "removed quoted option leaves parsable file" nix-instantiate --parse "$APPSNIX"
 rm -rf "$CONFIG"
 
 echo "options"
@@ -1044,6 +1072,13 @@ q_answer() {
   check "$name: TMPDIR empty" test -z "$(find "$Q/tmp" -mindepth 1 -print -quit)"
 }
 
+q_reset
+quoted_path='fileSystems."/mnt/usb drive".options'
+sed -i "/^}$/i\  $quoted_path = [ \"nofail\" ];  #@opt $quoted_path" "$Q/config/nixarchy/apps.nix"
+QOUT=$(q_pending)
+# shellcheck disable=SC2016
+check "pending keeps the full quoted option path" jq -e --arg p "opt:$quoted_path" \
+  '.changes | any(.marker == $p)' <<<"$QOUT"
 q_reset
 printf 'more\n' >>"$Q/config/nixarchy/flatsnap.nix"
 q_answer flatsnap

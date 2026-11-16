@@ -26,7 +26,7 @@ declining to do something is an answer.
 | `pkg add <attr> [--stable\|--unstable]` | What `RETURN` and `SHIFT+RETURN` do |
 | `pkg remove <attr>` | |
 | `opt describe <path>` | An option's type, default, example and docs |
-| `opt set <path> <value>` / `opt remove <path>` | |
+| `opt set <path> <value>` / `opt replace <path> <value>` / `opt remove <path>` | Write, change or remove a marked option |
 | `draft new <url>` / `draft undraft <name>` | See [Drafts](drafts) |
 | `flake show <ref>` / `flake list` | Inspect a source or list locked inputs |
 | `flake add [--no-follows] [--no-flake] <name> <ref>` | Declare and lock an input; `--no-flake` also disables follows |
@@ -38,6 +38,17 @@ declining to do something is an answer.
 | `reindex` | Rebuild the search index. About a minute |
 
 ## A worked example
+
+Quote a path for the shell when a key contains spaces or punctuation:
+
+```bash
+nixarchy-pkg opt set 'fileSystems."/mnt/usb drive".options' '[ "nofail" ]'
+nixarchy-pkg opt replace 'fileSystems."/mnt/usb drive".options' '[ "nofail" "noauto" ]'
+```
+
+`opt set` refuses a path already marked in `apps.nix`; `opt replace` requires
+one. Both refuse invalid paths, including an unfilled `<name>` or `*`, and
+reject values that would make the file fail Nix's parse check.
 
 `flake add` answers with `name`, `url`, `follows`, and `message`. It does not
 return an `import` field: inspect the source with `flake show` to see its

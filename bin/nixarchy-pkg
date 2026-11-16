@@ -484,8 +484,9 @@ extras_tsv() {
     match($0, /#@pkg [^ \t]+/) {
       print "pkg\t" substr($0, RSTART + 6, RLENGTH - 6) "\tdefault"; next
     }
-    match($0, /#@opt [^ \t]+/) {
-      path = substr($0, RSTART + 6, RLENGTH - 6)
+    match($0, /#@opt .*$/) {
+      path = substr($0, RSTART + 6)
+      sub(/[[:space:]]+$/, "", path)
       set = ($0 ~ /^[[:space:]]*#/) ? "false" : "true"
       body = $0
       sub(/[[:space:]]*#@opt .*$/, "", body)
@@ -787,13 +788,29 @@ opt_meta() {
         elif $t | startswith("unsigned integer") then ["0", "9223372036854775807"]
         elif $t | startswith("signed integer") then ["-9223372036854775808", "9223372036854775807"]
         else [null, null] end;
-    . as $all | .[$p] as $o
+    def comps: [scan("\"[^\"]*\"|[^.]+")];
+    def unquote: if startswith("\"") then .[1:-1] else . end;
+    . as $all
+    | ($p | comps) as $parts
+    | (if $all[$p] != null then {key:$p, names:[], count:0}
+       else [$all | keys[] | . as $key | ($key | comps) as $bits
+         | select(($bits | length) == ($parts | length))
+         | [range(0; $bits | length) | select($bits[.] == "<name>" or $bits[.] == "*")] as $slots
+         | select(all(range(0; $bits | length);
+             ($bits[.] == "<name>" or $bits[.] == "*") or
+             (($bits[.] | unquote) == ($parts[.] | unquote))))
+         | {key:$key, names:[$slots[] | $parts[.]], count:($slots | length)}]
+         | sort_by(.count, .key) | first end) as $match
+    | if $match == null then null else $match.key as $key
+    | $match.names as $names
+    | $all[$key] as $o
     | if $o == null then null else
         ($o.type // "") as $t
         | ($t | test("^one of (?:" + alt + ")(?:, (?:" + alt + "))*$")) as $listed
         | ($t | bounds) as $b
         | {
             ok: true, path: $p, scope: $scope, source: $source, type: $t,
+            template: (if $key == $p then null else $key end), names: $names,
             description: ($o.description // ""), readOnly: ($o.readOnly // false),
             declarations: ($o.declarations // []),
             default: (if $o.default == null then "" else ($o.default | literal) end),
@@ -809,10 +826,13 @@ opt_meta() {
             min: $b[0], max: $b[1],
             choices: (if $listed then [ $t | ltrimstr("one of ") | scan(alt) ] else [] end),
             choicesUnavailable: (($t | startswith("one of ")) and ($listed | not)),
-            sensitive: (($p | split(".") | last) | test("(?i)(password|passwd|secret|token|apikey|privatekey|presharedkey|psk)$")) and ($t | test("string")),
-            fileOption: (($p | sub("(?<l>[^.]+)$"; "\(.l)File")) as $f | if $all[$f] != null then $f else null end)
+            sensitive: (($key | comps | last) | test("(?i)(password|passwd|secret|token|apikey|privatekey|presharedkey|psk)$")) and ($t | test("string")),
+            fileOption: (($key | sub("(?<l>[^.]+)$"; "\(.l)File")) as $f
+              | if $all[$f] == null then null else
+                  ($f | comps) as $bits
+                  | [range(0; $bits | length) | if $bits[.] == "<name>" or $bits[.] == "*" then $parts[.] else $bits[.] end] | join(".") end)
           }
-      end' "$oj" 2>/dev/null || printf 'null\n'
+      end end' "$oj" 2>/dev/null || printf 'null\n'
 }
 
 cmd_opt_describe() {
@@ -884,6 +904,11 @@ cmd_opt_describe() {
 # its meaning by re-emitting a string literal or comparing Nix parse trees.
 readonly MARKER_REFUSAL="a value cannot contain '#@' -- that is how this tool marks the options it wrote, and a value carrying one would make the panel name a different option than the one it changes. Nothing was changed."
 readonly FLAT_REFUSAL="that value changes meaning when written on one line -- a newline inside a string or after a # matters. Write it on one line, or as one string. Nothing was changed."
+has_opt() {
+  NIXARCHY_PKG_PATH="$2" awk 'BEGIN { m = "#@opt " ENVIRON["NIXARCHY_PKG_PATH"] }
+    length($0) >= length(m) && substr($0, length($0) - length(m) + 1) == m { found = 1; exit }
+    END { exit !found }' "$1"
+}
 flat_value() {
   # `#@` is this tool's marker and a value must not be able to forge one:
   # extras_tsv reads the FIRST marker on a line and nixarchy-opt-remove the
@@ -1013,9 +1038,7 @@ cmd_opt_set() {
   local path=${1-} value=${2-}
   [ -n "$path" ] || die "usage: nixarchy-pkg opt set <path> <nix-value>"
 
-  case "$path" in
-    *[!a-zA-Z0-9._-]* | "" ) die "'$path' is not an option path" ;;
-  esac
+  valid_path "$path" || die "'$path' is not an option path"
 
   flat_value "$value"
 
@@ -1028,7 +1051,7 @@ cmd_opt_set() {
   [ -f "$APPS" ] || die "no $APPS -- log in again to have it created"
   one_line value
   check_literal "$path" "$value"
-  if grep -q "#@opt ${path//./\\.}\$" "$APPS"; then
+  if has_opt "$APPS" "$path"; then
     die "$path is already in $APPS -- remove it first"
   fi
   guard "$APPS"
@@ -1058,7 +1081,7 @@ cmd_opt_set() {
   # --parse passed BECAUSE it was unchanged, and this function reported
   # `set ...` over a file it never touched. `opt replace` has always
   # re-checked; this one never did (#39).
-  if ! grep -q "#@opt ${path//./\\.}\$" "$tmp"; then
+  if ! has_opt "$tmp" "$path"; then
     die "could not find where to add $path in $APPS -- its module does not close on a line of its own. Nothing was changed."
   fi
 
@@ -1110,9 +1133,7 @@ cmd_opt_replace() {
   [ -n "$path" ] && [ $# -ge 2 ] ||
     die "usage: nixarchy-pkg opt replace <path> <nix-value>"
 
-  case "$path" in
-    *[!a-zA-Z0-9._-]* | "" ) die "'$path' is not an option path" ;;
-  esac
+  valid_path "$path" || die "'$path' is not an option path"
 
   flat_value "$value"
 
@@ -1120,7 +1141,7 @@ cmd_opt_replace() {
   [ -f "$APPS" ] || die "no $APPS -- log in again to have it created"
   one_line value
   check_literal "$path" "$value"
-  grep -q "#@opt ${path//./\\.}\$" "$APPS" ||
+  has_opt "$APPS" "$path" ||
     die "$path is not in $APPS -- use 'opt set' to add it"
 
   # BEFORE anything is touched. This is the whole point of the command.
@@ -1146,7 +1167,7 @@ cmd_opt_replace() {
     }
   ' "$APPS" > "$tmp"
 
-  if ! grep -q "#@opt ${path//./\\.}\$" "$tmp"; then
+  if ! has_opt "$tmp" "$path"; then
     die "could not find $path to replace after all. Nothing was changed."
   fi
 
@@ -1348,6 +1369,39 @@ cmd_flake_show() {
 valid_input_name() {
   [[ ${1-} =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]] ||
     die "'${1-}' is not a usable input name: letters, digits, _ and -, starting with a letter or _. Nothing was changed."
+}
+
+valid_path() {
+  local path=${1-} part="" mode=bare c i
+  [ -n "$path" ] || return 1
+  for ((i=0; i<${#path}; i++)); do
+    c=${path:i:1}
+    if [ "$c" = . ] && [ "$mode" != quoted ]; then
+      valid_path_part "$part" || return 1
+      part=""; mode=bare
+    elif [ "$c" = '"' ]; then
+      if [ "$mode" = bare ] && [ -z "$part" ]; then mode=quoted
+      elif [ "$mode" = quoted ]; then mode=closed
+      else return 1; fi
+      part+=$c
+    else
+      [ "$mode" != closed ] || return 1
+      part+=$c
+    fi
+  done
+  [ "$mode" != quoted ] && valid_path_part "$part"
+}
+
+valid_path_part() {
+  local part=$1 ident_re="^[A-Za-z_][A-Za-z0-9_'-]*$"
+  case "$part" in
+    if|then|else|assert|with|let|in|rec|inherit|or|\<name\>|\*) return 1 ;;
+  esac
+  if [[ $part == '"'* ]]; then
+    [[ $part == '"'*'"' && $part != *\\* && $part != *\$* && $part != *$'\t'* && $part != *$'\n'* && $part != *'#@'* ]]
+  else
+    [[ $part =~ $ident_re ]]
+  fi
 }
 
 # Declare an input. The riskiest write this project makes -- the system
@@ -1882,7 +1936,9 @@ cmd_pending() {
     twoway "$READDIR/dst.marked" "$READDIR/src.marked" "$READDIR/marked.diff" \
       --old-line-format=$'%dn\t-%L' --new-line-format=$'%dn\t+%L' --unchanged-line-format=''
     jq -Rsc --arg file "$p" '
-      def marker: capture("#@(?<t>[a-z-]*)[ \t]+(?<n>[^ \t]+)") | (.t + ":" + .n);
+      def marker: . as $line | capture("#@(?<t>[a-z-]*)[ \t]+(?<n>[^ \t]+)")
+        | if .t == "opt" then .t + ":" + ($line | capture("#@opt[ \\t]+(?<n>.*[^ \\t])[ \\t]*$").n)
+          else .t + ":" + .n end;
       split("\n") | map(select(length > 0)) | .[] | split("\t") |
       {file:$file, index:(.[0] | tonumber), sign:.[1][0:1], line:.[1][1:] | rtrimstr("\n")} |
       . + {marker:(try (.line | marker) catch .line)}

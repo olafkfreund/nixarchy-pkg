@@ -71,6 +71,52 @@ TestCase {
     list.forceActiveFocus()
   }
 
+  function openTemplate(path) {
+    form.begin({ path: path })
+    describeProc().deliver(JSON.stringify({ ok: true, path: path, template: null,
+      widget: "boolean", default: "false", current: { state: "absent" } }))
+    wait(20)
+    return walk(form, function (o) { return o.placeholderText && o.placeholderText.indexOf("name for ") === 0 })[0]
+  }
+
+  function test_template_names_and_concrete_current() {
+    var field = openTemplate("users.users.<name>.shell")
+    verify(field !== undefined)
+    verify(field.activeFocus)
+    keyClick(Qt.Key_Return)
+    compare(form.error, "name every <name> first")
+    field.text = "alice"
+    form.touched = true
+    form.commit()
+    compare(form.path, "users.users.alice.shell")
+    compare(describeProc().command.slice(-1)[0], form.path)
+    compare(writeProc(), null)
+    describeProc().deliver(JSON.stringify({ ok: true, path: form.path,
+      template: "users.users.<name>.shell", widget: "boolean",
+      current: { state: "set", value: "false" } }))
+    compare(writeProc().command.slice(1).join(" "), "opt replace users.users.alice.shell false")
+  }
+
+  function test_quoted_and_keyword_names() {
+    var field = openTemplate("fileSystems.<name>.options")
+    field.text = "/mnt/usb drive"; form.touched = true; form.commit()
+    compare(form.path, 'fileSystems."/mnt/usb drive".options')
+    describeProc().deliver(JSON.stringify({ ok: true, path: form.path,
+      template: "fileSystems.<name>.options", widget: "boolean", current: { state: "absent" } }))
+    init()
+    field = openTemplate("users.users.<name>.shell")
+    field.text = "if"; form.touched = true; form.commit()
+    compare(form.path, 'users.users."if".shell')
+  }
+
+  function test_invalid_name_refuses() {
+    var field = openTemplate("users.users.<name>.shell")
+    field.text = "a$b"; form.touched = true; form.commit()
+    verify(form.error.indexOf("cannot contain") >= 0)
+    compare(form.path, "users.users.<name>.shell")
+    compare(writeProc(), null)
+  }
+
   function test_opens_and_seeds_a_boolean() {
     form.begin({ path: "t.bool" })
     verify(form.open)
