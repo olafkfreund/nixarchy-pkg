@@ -46,7 +46,7 @@ and which the form put there.
 So: change it, or cancel. Both are honest. Writing out what was already true
 is not.
 
-## Why some options get a comment instead of a widget
+## Why some options get a text box instead of a widget
 
 ![A scaffolded option](../img/09-option-form-scaffold.png)
 
@@ -57,11 +57,11 @@ They get the option's own example — or its default — in a text box, with
 its type and documentation beside it. Edit it and RETURN writes it as a
 live value; leave it untouched and nothing is written.
 
-That is not the form giving up. A widget for "a list of submodules" would be
-a text box pretending to understand Nix, and the first thing it would do is
-let you write something that parses and means the wrong thing. An honest
-scaffold with the real example in it gets you further than a dishonest
-widget.
+That is not the form giving up. A widget for "a list of submodules" would
+have to pretend to understand Nix, and the first thing it would do is let you
+write something that parses and means the wrong thing. A plain text box with
+the real example in it, which you edit as Nix, gets you further than a widget
+that guesses.
 
 The writer runs a parse check either way, so a value that would leave the
 file unparseable is refused and nothing is changed — and the message you get

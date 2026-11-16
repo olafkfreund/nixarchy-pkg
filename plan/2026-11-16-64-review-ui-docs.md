@@ -197,6 +197,12 @@ new claims beyond these texts.
 
 ---
 
+(Deviation, step 2, from the PR 1 reviews: the new options.md text says
+"a text box", which contradicted its heading ("get a comment") and the next
+paragraph ("a text box pretending to understand Nix"). The heading becomes
+"get a text box instead of a widget", and that paragraph now argues for a
+plain text box over a widget that guesses. No other passage changed.)
+
 ## PR 2: the panel
 
 ### 3. Descriptions, category headers, settings rows (coder)
