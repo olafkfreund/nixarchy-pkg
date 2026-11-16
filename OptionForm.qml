@@ -63,6 +63,14 @@ FocusScope {
   function reflow(s) {
     return String(s || "")
       .replace(/\r/g, "")
+      .replace(/\{[a-z]+\}`([^`]*)`/g, "$1")
+      .split("\n")
+      .map(function (line) {
+        if (line === "::: {.note}") return "Note:"
+        if (line === "::: {.warning}") return "Warning:"
+        return line === ":::" ? "" : line
+      })
+      .join("\n")
       .split(/\n[ \t]*\n/)
       .map(function (p) { return p.replace(/\n[ \t]*/g, " ").trim() })
       .filter(function (p) { return p.length > 0 })

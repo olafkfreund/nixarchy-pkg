@@ -107,6 +107,34 @@ TestCase {
     mouseMove(win.contentItem, win.width - 2, win.height - 2)
   }
 
+  function test_option_rows_show_state_type_and_current_line() {
+    var original = theRows
+    try {
+      theRows = [
+        { kind: "opt", name: "x.y", summary: "Set option", type: "boolean",
+          set: true, current: "x.y = true" },
+        { kind: "opt", name: "x.z", summary: "Scaffold option", type: "string",
+          set: false, current: "x.z = ;" }
+      ]
+      fakeModel.tab = 3
+      fakeModel.count = 2
+      var lv = find(card, "QQuickListView")
+      tryCompare(lv, "count", 2)
+      for (var i = 0; i < 2; i++) {
+        var d = lv.itemAtIndex(i)
+        verify(d !== null)
+        var row = find(d, "QQuickRow")
+        compare(row.children[0].text, i === 0 ? "\u25a0" : "\u25a1")
+        var summary = elidables(d, []).pop().text
+        verify(summary.indexOf(theRows[i].summary + "  \u00b7  " + theRows[i].type) >= 0)
+        verify(summary.indexOf("  =  " + theRows[i].current) >= 0)
+      }
+    } finally {
+      theRows = original
+      fakeModel.count = 3
+    }
+  }
+
   // Every row is checked at both layouts: with the icon column and without.
   function checkSummaries() {
     var lv = find(card, "QQuickListView")

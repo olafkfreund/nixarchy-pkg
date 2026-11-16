@@ -279,6 +279,8 @@ which may be absent: it returns 0 with no output (`:356`).
 
 ### 4. OptionForm test harness (`tests/qml/`)
 
+(Deviation, 2026-11-16: the harness, stubs and flake wiring already existed; this step adds only the behavior tests, using the existing `describeProc()` test helper and no process aliases.)
+
 - Stubs under `tests/qml/imports/qs/Ui/`, shape only, registered in
   `qmldir`: `Toggle` (`checked`, `label`, `clicked` signal), `Dropdown`
   (`value`, `options`, `changed` signal), `TextField` (`text`,
