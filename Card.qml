@@ -370,7 +370,7 @@ Item {
           elide: Text.ElideRight
           text: modelData.type !== undefined && modelData.type !== ""
               ? (modelData.summary || "") + "  \u00b7  " + modelData.type
-                + (typeof modelData.current === "string" ? "  =  " + modelData.current : "")
+                + (modelData.set === true && typeof modelData.current === "string" ? "  =  " + modelData.current : "")
               : modelData.summary || modelData.note || modelData.type || ""
           textFormat: Text.PlainText
           font.family: root.fontFamily

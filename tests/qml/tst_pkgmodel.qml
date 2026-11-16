@@ -296,6 +296,17 @@ TestCase {
     compare(m._reader.running, true, "without disturbing the read in flight")
   }
 
+  function test_refresh_reruns_an_option_search() {
+    m.setTab(3)
+    m.setQuery("mtr")
+    m._searcher.running = false
+    m._searcher.command = []
+    m.refresh()
+    compare(m._searcher.running, true)
+    verify(m._searcher.command.indexOf("opt") >= 0, "the Options search is asked again")
+    m._searcher.running = false
+  }
+
   // #43: busy is cleared by the answer and by nothing else, so a writer
   // that died without one left the panel refusing every later write with
   // "still writing". This is what keeps the writingPath interlock true in

@@ -571,6 +571,9 @@ QtObject {
     _reader.command = [script, "state"]
     _reader.running = true
     refreshPending()
+    // A write changes what an option row says (set, current), so a search
+    // on the Options tab is asked again rather than left showing the past.
+    if (tab === 3 && searching) runSearch()
   }
 
   function refreshPending() {

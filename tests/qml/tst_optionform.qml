@@ -70,6 +70,14 @@ TestCase {
     verify(shown.indexOf(":::") < 0)
   }
 
+  function test_admonition_forms_become_labels() {
+    var shown = form.reflow("::: {.tip}\nuse it\n:::\n\n  :::{.important}\nreally\n  :::\n\n:::{.caution}\ncare\n:::")
+    verify(shown.indexOf("Tip:") >= 0)
+    verify(shown.indexOf("Important:") >= 0)
+    verify(shown.indexOf("Caution:") >= 0)
+    verify(shown.indexOf(":::") < 0)
+  }
+
   function test_read_only_refuses_a_write() {
     form.begin({ path: "t.ro" })
     describeProc().deliver(JSON.stringify({ ok: true, path: "t.ro", widget: "boolean",

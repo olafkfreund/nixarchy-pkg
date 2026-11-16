@@ -114,7 +114,7 @@ TestCase {
     try {
       theRows = [
         { kind: "opt", name: "x.y", summary: "Set option", type: "boolean",
-          set: true, current: "x.y = true" },
+          set: true, current: "true" },
         { kind: "opt", name: "x.z", summary: "Scaffold option", type: "string",
           set: false, current: "x.z = ;" }
       ]
@@ -129,7 +129,8 @@ TestCase {
         compare(row.children[0].text, i === 0 ? "\u25a0" : "\u25a1")
         var summary = elidables(d, []).pop().text
         verify(summary.indexOf(theRows[i].summary + "  \u00b7  " + theRows[i].type) >= 0)
-        verify(summary.indexOf("  =  " + theRows[i].current) >= 0)
+        if (i === 0) compare(summary.indexOf("  =  true") >= 0, true)
+        else compare(summary.indexOf("=") < 0, true, "a scaffold row shows no =")
       }
     } finally {
       theRows = original

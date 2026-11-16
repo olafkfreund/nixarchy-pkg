@@ -370,7 +370,7 @@ printf 'opt\tx.y\tSet option\tboolean\t\nopt\tx.z\tScaffold option\tstring\t\nop
   >>"$STUBCACHE/nixarchy/index.tsv"
 out=$(XDG_CONFIG_HOME="$SEARCHCFG" stub_search --kind opt -- x.)
 check "search joins a set option to its current line" jq -e \
-  '.rows | map(select(.name == "x.y"))[0] | .set == true and .current == "x.y = true"' <<<"$out"
+  '.rows | map(select(.name == "x.y"))[0] | .set == true and .current == "true"' <<<"$out"
 check "search keeps a scaffold distinct from a set option" jq -e \
   '.rows | map(select(.name == "x.z"))[0] | .set == false and (.current | contains("x.z = ;"))' <<<"$out"
 check "search leaves an absent option's state unknown" jq -e \

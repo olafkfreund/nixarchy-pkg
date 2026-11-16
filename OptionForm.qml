@@ -66,9 +66,9 @@ FocusScope {
       .replace(/\{[a-z]+\}`([^`]*)`/g, "$1")
       .split("\n")
       .map(function (line) {
-        if (line === "::: {.note}") return "Note:"
-        if (line === "::: {.warning}") return "Warning:"
-        return line === ":::" ? "" : line
+        var m = /^\s*:::\s*\{\.(\w+)\}\s*$/.exec(line)
+        if (m) return m[1].charAt(0).toUpperCase() + m[1].slice(1) + ":"
+        return /^\s*:::\s*$/.test(line) ? "" : line
       })
       .join("\n")
       .split(/\n[ \t]*\n/)

@@ -534,7 +534,7 @@ cmd_search() {
     def lines: split("\n") | map(select(length > 0));
     ($extras | lines | map(split("\t") | select(.[0] == "opt")
       | {key: .[1], value: {set: (.[2] == "true"),
-                            line: (if .[2] == "true" then (.[3] | sub("^[[:space:]]+"; "") | sub(";[[:space:]]*$"; ""))
+                            line: (if .[2] == "true" then (.[1] as $k | .[3] | sub("^[[:space:]]+"; "") | ltrimstr($k + " = ") | sub(";[[:space:]]*$"; ""))
                                    else .[3] end)}}) | from_entries) as $m |
     {
       ok: true,
