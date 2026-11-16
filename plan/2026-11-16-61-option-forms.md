@@ -457,6 +457,8 @@ expect `widget: "list"`, `item: "integer"`, in this step.
 **Traps.** jq regexes are Oniguruma: escape `(` and `)` in type text. The
 header check reads `$APPS` only if it exists.
 
+(Deviation, PR 5: the host catalogue declares `networking.hostName` as a pattern string, so its old string-widget test now expects a scaffold.)
+
 ### 9. Widgets and seeds (`OptionForm.qml`)
 
 - `nullable`: an extra choice / toggle "null" beside the widget; when

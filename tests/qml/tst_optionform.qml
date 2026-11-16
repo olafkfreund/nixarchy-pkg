@@ -41,6 +41,13 @@ TestCase {
     }
     return null
   }
+  function searchProc() {
+    for (var i = 0; i < form.data.length; i++) {
+      var c = form.data[i]
+      if (c && c.command && c.command[1] === "search") return c
+    }
+    return null
+  }
   function walk(o, test, acc) {
     acc = acc || []; if (!o) return acc
     if (test(o)) acc.push(o)
@@ -227,6 +234,90 @@ TestCase {
     compare(form.nixValue(), "\"a\\\"b\\${HOME}\"")
     tf.text = "\"x\""; compare(form.nixValue(), "\"x\"")
     tf.text = ""; compare(form.nixValue(), "")
+  }
+
+  function test_list_and_multiline_values() {
+    open({ widget: "list", item: "string" })
+    var field = findChild(form, "scaffoldField")
+    field.text = "a\nb"
+    compare(form.nixValue(), '[ "a" "b" ]')
+    field.text = 'console=ttyS0,115200n8'
+    compare(form.nixValue(), '[ "console=ttyS0,115200n8" ]')
+    field.text = "[ ]"
+    compare(form.nixValue(), "[ ]")
+    field.text = ""
+    compare(form.nixValue(), "")
+    init(); open({ widget: "list", item: "integer", min: "0", max: "65535" })
+    field.text = "80\n443"
+    compare(form.nixValue(), "[ 80 443 ]")
+    field.text = "70000"
+    form.commit()
+    verify(form.error.indexOf("outside") >= 0)
+    compare(writeProcess().command.length, 0)
+    init(); open({ widget: "string", multiline: true })
+    tryCompare(field, "activeFocus", true)
+    field.text = 'a\n"${HOME}'
+    compare(form.nixValue(), '"a\\n\\"\\${HOME}"')
+  }
+
+  function test_nullable_and_constraint() {
+    open({ widget: "string", nullable: true, constraint: "absolute" })
+    form.nullSelected = true; form.touched = true
+    compare(form.nixValue(), "null")
+    form.nullSelected = false
+    var field = findChild(form, "textField")
+    field.text = "rel/x"
+    form.commit()
+    verify(form.error.indexOf("absolute path") >= 0)
+    compare(writeProcess().command.length, 0)
+    init(); open({ widget: "list", item: "string", constraint: "nonEmpty" })
+    findChild(form, "scaffoldField").text = "ok\n"
+    form.commit()
+    verify(form.error.indexOf("non-empty") >= 0)
+    init(); open({ widget: "boolean", nullable: true, default: "null", current: { state: "set", value: "true" } })
+    compare(form.nullSelected, false)
+    compare(form.boolValue, true)
+  }
+
+  function test_list_package_and_null_seeds() {
+    open({ widget: "list", item: "string", current: { state: "set", value: '[ "a" "b" ]' } })
+    compare(form.widget, "list")
+    compare(findChild(form, "scaffoldField").text, "a\nb")
+    init(); open({ widget: "list", item: "integer", current: { state: "set", value: "lib.mkForce [ 1 ]" } })
+    compare(form.widget, "scaffold")
+    init(); open({ widget: "list", item: "string", current: { state: "set", value: '[ "a\\nb" ]' } })
+    compare(form.widget, "scaffold")
+    init(); open({ widget: "list", item: "string", current: { state: "set", value: '[ "" ]' } })
+    compare(form.widget, "scaffold")
+    init(); open({ widget: "package", current: { state: "set", value: "pkgs.hello" } })
+    compare(form.widget, "package")
+    compare(findChild(form, "packageField").text, "hello")
+    init(); open({ widget: "package", nullable: true, current: { state: "set", value: "null" } })
+    compare(form.widget, "package")
+    compare(form.nullSelected, true)
+    form.touched = true
+    compare(form.nixValue(), "null")
+  }
+
+  function test_package_search_selects_exact_result() {
+    open({ widget: "package" })
+    var field = findChild(form, "packageField")
+    field.text = "hel"
+    wait(350)
+    var search = searchProc()
+    verify(search !== null)
+    compare(search.command.join(" "), "nixarchy-pkg search --kind pkg --limit 20 -- hel")
+    search.deliver(JSON.stringify({ ok: true, rows: [
+      { kind: "pkg", name: "hello", summary: "Greeting" },
+      { kind: "pkg", name: "python3Packages.hello", summary: "Another greeting" }
+    ] }))
+    keyClick(Qt.Key_J)
+    compare(form.packageIndex, 1)
+    keyClick(Qt.Key_K)
+    compare(form.packageIndex, 0)
+    keyClick(Qt.Key_J)
+    keyClick(Qt.Key_Return)
+    compare(writeProc().command.slice(1).join(" "), "opt set p.q pkgs.python3Packages.hello")
   }
 
   function test_string_field_keys() {
