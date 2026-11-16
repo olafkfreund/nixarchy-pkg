@@ -263,7 +263,10 @@ TestCase {
   function test_resting_row_is_clear() {
     var lv = find(card, "QQuickListView")
     tryCompare(lv, "count", 3)
-    compare(lv.itemAtIndex(1).color.a, 0)
+    var c = lv.itemAtIndex(1).color
+    compare(c.a, 0)
+    // The same hue as the selection, not "transparent": a fade from black passes through grey.
+    verify(Qt.colorEqual(Qt.rgba(c.r, c.g, c.b, 1), Qt.rgba(card.selectedBg.r, card.selectedBg.g, card.selectedBg.b, 1)))
   }
 
   function test_tab_hover() {
@@ -289,6 +292,19 @@ TestCase {
       verify(!segment.visible, field + " hides the segment")
       verify(!card.busyAnimating, field + " stops motion")
     }
+  }
+
+  function test_busy_rule_rests_while_hidden() {
+    Style.reduceMotion = false
+    fakeModel.busy = true
+    verify(card.busyAnimating)
+    win.visible = false
+    try {
+      verify(!card.busyAnimating)
+    } finally {
+      win.visible = true
+    }
+    verify(card.busyAnimating)
   }
 
   function test_busy_rule_without_motion() {

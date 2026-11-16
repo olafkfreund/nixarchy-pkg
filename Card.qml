@@ -35,7 +35,8 @@ Item {
     // A running animation keeps its starting duration; a 0 ms loop could spin when motion resumes.
     duration: 1100
     loops: Animation.Infinite
-    running: root.waiting && !Style.reduceMotion
+    // Only while someone can see it: the Card outlives a closed menu.
+    running: root.waiting && !Style.reduceMotion && Boolean(root.Window.window && root.Window.window.visible)
   }
   // Apps and Services rows carry an icon; the other tabs don't.
   readonly property bool showIcons: root.model && root.model.tab <= 1
