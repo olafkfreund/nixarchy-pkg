@@ -68,8 +68,10 @@ r  /  SHIFT + R            -> Rebuild the search index (about a minute)
 -- Option form --------------------
 SPACE                      -> Flip a boolean
 j  /  k                    -> Choose between an enum's alternatives
+j  /  k                    -> Move through package search results
 RETURN                     -> Write the value. On a multi-line value it is
                               a newline, and CTRL + RETURN writes
+                              In package search, it writes the selected result
 ESCAPE                     -> Cancel
                               An untouched field writes nothing: the value
                               shown is the option's own default or example,

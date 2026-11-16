@@ -27,6 +27,7 @@ declining to do something is an answer.
 | `pkg remove <attr>` | |
 | `opt describe <path>` | An option's type, default, example and docs |
 | `opt set <path> <value>` / `opt remove <path>` | |
+| `opt replace <path> <value>` | Change an option already marked in `apps.nix` |
 | `draft new <url>` / `draft undraft <name>` | See [Drafts](drafts) |
 | `flake show <ref>` / `flake list` | Inspect a source or list locked inputs |
 | `flake add [--no-follows] [--no-flake] <name> <ref>` | Declare and lock an input; `--no-flake` also disables follows |
@@ -37,7 +38,38 @@ declining to do something is an answer.
 | `apply [--pin <part>=<sha256>]` | The rebuild. Streams a log, then one JSON object |
 | `reindex` | Rebuild the search index. About a minute |
 
+## Option values
+
+Pass a Nix expression as one shell argument. For example:
+
+```bash
+nixarchy-pkg opt set services.openssh.ports '[ 80 443 ]'
+nixarchy-pkg opt replace services.openssh.ports '[ 22 ]'
+```
+
+`opt describe` reports `widget`, `item`, `nullable`, `multiline`,
+`constraint`, and integer `min`/`max` bounds. Lists of strings or integers
+have a list widget; a `null or` type can take `null`. A package type gets a
+package widget only if `apps.nix` takes `pkgs`.
+
+`opt set` and `opt replace` refuse a literal integer outside its bounds.
+They also refuse a single string literal, or a list of string literals, that
+breaks the declared non-empty, absolute-path, or no-newline-and-colon rule.
+Other Nix expressions are left to the usual parse check. A refusal leaves
+`apps.nix` unchanged.
+
 ## A worked example
+
+Quote a path for the shell when a key contains spaces or punctuation:
+
+```bash
+nixarchy-pkg opt set 'fileSystems."/mnt/usb drive".options' '[ "nofail" ]'
+nixarchy-pkg opt replace 'fileSystems."/mnt/usb drive".options' '[ "nofail" "noauto" ]'
+```
+
+`opt set` refuses a path already marked in `apps.nix`; `opt replace` requires
+one. Both refuse invalid paths, including an unfilled `<name>` or `*`, and
+reject values that would make the file fail Nix's parse check.
 
 `flake add` answers with `name`, `url`, `follows`, and `message`. It does not
 return an `import` field: inspect the source with `flake show` to see its
