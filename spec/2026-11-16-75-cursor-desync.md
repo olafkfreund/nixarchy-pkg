@@ -111,6 +111,9 @@ row's *content*) against `cursor`.
 - A write answer with the same count and the cursor unchanged. The answer's
   row at `cursor` carries new content (`enabled` flipped), and the preview
   shows it.
+- A write answer that shrinks the list without crossing the cursor (six rows
+  to four, `cursor = 2`): `cursor` does not change, and the list must stay on
+  row 2.
 - The user moves during a write: toggle on row 2, `cursor = 4` before the
   answer, deliver. The selection is row 4, not 2 and not 0.
 - Queue: the cursor on the last row, a check result present, then the check
@@ -167,6 +170,15 @@ None. This is panel-only.
   tab builds its rows. Out of proportion for this bug.
 
 ## Risks
+
+- agy (spec review) noted that the preview now calls `rows()` on every cursor
+  step, where it used to read the delegate. The key handlers already call
+  `rowAt` on every action, and a tab holds about 110 rows, so this is not
+  cached. If a tab ever grows large, cache `rows()` in a property.
+- Only a direct write to `list.currentIndex` could split the highlight from
+  the preview after this change. None exists: clicks set `model.cursor`
+  (`Card.qml:222`), and the keys go through the model. A test must not write
+  `list.currentIndex` either.
 
 - `onModelChanged` re-binding also runs on the first model assignment. That
   is harmless: it evaluates to the cursor, as the binding would.
