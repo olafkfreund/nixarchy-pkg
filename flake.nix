@@ -3,9 +3,13 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  outputs = { self, nixpkgs }:
+  outputs =
+    { self, nixpkgs }:
     let
-      systems = [ "x86_64-linux" "aarch64-linux" ];
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
       forAll = nixpkgs.lib.genAttrs systems;
       # One source of truth for the version: the manifest is what the shell
       # validates at load, so the derivation reads it rather than repeating
@@ -13,9 +17,12 @@
       version = (builtins.fromJSON (builtins.readFile ./manifest.json)).version;
     in
     {
-      packages = forAll (system:
-        let pkgs = nixpkgs.legacyPackages.${system};
-        in rec {
+      packages = forAll (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+        in
+        rec {
           default = nixarchy-pkg;
 
           # runCommand and a plain copy, deliberately: omarchy-plugin-validate
@@ -25,59 +32,62 @@
           # Only what the plugin is. The artifacts, the tests and the README
           # are for whoever reads the repository, not for the shell that
           # loads this.
-          nixarchy-pkg = pkgs.runCommand "nixarchy-pkg-${version}"
-            {
-              inherit version;
-              meta = with pkgs.lib; {
-                description = "Omarchy plugin for managing nixpkgs packages, services and NixOS options";
-                homepage = "https://github.com/olafkfreund/nixarchy-pkg";
-                license = licenses.mit;
-                platforms = platforms.linux;
-              };
-            }
-            ''
-              mkdir -p "$out/bin"
-              cp ${./manifest.json} "$out/manifest.json"
-              for f in ${./Menu.qml} ${./Panel.qml} ${./Card.qml} \
-                       ${./PkgModel.qml} ${./OptionForm.qml}; do
-                cp "$f" "$out/$(basename "$f" | sed 's/^[a-z0-9]*-//')"
-              done
-              # The bar mark. Without it the widget draws nothing, and the
-              # validator does not catch a missing asset -- only the manifest's
-              # own entry points.
-              mkdir -p "$out/assets"
-              cp ${./assets/package.svg} "$out/assets/package.svg"
-              cp ${./bin/nixarchy-pkg}      "$out/bin/nixarchy-pkg"
-              cp ${./bin/nixarchy-pkg-keys} "$out/bin/nixarchy-pkg-keys"
-              chmod +x "$out/bin/"*
-            '';
-        });
+          nixarchy-pkg =
+            pkgs.runCommand "nixarchy-pkg-${version}"
+              {
+                inherit version;
+                meta = with pkgs.lib; {
+                  description = "Omarchy plugin for managing nixpkgs packages, services and NixOS options";
+                  homepage = "https://github.com/olafkfreund/nixarchy-pkg";
+                  license = licenses.mit;
+                  platforms = platforms.linux;
+                };
+              }
+              ''
+                mkdir -p "$out/bin"
+                cp ${./manifest.json} "$out/manifest.json"
+                for f in ${./Menu.qml} ${./Panel.qml} ${./Card.qml} \
+                         ${./PkgModel.qml} ${./OptionForm.qml}; do
+                  cp "$f" "$out/$(basename "$f" | sed 's/^[a-z0-9]*-//')"
+                done
+                # The bar mark. Without it the widget draws nothing, and the
+                # validator does not catch a missing asset -- only the manifest's
+                # own entry points.
+                mkdir -p "$out/assets"
+                cp ${./assets/package.svg} "$out/assets/package.svg"
+                cp ${./bin/nixarchy-pkg}      "$out/bin/nixarchy-pkg"
+                cp ${./bin/nixarchy-pkg-keys} "$out/bin/nixarchy-pkg-keys"
+                chmod +x "$out/bin/"*
+              '';
+        }
+      );
 
-      checks = forAll (system:
-        let pkgs = nixpkgs.legacyPackages.${system};
-        in {
+      checks = forAll (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+        in
+        {
           # The adapter is shellcheck-clean, and stays that way.
-          shellcheck = pkgs.runCommand "nixarchy-pkg-shellcheck"
-            { nativeBuildInputs = [ pkgs.shellcheck ]; }
-            ''
-              shellcheck ${./bin/nixarchy-pkg} ${./bin/nixarchy-pkg-keys} ${./tests/adapter.sh}
-              touch "$out"
-            '';
+          shellcheck =
+            pkgs.runCommand "nixarchy-pkg-shellcheck" { nativeBuildInputs = [ pkgs.shellcheck ]; }
+              ''
+                shellcheck ${./bin/nixarchy-pkg} ${./bin/nixarchy-pkg-keys} ${./tests/adapter.sh}
+                touch "$out"
+              '';
 
           # The manifest is what the shell validates at load, so a typo in it
           # is a plugin that silently never appears.
-          manifest = pkgs.runCommand "nixarchy-pkg-manifest"
-            { nativeBuildInputs = [ pkgs.jq ]; }
-            ''
-              jq -e '
-                .schemaVersion == 1
-                and (.id | startswith("omarchy.") | not)
-                and (.kinds | index("menu"))
-                and (.entryPoints.menu == "Menu.qml")
-                and (.entryPoints.barWidget == "Panel.qml")
-              ' ${./manifest.json} > /dev/null
-              touch "$out"
-            '';
+          manifest = pkgs.runCommand "nixarchy-pkg-manifest" { nativeBuildInputs = [ pkgs.jq ]; } ''
+            jq -e '
+              .schemaVersion == 1
+              and (.id | startswith("omarchy.") | not)
+              and (.kinds | index("menu"))
+              and (.entryPoints.menu == "Menu.qml")
+              and (.entryPoints.barWidget == "Panel.qml")
+            ' ${./manifest.json} > /dev/null
+            touch "$out"
+          '';
 
           # qmllint proves the QML parses. It cannot prove the panel
           # behaves, and #43's four defects were behaviour -- a stale write
@@ -91,26 +101,31 @@
           # what the MODEL did. Card is not covered -- the harness cannot
           # drive a ListView delegate's nested content faithfully, and a
           # measurement it cannot be trusted to make is worse than none.
-          qml-tests = pkgs.runCommand "nixarchy-pkg-qml-tests"
-            { nativeBuildInputs = [ pkgs.qt6.qtdeclarative ]; }
-            ''
-              cp ${./PkgModel.qml} PkgModel.qml
-              cp ${./tests/qml/tst_pkgmodel.qml} tst_pkgmodel.qml
-              cp -r ${./tests/qml/imports} imports
-              # Qt's own modules are not on the path inside the sandbox --
-              # outside it the devShell supplies them, which is exactly the
-              # kind of difference a check should not depend on.
-              export QT_QPA_PLATFORM=offscreen HOME=$PWD
-              cp ${./Card.qml} Card.qml
-              cp ${./tests/qml/tst_card.qml} tst_card.qml
-              qmltestrunner -input tst_card.qml \
-                -import "$PWD/imports" \
-                -import "${pkgs.qt6.qtdeclarative}/lib/qt-6/qml"
-              qmltestrunner -input tst_pkgmodel.qml \
-                -import "$PWD/imports" \
-                -import "${pkgs.qt6.qtdeclarative}/lib/qt-6/qml"
-              touch "$out"
-            '';
+          qml-tests =
+            pkgs.runCommand "nixarchy-pkg-qml-tests" { nativeBuildInputs = [ pkgs.qt6.qtdeclarative ]; }
+              ''
+                cp ${./PkgModel.qml} PkgModel.qml
+                cp ${./tests/qml/tst_pkgmodel.qml} tst_pkgmodel.qml
+                cp -r ${./tests/qml/imports} imports
+                # Qt's own modules are not on the path inside the sandbox --
+                # outside it the devShell supplies them, which is exactly the
+                # kind of difference a check should not depend on.
+                export QT_QPA_PLATFORM=offscreen HOME=$PWD
+                cp ${./Card.qml} Card.qml
+                cp ${./tests/qml/tst_card.qml} tst_card.qml
+                qmltestrunner -input tst_card.qml \
+                  -import "$PWD/imports" \
+                  -import "${pkgs.qt6.qtdeclarative}/lib/qt-6/qml"
+                qmltestrunner -input tst_pkgmodel.qml \
+                  -import "$PWD/imports" \
+                  -import "${pkgs.qt6.qtdeclarative}/lib/qt-6/qml"
+                cp ${./OptionForm.qml} OptionForm.qml
+                cp ${./tests/qml/tst_optionform.qml} tst_optionform.qml
+                qmltestrunner -input tst_optionform.qml \
+                  -import "$PWD/imports" \
+                  -import "${pkgs.qt6.qtdeclarative}/lib/qt-6/qml"
+                touch "$out"
+              '';
 
           # ~2300 lines of QML and nothing parsed them: a syntax error
           # shipped and failed at runtime in the shell, where the symptom is
@@ -125,15 +140,15 @@
           # -I is for whoever reads a failure, not for the exit code: with
           # it, two unresolvable host modules is a known condition; without
           # it, three including QtQuick looks like a broken checker.
-          qml-syntax = pkgs.runCommand "nixarchy-pkg-qml-syntax"
-            { nativeBuildInputs = [ pkgs.qt6.qtdeclarative ]; }
-            ''
-              for f in ${./Menu.qml} ${./Panel.qml} ${./Card.qml} \
-                       ${./PkgModel.qml} ${./OptionForm.qml}; do
-                qmllint -I "${pkgs.qt6.qtdeclarative}/lib/qt-6/qml" "$f" || exit 1
-              done
-              touch "$out"
-            '';
+          qml-syntax =
+            pkgs.runCommand "nixarchy-pkg-qml-syntax" { nativeBuildInputs = [ pkgs.qt6.qtdeclarative ]; }
+              ''
+                for f in ${./Menu.qml} ${./Panel.qml} ${./Card.qml} \
+                         ${./PkgModel.qml} ${./OptionForm.qml}; do
+                  qmllint -I "${pkgs.qt6.qtdeclarative}/lib/qt-6/qml" "$f" || exit 1
+                done
+                touch "$out"
+              '';
 
           # The menu used to multiply every Style.font token by a flat 1.45.
           # Those tokens already follow `omarchy display text size`, so the
@@ -177,14 +192,23 @@
             done
             touch "$out"
           '';
-        });
+        }
+      );
 
-      devShells = forAll (system:
-        let pkgs = nixpkgs.legacyPackages.${system};
-        in {
+      devShells = forAll (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+        in
+        {
           default = pkgs.mkShell {
-            packages = with pkgs; [ shellcheck jq qt6.qtdeclarative ];
+            packages = with pkgs; [
+              shellcheck
+              jq
+              qt6.qtdeclarative
+            ];
           };
-        });
+        }
+      );
     };
 }

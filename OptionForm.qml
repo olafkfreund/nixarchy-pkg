@@ -153,6 +153,10 @@ FocusScope {
     root.open = true
     describe.command = [root.model.script, "opt", "describe", p]
     describe.running = true
+    // Take the keyboard now, not only in seed(): a describe that fails never
+    // seeds, and the menu ignores keys while the form is open, so ESC went
+    // nowhere (#76). seed() still moves focus on to the field it shows.
+    root.forceActiveFocus()
   }
 
   function finish() {
