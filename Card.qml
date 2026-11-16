@@ -56,7 +56,7 @@ Item {
   // it. A search row brings its own preview, minus the key hints, which
   // belong to the footer. Apps and Services rows have none, so the pane
   // composes one from what the row already knows.
-  readonly property var currentRow: list.currentItem ? list.currentItem.modelData : null
+  readonly property var currentRow: root.model ? root.model.rowAt(root.model.cursor) : null
   readonly property string previewText: {
     const r = currentRow
     if (!r) return ""
@@ -191,6 +191,9 @@ Item {
     clip: true
     model: root.model ? root.model.rows() : []
     currentIndex: root.model ? root.model.cursor : 0
+    // Any new rows array resets ListView's own currentIndex to 0, and the
+    // binding above only re-runs when cursor changes (#75).
+    onModelChanged: currentIndex = Qt.binding(function () { return root.model ? root.model.cursor : 0 })
     highlightMoveDuration: 0
     // Enough of the list stays on screen either side of the cursor that
     // arrowing down does not feel like it is dragging the view.
