@@ -549,3 +549,5 @@ nixarchy issue above)
 > Blocked on: the nixarchy "pkg-index: carry meta.insecure ..." issue. Opened
 > so the follow-up is tracked rather than remembered. Out of scope for #71:
 > no `insecure` field, key or test is added there.
+
+(Deviation, step 3: the manual paragraph also says an indexed package with no flags carries `flags: []`, which the adapter does.)

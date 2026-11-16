@@ -52,6 +52,12 @@ Item {
     return fg
   }
 
+  // The tags a row draws: its own flags, then its channel when it has one.
+  // Only Selection rows carry a channel, so no other tab's rows change (#71).
+  function tagsOf(row) {
+    return (row.flags || []).concat(row.channel ? [row.channel] : [])
+  }
+
   // The row under the cursor, and what the pane beside the list says about
   // it. A search row brings its own preview, minus the key hints, which
   // belong to the footer. Apps and Services rows have none, so the pane
@@ -323,14 +329,14 @@ Item {
           id: flags
           anchors.verticalCenter: parent.verticalCenter
           spacing: Style.space(10)
-          visible: (modelData.flags || []).length > 0
+          visible: root.tagsOf(modelData).length > 0
 
           Repeater {
-            model: modelData.flags || []
+            model: root.tagsOf(modelData)
             Rectangle {
               required property string modelData
               readonly property color tone: modelData === "broken" ? Commons.Color.urgent
-                                          : modelData === "unfree" ? Commons.Color.accent
+                                          : (modelData === "unfree" || modelData === "other") ? Commons.Color.accent
                                           : root.dim
               anchors.verticalCenter: parent.verticalCenter
               color: Qt.rgba(tone.r, tone.g, tone.b, 0.15)
@@ -366,7 +372,8 @@ Item {
                              - Style.space(10) * ((flags.visible ? 3 : 2)
                                                   + (icon.visible ? 1 : 0)))
           elide: Text.ElideRight
-          text: modelData.summary || modelData.note || modelData.type || ""
+          text: (modelData.version ? modelData.version + "  " : "")
+                + (modelData.summary || modelData.note || modelData.type || "")
           textFormat: Text.PlainText
           font.family: root.fontFamily
           font.pixelSize: Style.font.title
