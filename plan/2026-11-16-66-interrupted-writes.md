@@ -562,6 +562,15 @@ still in progress; the response is partial" (`DEADLINE_EXCEEDED`).
 | Per-step commits contradicted the approved three commits | Three commit groups |
 | Docs still implied a two-minute limit | "No fixed limit" wording |
 
+(Review fixes, Opus review of the branch: the commit-path refusal names both
+`recover --discard` (keep the change) and `recover`, and the troubleshooting
+page follows; `test_armed_then_writing_disarms` also checks the message. The
+branch has one commit per step instead of decision 9's three; the PR is
+squash-merged, so the history on main is one commit either way. Known risk,
+not fixed: a detached descendant (for example git's background gc) that keeps
+fd 7 makes later writes refuse until it exits; `fuser -v` on the lock names
+it.)
+
 ## Tests
 
 ```bash

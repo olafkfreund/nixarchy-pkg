@@ -234,6 +234,7 @@ TestCase {
     compare(m.armingState, "armed")
     m._pending.deliver(pend({ writing: true }))
     compare(m.armingState, "")
+    compare(m.message, "a write is in progress -- try again in a moment")
   }
 
   function test_queue_error_is_one_note_row() {

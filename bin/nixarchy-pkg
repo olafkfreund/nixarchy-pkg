@@ -255,7 +255,7 @@ rollback() {
 committed() {
   if ! settle; then
     GUARDED=false   # keep open/: neither committed nor undone
-    die "something this write started is still running, so the write was neither kept nor undone. Your backup is kept: run $SELF recover when it has finished."
+    die "something this write started is still running, so the write was neither kept nor undone. When it has finished, run $SELF recover --discard to keep the change, or $SELF recover to put back what was there before."
   fi
   mv "$TXN/open" "$TXN/done" ||
     die "could not record that the write finished (disk full?), so it was undone."

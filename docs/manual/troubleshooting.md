@@ -94,9 +94,13 @@ fuser -v ~/.local/state/nixarchy/pkg-children.lock
 
 If a write ends with "something this write started is still running, so
 nothing was undone. Your backup is kept: run …/nixarchy-pkg recover when it
-has finished." (or "so the write was neither kept nor undone"), a child outlived
-the write, so the files were not touched again. Run `recover` once it has
-finished.
+has finished.", a child outlived a write that failed, so nothing was undone.
+Run `recover` once it has finished.
+
+If it says "so the write was neither kept nor undone", the write itself
+succeeded but a child was still running. Once it has finished, run
+`recover --discard` to keep the change, or `recover` to put back what was
+there before.
 
 The backup is in `~/.local/state/nixarchy/pkg-recovery/open/` (or under
 `XDG_STATE_HOME`). Each file has an `N.path` naming its live file, and an
