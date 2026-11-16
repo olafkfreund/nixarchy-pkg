@@ -176,4 +176,13 @@ TestCase {
     open({ widget: "boolean", default: "false", current: { state: "set", value: "lib.mkDefault true" } })
     keyClick(Qt.Key_Escape); verify(!form.open); compare(writeProc(), null)
   }
+
+  // #62: scope travels with the row, and defaults to system.
+  function test_describe_passes_the_rows_scope() {
+    form.begin({ path: "programs.git.enable", scope: "user" })
+    compare(describeProc().command.join(" "), "nixarchy-pkg opt describe --scope user programs.git.enable")
+    form.finish()
+    form.begin({ path: "programs.git.enable" })
+    compare(describeProc().command.join(" "), "nixarchy-pkg opt describe --scope system programs.git.enable")
+  }
 }

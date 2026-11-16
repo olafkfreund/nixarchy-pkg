@@ -534,7 +534,8 @@ Item {
         objectName: "queueStatus"
         anchors {
           left: parent.left; leftMargin: Style.space(10)
-          right: indexAge.visible ? indexAge.left : hints.left; rightMargin: Style.space(14)
+          right: indexAge.visible ? indexAge.left : optionsText.visible ? optionsText.left : hints.left
+          rightMargin: Style.space(14)
           verticalCenter: parent.verticalCenter
         }
         // A long reason (an interrupted write names its files and both
@@ -562,13 +563,13 @@ Item {
       Text {
         id: indexAge
         objectName: "indexAge"
-        // Against the hints, at most two fifths of the footer; the queue
-        // status stops where this begins.
+        // Between the queue status and the options status (or the hints);
+        // the queue status stops where this begins.
         anchors {
-          right: hints.left; rightMargin: Style.space(14)
+          right: optionsText.visible ? optionsText.left : hints.left; rightMargin: Style.space(14)
           verticalCenter: parent.verticalCenter
         }
-        width: Math.min(implicitWidth, parent.width * 0.4)
+        width: Math.min(implicitWidth, parent.width * 0.35)
         elide: Text.ElideRight
         visible: root.model && root.model.indexStale
         text: root.model && typeof root.model.indexLine === "function"
@@ -577,6 +578,25 @@ Item {
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
         color: Commons.Color.urgent
+      }
+
+      // Where the option list came from, so "your flake's" and "the system
+      // manual's" are never mistaken for each other.
+      Text {
+        id: optionsText
+        objectName: "optionsStatus"
+        anchors {
+          right: hints.left; rightMargin: Style.space(14)
+          verticalCenter: parent.verticalCenter
+        }
+        visible: text !== ""
+        text: root.model ? String(root.model.optionsStatus || "") : ""
+        textFormat: Text.PlainText
+        elide: Text.ElideRight
+        width: Math.min(implicitWidth, parent.width * 0.2)
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.title
+        color: root.model && root.model.optionsError ? Commons.Color.urgent : root.dim
       }
 
       Text {
