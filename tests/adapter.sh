@@ -441,7 +441,13 @@ check "negative range lower bound refuses -10" jq -e '.ok == false' <<<"$(fx opt
 check "negative range lower bound accepts -9" jq -e '.ok' <<<"$(fx opt set t.neg -9)"
 check "out-of-range list item is refused" jq -e '.ok == false and (.error | contains("outside"))' <<<"$(fx opt set t.ports '[ 0 70000 ]')"
 check "integer list accepts its bounds" jq -e '.ok' <<<"$(fx opt set t.ports '[ 0 65535 ]')"
+before=$(sha256sum "$APPSNIX")
+check "out-of-range nullable integer is refused on set" jq -e '.ok == false and (.error | contains("outside"))' <<<"$(fx opt set t.nullPort 70000)"
+check "refused nullable set leaves file untouched" test "$before" = "$(sha256sum "$APPSNIX")"
 check "nullable integer accepts null" jq -e '.ok' <<<"$(fx opt set t.nullPort null)"
+before=$(sha256sum "$APPSNIX")
+check "out-of-range nullable integer is refused on replace" jq -e '.ok == false and (.error | contains("outside"))' <<<"$(fx opt replace t.nullPort 70000)"
+check "refused nullable replace leaves file untouched" test "$before" = "$(sha256sum "$APPSNIX")"
 check "Nix expression passes literal check" jq -e '.ok' <<<"$(fx opt set t.port 'builtins.toString 80')"
 check "unsigned literal can be set" jq -e '.ok' <<<"$(fx opt set t.uint 0)"
 before=$(sha256sum "$APPSNIX")

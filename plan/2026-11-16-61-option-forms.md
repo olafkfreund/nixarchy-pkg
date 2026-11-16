@@ -609,3 +609,5 @@ count the block as one change.
 (Review fixes, round 2: refuse flattened values when the probe cannot be inserted; keep jq errors out of the JSON response; cover missing insertion, control-character refusal, and tab/CR escapes in the adapter tests.)
 
 (Review fixes, PR 2: a search row draws "= <value>" only when set is true, and `current` carries the value alone; a successful option write re-runs the active Options search; OptionForm reflow turns every `::: {.x}` / `:::{.x}` opening line, indented or not, into a capitalised label.)
+
+(Review fixes, PR 3: Delete inside a text editor edits text and arms removal only from the form root; disarming clears the "DEL again removes" message; a lone "-" in the integer field is refused with a message; `null or <integer>` options get the range check.)

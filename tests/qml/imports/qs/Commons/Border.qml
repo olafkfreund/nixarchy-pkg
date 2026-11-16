@@ -1,7 +1,8 @@
-// Only surfaceSpec is bound, and only its existence matters here (#50).
+// Only the existence of these border specs matters here (#50).
 pragma Singleton
 import QtQuick
 
 QtObject {
   function surfaceSpec(a, b, c, d) { return ({}) }
+  function controlSpec(a, b, c) { return ({}) }
 }

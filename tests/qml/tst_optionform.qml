@@ -148,12 +148,23 @@ TestCase {
     compare(field.text, "-1")
   }
 
-  function test_delete_twice_removes_and_empty_string_arms() {
-    form.begin({ path: "t.str" })
-    describeProc().deliver(JSON.stringify({ ok: true, path: "t.str", widget: "string",
-      current: { state: "set", value: "\"old\"" } }))
-    var field = findChild(form, "textField")
+  function test_lone_minus_refuses_without_writing() {
+    form.begin({ path: "t.port" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.port", widget: "integer",
+      current: { state: "absent" } }))
+    var field = findChild(form, "integerField")
     tryCompare(field, "activeFocus", true)
+    field.text = "-"
+    keyClick(Qt.Key_Return)
+    verify(form.error.indexOf("complete integer") >= 0)
+    compare(writeProcess().command.length, 0)
+    verify(!fakeModel.busy)
+  }
+
+  function test_delete_twice_removes_and_empty_string_arms() {
+    form.begin({ path: "t.bool" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.bool", widget: "boolean",
+      current: { state: "set", value: "true" } }))
     var writer = writeProcess()
     keyClick(Qt.Key_Delete)
     verify(form.armedRemove)
@@ -164,6 +175,8 @@ TestCase {
     form.begin({ path: "t.str" })
     describeProc().deliver(JSON.stringify({ ok: true, path: "t.str", widget: "string",
       current: { state: "set", value: "\"old\"" } }))
+    var field = findChild(form, "textField")
+    tryCompare(field, "activeFocus", true)
     field.text = ""
     keyClick(Qt.Key_Return)
     verify(form.armedRemove)
@@ -175,5 +188,37 @@ TestCase {
     keyClick(Qt.Key_Return)
     verify(!form.armedRemove)
     compare(writer.command.length, 0)
+  }
+
+  function test_delete_edits_scaffold_without_arming_remove() {
+    form.begin({ path: "t.multi" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.multi", widget: "scaffold",
+      current: { state: "set", value: "abcde\nfgh" } }))
+    var field = findChild(form, "scaffoldField")
+    tryCompare(field, "activeFocus", true)
+    var writer = writeProcess()
+    field.cursorPosition = 2
+    keyClick(Qt.Key_Home)
+    keyClick(Qt.Key_Delete)
+    keyClick(Qt.Key_Delete)
+    compare(field.text, "cde\nfgh")
+    verify(!form.armedRemove)
+    compare(writer.command.length, 0)
+  }
+
+  function test_disarming_clears_only_remove_message() {
+    form.begin({ path: "t.bool" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: "t.bool", widget: "boolean",
+      current: { state: "set", value: "true" } }))
+    form.forceActiveFocus()
+    keyClick(Qt.Key_Delete)
+    verify(form.armedRemove)
+    verify(form.error.indexOf("DEL again removes ") === 0)
+    keyClick(Qt.Key_Space)
+    verify(!form.armedRemove)
+    compare(form.error, "")
+    form.error = "another refusal"
+    keyClick(Qt.Key_Space)
+    compare(form.error, "another refusal")
   }
 }

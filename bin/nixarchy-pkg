@@ -952,11 +952,15 @@ decimal_lt() {
 }
 
 check_literal() {
-  local path=$1 value=$2 meta min max widget item nullable v
+  local path=$1 value=$2 meta min max integer_type item nullable v
+  local -a fields
   meta=$(opt_meta "$path")
   [ "$meta" != null ] || return 0
-  read -r min max widget item nullable < <(jq -r '[.min // "", .max // "", .widget, .item // "", .nullable] | join(" ")' <<<"$meta")
-  [ "$widget" = integer ] || [ "$item" = integer ] || return 0
+  mapfile -t fields < <(jq -r '[.min // "", .max // "",
+    (.type | test("^(null or )?(signed integer|unsigned integer|positive integer|integer between|[0-9]+ bit unsigned integer)")),
+    .item // "", .nullable] | .[]' <<<"$meta")
+  min=${fields[0]} max=${fields[1]} integer_type=${fields[2]} item=${fields[3]} nullable=${fields[4]}
+  [ "$integer_type" = true ] || [ "$item" = integer ] || return 0
   [ "$value" = null ] && [ "$nullable" = true ] && return 0
   if [ "$item" = integer ]; then
     [[ $value =~ ^\[[[:space:]]*(-?[0-9]+([[:space:]]+-?[0-9]+)*[[:space:]]*)?\]$ ]] || return 0

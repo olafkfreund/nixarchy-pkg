@@ -301,6 +301,10 @@ FocusScope {
       else root.finish()
       return
     }
+    if (widget === "integer" && value === "-") {
+      root.error = "enter a complete integer before writing. Nothing was changed."
+      return
+    }
     if (widget === "integer" && /^-?(0|[1-9][0-9]*)$/.test(value) &&
         ((option.min != null && decimalLess(value, option.min)) ||
          (option.max != null && decimalLess(option.max, value)))) {
@@ -357,8 +361,14 @@ FocusScope {
     root.error = "DEL again removes " + path + " from apps.nix; ESC keeps it"
   }
 
+  function disarmRemove() {
+    root.armedRemove = false
+    if (root.error.indexOf("DEL again removes ") === 0) root.error = ""
+  }
+
   function removeKey(event) {
-    if (event.key !== Qt.Key_Delete || current.state !== "set") return false
+    if (event.key !== Qt.Key_Delete || current.state !== "set" ||
+        textField.activeFocus || integerField.activeFocus || scaffoldField.activeFocus) return false
     event.accepted = true
     if (!armedRemove) { armRemove(); return true }
     if (root.model.applying) { root.error = "an apply is running \u2014 wait for it to finish"; return true }
@@ -379,7 +389,7 @@ FocusScope {
     // A closed form handles nothing: every key belongs to the list.
     if (!root.open) return
     if (root.removeKey(event)) return
-    root.armedRemove = false
+    root.disarmRemove()
     switch (event.key) {
       case Qt.Key_Escape:
         root.finish(); event.accepted = true; return
@@ -529,10 +539,9 @@ FocusScope {
         width: parent.width
         validator: RegularExpressionValidator { regularExpression: /-?(0|[1-9][0-9]*)?/ }
         foreground: Commons.Color.menu.text
-        onTextChanged: { root.touched = true; root.armedRemove = false }
+        onTextChanged: { root.touched = true; root.disarmRemove() }
         Keys.onPressed: function (event) {
-          if (root.removeKey(event)) return
-          root.armedRemove = false
+          root.disarmRemove()
           if (event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
             var next = root.stepDecimal(text, event.key === Qt.Key_Up ? 1 : -1)
             if ((root.option.min == null || !root.decimalLess(next, root.option.min)) &&
@@ -553,10 +562,9 @@ FocusScope {
         width: parent.width
         placeholderText: root.current.state === "set" ? "empty keeps the current value" : "leave empty to keep the default"
         foreground: Commons.Color.menu.text
-        onTextChanged: { root.touched = true; root.armedRemove = false }
+        onTextChanged: { root.touched = true; root.disarmRemove() }
         Keys.onPressed: function (event) {
-          if (root.removeKey(event)) return
-          root.armedRemove = false
+          root.disarmRemove()
           if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
             root.commit(); event.accepted = true
           } else if (event.key === Qt.Key_Escape) {
@@ -605,6 +613,7 @@ FocusScope {
 
             TextEdit {
               id: scaffoldField
+              objectName: "scaffoldField"
               width: parent.width
               wrapMode: TextEdit.Wrap
               selectByMouse: true
@@ -614,10 +623,9 @@ FocusScope {
               selectionColor: Commons.Color.accent
               // seed() fills this and then clears `touched`, so the seed
               // itself never counts as an edit.
-              onTextChanged: root.touched = true
+              onTextChanged: { root.touched = true; root.disarmRemove() }
               Keys.onPressed: function (event) {
-                if (root.removeKey(event)) return
-                root.armedRemove = false
+                root.disarmRemove()
                 if (event.key === Qt.Key_Escape) { root.finish(); event.accepted = true }
                 // RETURN is a newline here, because the value may be several
                 // lines. Ctrl+RETURN writes, the way any multiline editor
