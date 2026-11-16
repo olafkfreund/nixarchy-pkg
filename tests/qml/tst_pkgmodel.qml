@@ -345,4 +345,26 @@ TestCase {
     compare(m.tabCount(4), "")
     m.results = []
   }
+
+  // #75: whatever shrank the rows, the cursor must still name a row.
+  function test_cancel_check_clamps_cursor() {
+    m.setTab(6)
+    m._pending.deliver(pend({ changes: [ { marker: "app:a", change: "on", file: "apps", line: "x" },
+                                         { marker: "app:b", change: "on", file: "apps", line: "y" } ] }))
+    m.checkResult = null
+    m.checkRunning = true
+    m.cursor = m.count - 1
+    m.cancelCheck()
+    m._check.finish(143)
+    verify(m.cursor <= m.count - 1, "cursor " + m.cursor + " of " + m.count)
+  }
+
+  function test_naming_clamps_cursor() {
+    m.setTab(5)
+    m.inspected = { ref: "path:/tmp/z", ok: true, nixosModules: ["a", "b", "c"] }
+    m.cursor = m.count - 1
+    verify(m.cursor >= 2)
+    m.beginNaming()
+    compare(m.cursor, 0)
+  }
 }

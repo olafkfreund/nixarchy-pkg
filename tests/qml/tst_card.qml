@@ -33,6 +33,7 @@ TestCase {
     property int cursor: 0
     property int count: 3
     function rows() { return theRows }
+    function rowAt(i) { return (i >= 0 && i < theRows.length) ? theRows[i] : null }
     property bool busy: false
     property string selCount: "2"
     property string queueCount: "?"
@@ -55,6 +56,10 @@ TestCase {
     width: 800; height: 400
     visible: true
     Card { id: card; anchors.fill: parent; model: fakeModel }
+    // The real model, for #75: the fake's rows binding hid the trigger.
+    // Hidden, so it never takes the pointer from the hover tests.
+    PkgModel { id: realModel }
+    Card { id: realCard; width: 800; height: 400; model: realModel; visible: false }
   }
   Component { id: busyCardComponent; Card {} }
 
@@ -363,5 +368,179 @@ TestCase {
   function test_header_fits() {
     var h = byName(card, "header")
     verify(h.implicitWidth <= h.width, "the tab row fits at 800 px")
+  }
+
+  // ---- #75: the row you see selected is the row a key acts on ----------
+
+  function realList() { return find(realCard, "QQuickListView") }
+  function st(n, onIndex) {
+    var apps = []
+    for (var i = 0; i < n; i++)
+      apps.push({ id: "a" + i, label: "App " + i, category: "Utility", kind: "app", enabled: i === onIndex })
+    return JSON.stringify({ ok: true, apps: apps, services: [], packages: [], options: [], drafts: [] })
+  }
+  function pend(o) {
+    var d = { ok: true, total: 1, count: 1, fingerprint: "f1", writing: false,
+              pins: { apps: "aa" }, files: [], changes: [], sources: {}, unpinned: { drafts: [] } }
+    for (var k in o) d[k] = o[k]
+    return JSON.stringify(d)
+  }
+  function changes3() {
+    return [ { marker: "app:a", change: "on", file: "apps", line: "x" },
+             { marker: "app:b", change: "on", file: "apps", line: "y" },
+             { marker: "app:c", change: "on", file: "apps", line: "z" } ]
+  }
+  // Run body with the real card shown; always hide it again.
+  function withReal(n, body) {
+    realCard.visible = true
+    try {
+      realModel.busy = false
+      realModel.checkResult = null
+      realModel.checkRunning = false
+      realModel.inspected = null
+      realModel.setTab(0)
+      realModel._reader.deliver(st(n, -1))
+      tryCompare(realList(), "count", n)
+      body()
+    } finally {
+      realModel.inspected = null
+      realModel.checkResult = null
+      realModel.checkRunning = false
+      realModel.pendingData = null
+      realModel.setTab(0)
+      realCard.visible = false
+    }
+  }
+  // Key order differs between a ListView's modelData and the model's own row.
+  function canon(r) {
+    if (r === null) return "null"
+    var out = []
+    Object.keys(r).sort().forEach(function (k) { out.push(k + "=" + JSON.stringify(r[k])) })
+    return out.join("|")
+  }
+  function agree() {
+    compare(realList().currentIndex, realModel.cursor, "list follows the cursor")
+    compare(canon(realCard.currentRow), canon(realModel.rowAt(realModel.cursor)),
+            "preview shows the cursor row")
+  }
+  function writeAndAnswer(args, answer) {
+    verify(realModel.write(args))
+    realModel._writer.deliver(answer)
+    wait(50)
+  }
+
+  function test_real_write_same_count() {
+    withReal(6, function () {
+      realModel.cursor = 2
+      writeAndAnswer(["toggle", "app", "a2"], st(6, 2))
+      compare(realModel.cursor, 2)
+      compare(realList().currentIndex, 2)
+      verify(realCard.currentRow.enabled === true, "the new content")
+      agree()
+    })
+  }
+
+  function test_real_write_shrinks_without_crossing() {
+    withReal(6, function () {
+      realModel.cursor = 2
+      writeAndAnswer(["toggle", "app", "a2"], st(4, 2))
+      compare(realList().currentIndex, 2)
+      agree()
+    })
+  }
+
+  function test_real_move_during_write() {
+    withReal(6, function () {
+      realModel.cursor = 2
+      verify(realModel.write(["toggle", "app", "a2"]))
+      realModel.cursor = 4
+      realModel._writer.deliver(st(6, 2))
+      wait(50)
+      compare(realModel.cursor, 4)
+      compare(realList().currentIndex, 4)
+      agree()
+    })
+  }
+
+  function queueSetup() {
+    realModel.setTab(6)
+    realModel._pending.deliver(pend({ changes: changes3() }))
+    wait(50)
+  }
+
+  function test_real_queue_check_row_goes_on_cancel() {
+    withReal(6, function () {
+      queueSetup()
+      realModel.checkResult = null
+      realModel.checkRunning = true
+      realModel.cursor = realModel.count - 1
+      wait(50)
+      realModel.cancelCheck()
+      realModel._check.finish(143)
+      wait(50)
+      verify(realModel.cursor < realModel.count, "cursor names a row")
+      agree()
+    })
+  }
+
+  function test_real_queue_check_row_goes_on_invalidate() {
+    withReal(6, function () {
+      queueSetup()
+      realModel.checkRunning = false
+      realModel.checkResult = { verdict: "evaluates", fingerprint: "f1" }
+      realModel.cursor = realModel.count - 1
+      wait(50)
+      realModel._pending.deliver(pend({ changes: changes3(), fingerprint: "f2" }))
+      wait(50)
+      verify(realModel.cursor < realModel.count, "cursor names a row")
+      agree()
+    })
+  }
+
+  function test_real_naming_shrinks_flakes() {
+    withReal(6, function () {
+      realModel.setTab(5)
+      realModel.inspected = { ref: "github:o/r", ok: true, nixosModules: ["a", "b", "c"] }
+      realModel.cursor = realModel.count - 1
+      verify(realModel.cursor >= 2)
+      wait(50)
+      realModel.beginNaming()
+      wait(50)
+      compare(realModel.cursor, 0)
+      agree()
+    })
+  }
+
+  function test_real_shrink_below_cursor() {
+    withReal(6, function () {
+      realModel.cursor = 5
+      writeAndAnswer(["toggle", "app", "a5"], st(4, -1))
+      compare(realModel.cursor, 3)
+      compare(realList().currentIndex, 3)
+      agree()
+    })
+  }
+
+  function test_real_empty_and_refill() {
+    withReal(6, function () {
+      realModel.cursor = 2
+      realModel._reader.deliver(st(0, -1))
+      wait(50)
+      realModel._reader.deliver(st(6, -1))
+      tryCompare(realList(), "count", 6)
+      wait(50)
+      compare(realModel.cursor, 0)
+      agree()
+    })
+  }
+
+  function test_real_tab_change_resets() {
+    withReal(6, function () {
+      realModel.cursor = 3
+      realModel.setTab(1)
+      realModel.setTab(0)
+      compare(realModel.cursor, 0)
+      compare(realList().currentIndex, 0)
+    })
   }
 }

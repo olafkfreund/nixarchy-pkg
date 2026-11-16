@@ -267,6 +267,9 @@ QtObject {
   }
 
   readonly property int count: rows().length
+  // Whatever shrank the rows -- a cancelled check, naming, a filter -- the
+  // cursor must still name a row (#75).
+  onCountChanged: if (cursor > Math.max(0, count - 1)) cursor = Math.max(0, count - 1)
 
   function disarm() {
     if (armedChannel !== "") { armedChannel = ""; message = "" }
