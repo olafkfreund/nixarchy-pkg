@@ -42,10 +42,10 @@ What is queued, as a list of markers:
 nixarchy-pkg pending | jq -r '.changes[].marker'
 ```
 
-Everything unfree in your selection:
+Every package taken from the other channel:
 
 ```bash
-nixarchy-pkg state | jq -r '.packages[].attr'
+nixarchy-pkg state | jq -r '.packages[] | select(.channel == "other") | .attr'
 ```
 
 Whether this machine follows stable or unstable:

@@ -57,8 +57,11 @@ is a common clash with nvim.
 ```lua
 -- ~/.config/hypr/bindings.lua
 o.bind("SUPER + ALT + N", "nixarchy packages",
-       "omarchy-shell shell toggle nixarchy.pkg '{}'")
+       "nixarchy-plugin nixarchy.pkg")
 ```
+
+With the plugin turned off, the key shows a notification saying so and
+how to turn it on, instead of doing nothing.
 
 There is also a menu row. `share/omarchy-menu.jsonc` in the repository has
 two rows to paste into `~/.config/omarchy/extensions/omarchy-menu.jsonc` —
@@ -107,9 +110,9 @@ and it will ask for a password through your polkit agent. When it finishes,
 
 That is the loop. Everything else in this manual is a variation on it.
 
-## If `a` does nothing useful
+## If you have no polkit agent
 
-Press `SHIFT+A` instead. That runs the same apply in a real terminal, which
-is the route for a machine with no polkit agent to answer the password
-prompt, and for any build that asks a question the panel cannot show you.
+Use `SHIFT+A` instead of `a`. It runs the same apply in a real terminal,
+where a password prompt or a question can be answered. Once an apply is
+running, `SHIFT+A` waits its turn: it is refused until that apply ends.
 [Applying changes](applying) has the detail.

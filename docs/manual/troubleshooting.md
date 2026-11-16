@@ -53,8 +53,9 @@ An absent flag is absent evidence, not a "no".
 It is probably waiting for a password on a machine with no polkit agent to
 show the prompt, or for an answer to a question the panel cannot draw.
 
-Press `SHIFT+A` instead — the same apply, in a real terminal, where you can
-see and answer whatever it wants.
+ESC leaves the log; the build keeps running. `SHIFT+A` is refused while
+it runs (the footer says *an apply is running*), so wait for it to end.
+Next time on this machine, use `SHIFT+A` instead of `a` from the start.
 
 ## "An earlier write was interrupted"
 
