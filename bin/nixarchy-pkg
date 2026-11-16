@@ -759,13 +759,16 @@ same_tree() {
   local i=0
   for v in "${values[@]}"; do
     file="$WORK/probe-$i.nix"
-    NIXARCHY_PKG_VALUE="$v" awk '
+    if ! NIXARCHY_PKG_VALUE="$v" awk '
       !ins && /^}[[:space:]]*$/ {
         printf "\n  __nixarchy_probe = %s;\n", ENVIRON["NIXARCHY_PKG_VALUE"]
         ins = 1
       }
       { print }
-    ' "$APPS" > "$file"
+      END { if (!ins) exit 1 }
+    ' "$APPS" > "$file"; then
+      die "$FLAT_REFUSAL"
+    fi
     if ! nix-instantiate --parse "$file" > "$WORK/probe-$i.tree" 2> "$WORK/probe-$i.err" 9>&- 8>&-; then
       if [ "$i" -eq 0 ]; then
         why=$(awk '/^error:/ { print; exit }' "$WORK/probe-$i.err")
@@ -794,7 +797,7 @@ one_line() {
       | if test("[\u0000-\u0008\u000b\u000c\u000e-\u001f]") then error("control") else . end
       | gsub("\\\\"; "\\\\") | gsub("\""; "\\\"") | gsub("\n"; "\\n")
       | gsub("\t"; "\\t") | gsub("\r"; "\\r") | gsub("\\$\\{"; "\\${")
-      | "\"" + . + "\""' <<<"$lit") || die "$FLAT_REFUSAL"
+      | "\"" + . + "\""' <<<"$lit" 2>/dev/null) || die "$FLAT_REFUSAL"
     [[ $out == *'#@'* ]] && die "$MARKER_REFUSAL"
   else
     out=${v//$'\n'/ }

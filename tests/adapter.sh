@@ -490,7 +490,7 @@ check_one_line() {
     "$ADAPTER" opt set x.y true >/dev/null
   fi
   before=$(md5sum < "$APPSNIX")
-  out=$("$ADAPTER" opt "$mode" x.y "$value")
+  out=$("$ADAPTER" opt "$mode" x.y "$value" 2>&1)
   if [ "$expected" = refused ]; then
     check "$mode $name refuses once" jq -se 'length == 1 and .[0].ok == false and (.[0].error | type == "string")' <<<"$out"
     if [ "$name" = 'decoded marker' ]; then
@@ -514,6 +514,25 @@ for mode in set replace; do
   check_one_line "$mode" 'indented string literal' "$literal" "$expected_literal"
   check_one_line "$mode" 'expression with getEnv' $'"a" +\n builtins.getEnv "X" + ""' '"a" +  builtins.getEnv "X" + ""'
   check_one_line "$mode" 'decoded marker' $'"#\\@pkg x\n"' refused
+  check_one_line "$mode" 'control character' $'"a\nb\001"' refused
+  check_one_line "$mode" 'tab escape' $'"a\n\tb"' '"a\n\tb"'
+  check_one_line "$mode" 'carriage return escape' $'"a\n\\rb"' '"a\n\rb"'
+done
+for mode in set replace; do
+  CONFIG=$(mktemp -d); export XDG_CONFIG_HOME="$CONFIG"
+  mkdir -p "$CONFIG/nixarchy"
+  APPSNIX="$CONFIG/nixarchy/apps.nix"
+  if [ "$mode" = replace ]; then
+    printf '{ ... }:\n{ x.y = true;  #@opt x.y\n} # end\n' > "$APPSNIX"
+  else
+    printf '{ ... }:\n{ } # end\n' > "$APPSNIX"
+  fi
+  before=$(md5sum < "$APPSNIX")
+  out=$("$ADAPTER" opt "$mode" x.y $'[ 1\n 2 ]' 2>&1)
+  check "$mode missing probe insertion refuses once" jq -se 'length == 1 and .[0].ok == false and (.[0].error | type == "string")' <<<"$out"
+  check "$mode missing probe insertion gives the one-line refusal" jq -se '.[0].error | contains("on one line")' <<<"$out"
+  check "$mode missing probe insertion leaves apps.nix unchanged" test "$(md5sum < "$APPSNIX")" = "$before"
+  rm -rf "$CONFIG"
 done
 check "literal evaluation matches re-emitted value" test \
   "$(nix-instantiate --eval --strict --json -E "$literal" 9>&- 8>&-)" = \

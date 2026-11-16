@@ -601,3 +601,5 @@ nixarchy-search's picker to list it; nixarchy-pkg's queue (#60) would also
 count the block as one change.
 
 (Workflow run 2026-11-16: the steps of this PR were implemented in one parallel workflow pass and committed together as one commit, because agent-run codex will not start on a worktree with uncommitted changes and the implementing agents may not commit. The PR names which steps Codex wrote and which the coordinating agent wrote; each agent verified every step with the adapter suite, shellcheck, the QML suites and nix flake check, and the lead re-ran the adapter suite and nix flake check before committing.)
+
+(Review fixes, round 2: refuse flattened values when the probe cannot be inserted; keep jq errors out of the JSON response; cover missing insertion, control-character refusal, and tab/CR escapes in the adapter tests.)
