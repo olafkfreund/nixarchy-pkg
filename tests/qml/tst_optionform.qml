@@ -199,7 +199,7 @@ TestCase {
   }
   function test_string_quoting() {
     open({ widget: "string", default: "" })
-    var tf = walk(form, function (o) { return o.placeholderText !== undefined && o.visible })[0]
+    var tf = walk(form, function (o) { return o.objectName === "textField" })[0]
     tf.text = "a\"b${HOME}"; form.touched = true
     compare(form.nixValue(), "\"a\\\"b\\${HOME}\"")
     tf.text = "\"x\""; compare(form.nixValue(), "\"x\"")
