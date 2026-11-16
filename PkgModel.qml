@@ -49,6 +49,7 @@ QtObject {
   // was asked about something it does not have yet.
   property var inspected: null
   property bool inspecting: false
+  property string _inspectAs: ""
   property var pendingDeclare: null
 
   property int cursor: 0
@@ -175,7 +176,8 @@ QtObject {
                 label: "declare " + namingRef + " as inputs." + namingName
                      + " \u2014 RETURN declares, ESC goes back" }]
     if (inspected !== null) {
-      var rows = [{ kind: "head", label: inspected.ref }]
+      var rows = [{ kind: "head", label: inspected.declaredAs
+                    ? "inputs." + inspected.declaredAs + " = " + inspected.ref : inspected.ref }]
       if (inspected.ok === false) {
         rows.push({ kind: "note", label: inspected.message || "could not read that flake" })
         return rows
@@ -183,13 +185,18 @@ QtObject {
       var mods = inspected.nixosModules || []
       if (mods.length > 0) {
         for (var i = 0; i < mods.length; i++)
-          rows.push({ kind: "module", label: (inspected.declaredAs ? "inputs." + inspected.declaredAs + "." : "") + "nixosModules." + mods[i] })
+          rows.push({ kind: "module", name: mods[i], label: (inspected.declaredAs ? "inputs." + inspected.declaredAs + "." : "") + "nixosModules." + mods[i] })
       } else {
         rows.push({ kind: "note", label: "no nixosModules" })
       }
       var pkgs = inspected.packages || []
-      if (pkgs.length > 0)
-        rows.push({ kind: "note", label: pkgs.length + " package" + (pkgs.length === 1 ? "" : "s") })
+      for (var p = 0; p < pkgs.length; p++)
+        rows.push({ kind: "package", name: pkgs[p], label: pkgs[p] + " (package)" })
+      var overlays = inspected.overlays || []
+      for (var o = 0; o < overlays.length; o++)
+        rows.push({ kind: "overlay", name: overlays[o], label: overlays[o] + " (overlay)" })
+      if (pkgs.length === 0 && inspected.otherCount > 0)
+        rows.push({ kind: "note", label: inspected.otherCount + " packages for other systems, none for this one" })
       // Named, never drawn as an empty list. `nix flake show` types
       // nixosModules and leaves every other module namespace opaque, so
       // "none" and "cannot tell" are different answers and must read that
@@ -208,8 +215,12 @@ QtObject {
       out.push({ kind: "note", label: "no flake.nix here. The panel and nixarchy-apply both use"
                 + " NIXARCHY_FLAKE (programs.nixarchy.flake sets it); it must be set in the"
                 + " session the shell runs in, not only in a terminal." })
+    if (state.flakesStale)
+      out.push({ kind: "note", label: "a declared input is missing from flake.lock -- the next apply locks it" })
     return out.concat(have.map(function (f) {
-      return { kind: "declared", label: f.name, url: f.url, name: f.name }
+      return { kind: "declared", label: f.name, name: f.name, url: f.url,
+               mine: f.mine, follows: f.follows, locked: f.locked,
+               flake: f.flake, inspectable: f.inspectable }
     }))
   }
 
@@ -737,7 +748,8 @@ QtObject {
     if (naming) { namingName = q; return }
     // On Flakes, a different ref is a different question: RETURN must never
     // act on what the field held before (#29).
-    if (flakeTab && inspected !== null && q !== String(inspected.ref)) invalidateInspection()
+    if (flakeTab && inspected !== null && (inspected.declaredAs ? q !== "" : q !== String(inspected.ref)))
+      invalidateInspection()
     query = q
     cursor = 0
     if (indexTab) _debounce.restart()
@@ -800,16 +812,17 @@ QtObject {
       case 3: write(["opt", "remove", row.path]); break
       case 4: write(["draft", "undraft", row.name]); break
       case 5:
-        // A declared input is the only flake row that acts. The rest are
-        // there to be read, and a key that silently did nothing would be
-        // worse than one that says why.
-        if (row.kind === "declared") message = "SPACE twice removes " + row.name
+        if (row.kind === "declared") inspectRow(row)
         else if (row.kind === "declare") { if (host && host.startNaming) host.startNaming() }
-        else if (row.kind === "module")
-          message = "paste this into the imports of the host that should have it: "
-                  + (inspected && inspected.declaredAs ? row.label
-                     : "inputs." + suggestInputName(inspected ? inspected.ref : "") + "." + row.label)
-                  + " \u2014 this tool does not know which file that is"
+        else if (row.kind === "module" || row.kind === "package" || row.kind === "overlay") {
+          var n = attrName(inspected.declaredAs || suggestInputName(inspected.ref))
+          var line = row.kind === "module" ? "inputs." + n + ".nixosModules." + attrName(row.name)
+                   : row.kind === "package" ? "inputs." + n + ".packages.${pkgs.stdenv.hostPlatform.system}." + attrName(row.name)
+                   : "inputs." + n + ".overlays." + attrName(row.name)
+          var where = row.kind === "module" ? "the host's imports"
+                    : row.kind === "package" ? "environment.systemPackages" : "nixpkgs.overlays"
+          message = line + " goes in " + where + " -- this tool does not know which file that is"
+        }
         break
     }
   }
@@ -903,12 +916,28 @@ QtObject {
   // needs no build, and this is the step that exists so a person can look
   // before they commit to running somebody else's build code.
   function inspect() {
-    if (!flakeTab || query.length === 0 || inspecting) return
+    if (!flakeTab || query.length === 0) return
+    if (_inspector.running) { message = "still reading the last flake -- try again in a moment"; return }
     pendingDeclare = null
+    _inspectAs = ""
     inspecting = true
     _inspectRun = _inspectToken
     message = "looking at " + query + "\u2026"
     _inspector.command = [script, "flake", "show", query]
+    _inspector.running = true
+  }
+
+  function inspectRow(row) {
+    if (row.flake === false) { message = "not a flake: nothing to inspect"; return }
+    if (row.follows) { message = "follows " + row.follows + ": inspect that one"; return }
+    if (row.inspectable === false) { message = "cannot inspect this kind of input from here"; return }
+    if (_inspector.running) { message = "still reading the last flake -- try again in a moment"; return }
+    pendingDeclare = null
+    _inspectAs = row.name
+    inspecting = true
+    _inspectRun = _inspectToken
+    message = "looking at " + row.url + "\u2026"
+    _inspector.command = [script, "flake", "show", row.url]
     _inspector.running = true
   }
 
@@ -939,7 +968,9 @@ QtObject {
         if (root._inspectRun !== root._inspectToken) return
         root.inspecting = false
         try {
-          root.inspected = JSON.parse(text)
+          var r = JSON.parse(text)
+          if (root._inspectAs && r.ok === true) r.declaredAs = root._inspectAs
+          root.inspected = r
           root.message = ""
         } catch (e) {
           root.inspected = null

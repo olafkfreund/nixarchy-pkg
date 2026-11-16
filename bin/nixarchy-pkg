@@ -1286,7 +1286,7 @@ cmd_flake_show() {
   local err; err=$(mktemp)
   # shellcheck disable=SC2064  # $err is fixed at trap time, deliberately
   trap "rm -f '$err'" RETURN
-  out=$(timeout 120 nix flake show --json "$ref" 2>"$err") || rc=$?
+  out=$(timeout 120 "${NIX[@]}" flake show --json "$ref" 2>"$err") || rc=$?
   if [ "$rc" != 0 ]; then
     local why; why=$(nix_why "$err")
     jq -nc --arg ref "$ref" --arg why "${why:-could not inspect $ref}" \
@@ -1295,7 +1295,8 @@ cmd_flake_show() {
   fi
   # An enumerable namespace is an object of attributes; an opaque one is a
   # single leaf carrying "type". `has("type")` is the whole difference.
-  printf '%s' "$out" | jq -c --arg ref "$ref" '
+  # shortcut: Linux only (uname -m)-linux; a Darwin host needs builtins.currentSystem.
+  printf '%s' "$out" | jq -c --arg ref "$ref" --arg sys "$(uname -m)-linux" '
     . as $f
     | {
       ok: true,
@@ -1303,7 +1304,12 @@ cmd_flake_show() {
       nixosModules:
         (($f.nixosModules // {}) | if has("type") then [] else keys end),
       packages:
-        (($f.packages // {}) | to_entries | map(.value | keys) | add // [] | unique),
+        (($f.packages // {}) | if has("type") then [] else (.[$sys] // {} | keys) end),
+      overlays:
+        (($f.overlays // {}) | if has("type") then [] else keys end),
+      otherCount:
+        (($f.packages // {}) | if has("type") then 0 else
+          (to_entries | map(select(.key != $sys) | .value | length) | add // 0) end),
       opaque:
         ([ "homeManagerModules", "homeManagerModule", "homeModules",
            "darwinModules", "nixDarwinModules", "flakeModules", "modules" ]
@@ -1436,7 +1442,7 @@ cmd_flake_remove() {
   # The same baseline as add: a flake that was already broken is not this
   # removal's fault, and must not look like it (#29).
   local err; err=$(mktemp)
-  if ! timeout -k 10 120 nix flake metadata "$dir" >/dev/null 2>"$err" 9>&-; then
+  if ! timeout -k 10 120 "${NIX[@]}" flake metadata "$dir" >/dev/null 2>"$err" 9>&- 8>&-; then
     die "this flake does not evaluate as it stands, so I have changed nothing rather than remove from a broken file: $(nix_why "$err")"
   fi
 
@@ -1489,28 +1495,81 @@ cmd_flake_remove() {
   # Same reason the other three writers use cp (#39).
   sed -E "/#@flake-input ${name}\$/d" "$file" > "$tmp"
 
-  if ! nix-instantiate --parse "$tmp" >/dev/null 2>"$err" 9>&-; then
+  if ! nix-instantiate --parse "$tmp" >/dev/null 2>"$err" 9>&- 8>&-; then
     die "that would have left $file unparseable, so nothing was changed: $(nix_why "$err")"
   fi
   cp "$tmp" "$file"   # not mv; see cmd_opt_set (#39)
-  if ! timeout -k 10 120 nix flake metadata "$dir" >/dev/null 2>"$err" 9>&-; then
+  if ! timeout -k 10 120 "${NIX[@]}" flake lock "$dir" >/dev/null 2>"$err" 9>&- 8>&-; then
+    die "could not lock the flake without '$name', so nothing was changed: $(nix_why "$err")"
+  fi
+  if ! timeout -k 10 120 "${NIX[@]}" flake metadata "$dir" >/dev/null 2>"$err" 9>&- 8>&-; then
     die "the flake stopped evaluating without '$name', so nothing was changed: $(nix_why "$err")"
   fi
   committed
 
-  # The lock entry is left. `nix flake lock` does not prune, the entry is
-  # inert, and a second write for tidiness is a second chance to break
-  # something.
+  # nix flake lock prunes the input and its dependencies (Nix 2.35.6).
+  # List reads the lock; leaving it would keep the input visible and block re-add.
   jq -nc --arg name "$name" '{ok: true, name: $name, message: ("removed " + $name + " -- the flake still parses, locks and evaluates its metadata; hosts were not evaluated")}'
 }
 
-# What this tool declared, so a terminal and the panel see one answer.
+# Root inputs from the lock, plus marked lines not locked yet.
 cmd_flake_list() {
-  local file="${NIXARCHY_FLAKE:-/etc/nixos}/flake.nix"
-  [ -r "$file" ] || { jq -nc '{ok: true, inputs: []}'; return 0; }
-  { grep -oE '^[[:space:]]*inputs\.[A-Za-z_][A-Za-z0-9_-]*\.url[[:space:]]*=[[:space:]]*"[^"]+";[[:space:]]*#@flake-input [A-Za-z_][A-Za-z0-9_-]*$' "$file" || true; } |
-    sed -E 's/^[[:space:]]*inputs\.([^.]+)\.url[[:space:]]*=[[:space:]]*"([^"]+)".*/\1\t\2/' |
-    jq -Rsc '{ok: true, inputs: (split("\n") | map(select(length > 0)) | map(split("\t") | {name: .[0], url: .[1]}))}'
+  local dir="${NIXARCHY_FLAKE:-/etc/nixos}" file lock source
+  file="$dir/flake.nix"; lock="$dir/flake.lock"; source=/dev/null
+  [ -r "$file" ] || { jq -nc --arg dir "$dir" '{ok: true, dir: $dir, stale: false, inputs: []}'; return; }
+  [ -r "$lock" ] && source="$lock"
+  jq -nc --arg dir "$dir" \
+    --rawfile marks <(awk '
+      /#@flake-input [A-Za-z_][A-Za-z0-9_-]*$/ {
+        n = $0; sub(/^.*#@flake-input /, "", n)
+        u = ""
+        if ($0 ~ "^[[:space:]]*inputs\\." n "\\.url[[:space:]]*=[[:space:]]*\"[^\"]+\";[[:space:]]*#@flake-input " n "$") {
+          u = $0; sub(/^[^"]*"/, "", u); sub(/".*/, "", u)
+        }
+        print n "\t" u
+      }' "$file") \
+    --slurpfile locks "$source" '
+    def original($o; $dir):
+      if ($o | type) != "object" then null
+      elif (["github", "gitlab", "sourcehut"] | index($o.type)) then
+        ($o.type + ":" + $o.owner + "/" + $o.repo
+         + (if ($o.ref // "") != "" and ($o.ref | contains("/") | not) and ($o.rev == null)
+            then "/" + $o.ref else "" end)
+         + (if $o.host != null and $o.host != ({github:"github.com",gitlab:"gitlab.com",sourcehut:"git.sr.ht"}[$o.type])
+            then "?host=" + ($o.host | @uri) else "" end))
+      elif $o.type == "git" then "git+" + $o.url
+      elif $o.type == "tarball" or $o.type == "file" then $o.url
+      elif $o.type == "indirect" then $o.id + (if $o.ref then "/" + $o.ref else "" end)
+      elif $o.type == "path" then "path:" + (if ($o.path | startswith("/")) then $o.path else $dir + "/" + $o.path end)
+      else null end
+      | if . == null then null else
+          . as $base
+          | ([if $o.rev then "rev=" + ($o.rev | @uri) else empty end,
+              if $o.type == "git" and $o.ref then "ref=" + ($o.ref | @uri) else empty end,
+              if (["github","gitlab","sourcehut"] | index($o.type)) and $o.ref
+                 and (($o.ref | contains("/")) or $o.rev) then "ref=" + ($o.ref | @uri) else empty end,
+              if $o.dir then "dir=" + ($o.dir | @uri) else empty end] | join("&")) as $q
+          | $base + (if $q == "" then "" elif ($base | contains("?")) then "&" + $q else "?" + $q end)
+        end;
+    ($locks[0] // {}) as $l
+    | (reduce ($marks | split("\n")[] | select(length > 0) | split("\t")) as $m
+        ({}; .[$m[0]] = (if ($m[1] // "") != "" then $m[1] else (.[ $m[0] ] // "") end))) as $marked
+    | (($l.nodes // {})[($l.root // "root")].inputs // {}) as $root
+    | {ok: true, dir: $dir, stale: ([$marked | keys[] | select($root[.] == null)] | length > 0),
+       inputs: ((($root | keys) + ($marked | keys) | unique | sort) | map(
+         . as $name | $root[$name] as $entry
+         | (if ($entry | type) == "string" then $l.nodes[$entry] else null end) as $node
+         | ($marked | has($name)) as $mine
+         | {name: $name,
+            url: (if $mine then (if $marked[$name] == "" then null else $marked[$name] end) else original($node.original; $dir) end),
+            mine: $mine, flake: ($node.flake != false),
+            follows: (if ($entry | type) == "array" then ($entry | join("/")) else null end),
+            locked: ($root | has($name)),
+            inspectable: (if ($entry | type) == "array" then false
+                          elif $mine then ($marked[$name] != "")
+                          else original($node.original; $dir) != null end),
+            lastModified: ($node.locked.lastModified // null)}))}' \
+    || die "could not read $lock"
 }
 
 # Where nixarchy-apply copies the selection to. A flake cannot read a file
@@ -2384,6 +2443,7 @@ cmd_state() {
       # What this tool declared in the system flake. Read from the same
       # command a terminal calls, so the two cannot disagree.
       flakes: (($flakes | fromjson).inputs // []),
+      flakesStale: (($flakes | fromjson).stale // false),
       apps: ($apps | cols | map({
         id: .[1], category: (.[2] // ""), enabled: (.[3] == "true"),
         line: (.[4] // ""), note: (.[5] // ""),
