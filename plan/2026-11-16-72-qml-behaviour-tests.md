@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 72
 spec: spec/2026-11-16-72-qml-behaviour-tests.md
 coders:
