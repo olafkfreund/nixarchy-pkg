@@ -41,6 +41,20 @@ TestCase {
     }
     return null
   }
+  function searchProc() {
+    for (var i = 0; i < form.data.length; i++) {
+      var c = form.data[i]
+      if (c && c.command && c.command[1] === "search") return c
+    }
+    return null
+  }
+  function packageSearchProcess() {
+    for (var i = 0; i < form.data.length; i++) {
+      var c = form.data[i]
+      if (c && c.deliver && c !== describeProc() && c !== writeProcess()) return c
+    }
+    return null
+  }
   function walk(o, test, acc) {
     acc = acc || []; if (!o) return acc
     if (test(o)) acc.push(o)
@@ -68,6 +82,7 @@ TestCase {
     var w = writeProc(); if (w) w.command = []
 
     if (form.open) form.finish()
+    var s = searchProc(); if (s) { s.running = false; s.command = [] }
     list.forceActiveFocus()
   }
 
@@ -227,6 +242,185 @@ TestCase {
     compare(form.nixValue(), "\"a\\\"b\\${HOME}\"")
     tf.text = "\"x\""; compare(form.nixValue(), "\"x\"")
     tf.text = ""; compare(form.nixValue(), "")
+  }
+
+  function test_list_and_multiline_values() {
+    open({ widget: "list", item: "string" })
+    var field = findChild(form, "scaffoldField")
+    field.text = "a\nb"
+    compare(form.nixValue(), '[ "a" "b" ]')
+    field.text = 'console=ttyS0,115200n8'
+    compare(form.nixValue(), '[ "console=ttyS0,115200n8" ]')
+    field.text = "[ ]"
+    compare(form.nixValue(), "[ ]")
+    field.text = ""
+    compare(form.nixValue(), "")
+    init(); open({ widget: "list", item: "integer", min: "0", max: "65535" })
+    field.text = "80\n443"
+    compare(form.nixValue(), "[ 80 443 ]")
+    field.text = "70000"
+    form.commit()
+    verify(form.error.indexOf("outside") >= 0)
+    compare(writeProcess().command.length, 0)
+    init(); open({ widget: "string", multiline: true })
+    tryCompare(field, "activeFocus", true)
+    field.text = 'a\n"${HOME}'
+    compare(form.nixValue(), '"a\\n\\"\\${HOME}"')
+  }
+
+  function test_nullable_and_constraint() {
+    open({ widget: "string", nullable: true, constraint: "absolute" })
+    form.nullSelected = true; form.touched = true
+    compare(form.nixValue(), "null")
+    form.nullSelected = false
+    var field = findChild(form, "textField")
+    field.text = "rel/x"
+    form.commit()
+    verify(form.error.indexOf("absolute path") >= 0)
+    compare(writeProcess().command.length, 0)
+    init(); open({ widget: "list", item: "string", constraint: "absolute" })
+    findChild(form, "scaffoldField").text = "/ok\nrel"
+    form.commit()
+    verify(form.error.indexOf("absolute path") >= 0)
+    init(); open({ widget: "boolean", nullable: true, default: "null", current: { state: "set", value: "true" } })
+    compare(form.nullSelected, false)
+    compare(form.boolValue, true)
+  }
+
+  function test_null_skips_constraints_and_integer_list_checks() {
+    for (var i = 0; i < 3; i++) {
+      open({ widget: "string", nullable: true, default: "null",
+        constraint: ["absolute", "nonEmpty", "noNewlineColon"][i] })
+      form.nullSelected = true; form.touched = true
+      form.commit()
+      compare(writeProc().command.slice(1).join(" "), "opt set p.q null")
+      init()
+    }
+    open({ widget: "list", item: "integer", nullable: true, default: "null" })
+    form.nullSelected = true; form.touched = true
+    form.commit()
+    compare(writeProc().command.slice(1).join(" "), "opt set p.q null")
+  }
+
+  function test_nullable_integer_null_default_stays_integer() {
+    open({ widget: "integer", nullable: true, default: "null" })
+    compare(form.widget, "integer")
+    compare(form.nullSelected, true)
+  }
+
+  function test_list_drops_blank_lines() {
+    open({ widget: "list", item: "string" })
+    findChild(form, "scaffoldField").text = "a\n\nb\n"
+    compare(form.nixValue(), '[ "a" "b" ]')
+    form.commit()
+    compare(writeProc().command[4], '[ "a" "b" ]')
+    init(); open({ widget: "list", item: "integer" })
+    findChild(form, "scaffoldField").text = "80\n\n443\n"
+    form.commit()
+    compare(writeProc().command[4], "[ 80 443 ]")
+  }
+
+  function test_list_package_and_null_seeds() {
+    open({ widget: "list", item: "string", current: { state: "set", value: '[ "a" "b" ]' } })
+    compare(form.widget, "list")
+    compare(findChild(form, "scaffoldField").text, "a\nb")
+    init(); open({ widget: "list", item: "integer", current: { state: "set", value: "lib.mkForce [ 1 ]" } })
+    compare(form.widget, "scaffold")
+    init(); open({ widget: "list", item: "string", current: { state: "set", value: '[ "a\\nb" ]' } })
+    compare(form.widget, "scaffold")
+    init(); open({ widget: "list", item: "string", current: { state: "set", value: '[ "" ]' } })
+    compare(form.widget, "scaffold")
+    init(); open({ widget: "package", current: { state: "set", value: "pkgs.hello" } })
+    compare(form.widget, "package")
+    compare(findChild(form, "packageField").text, "hello")
+    init(); open({ widget: "package", nullable: true, current: { state: "set", value: "null" } })
+    compare(form.widget, "package")
+    compare(form.nullSelected, true)
+    form.touched = true
+    compare(form.nixValue(), "null")
+  }
+
+  function test_package_search_selects_exact_result() {
+    open({ widget: "package" })
+    var field = findChild(form, "packageField")
+    field.text = "hel"
+    wait(350)
+    var search = searchProc()
+    verify(search !== null)
+    compare(search.command.join(" "), "nixarchy-pkg search --kind pkg --limit 20 -- hel")
+    search.deliver(JSON.stringify({ ok: true, rows: [
+      { kind: "pkg", name: "hello", summary: "Greeting" },
+      { kind: "pkg", name: "python3Packages.hello", summary: "Another greeting" }
+    ] }))
+    keyClick(Qt.Key_Down)
+    compare(form.packageIndex, 1)
+    keyClick(Qt.Key_Up)
+    compare(form.packageIndex, 0)
+    keyClick(Qt.Key_Down)
+    keyClick(Qt.Key_Return)
+    compare(writeProc().command.slice(1).join(" "), "opt set p.q pkgs.python3Packages.hello")
+  }
+
+  function test_seeded_package_does_not_search_or_write() {
+    open({ widget: "package", default: "pkgs.hello" })
+    compare(findChild(form, "packageField").text, "hello")
+    wait(350)
+    compare(searchProc(), null)
+    form.packageQuery = "hello"
+    packageSearchProcess().deliver(JSON.stringify({ ok: true, rows: [
+      { kind: "pkg", name: "hello-wayland" }, { kind: "pkg", name: "hello" }
+    ] }))
+    compare(form.packageResults.length, 2)
+    keyClick(Qt.Key_Return)
+    compare(writeProc(), null)
+    verify(!form.open)
+  }
+
+  function test_package_search_keeps_plain_j_and_k_as_text() {
+    open({ widget: "package" })
+    var field = findChild(form, "packageField")
+    field.text = "node"
+    wait(350)
+    searchProc().deliver(JSON.stringify({ ok: true, rows: [{ kind: "pkg", name: "nodejs" }] }))
+    keyClick("j"); keyClick("s")
+    compare(field.text, "nodejs")
+    compare(form.packageIndex, 0)
+    keyClick("k")
+    compare(field.text, "nodejsk")
+  }
+
+  function test_stale_package_search_is_ignored() {
+    open({ widget: "package" })
+    var field = findChild(form, "packageField")
+    field.text = "hel"
+    wait(350)
+    var search = searchProc()
+    field.text = "node"
+    wait(350)
+    search.deliver(JSON.stringify({ ok: true, rows: [{ kind: "pkg", name: "hello" }] }))
+    compare(form.packageResults.length, 0)
+    tryCompare(search, "running", true)
+    compare(search.command[search.command.length - 1], "node")
+  }
+
+  function test_ctrl_n_toggles_null_from_field() {
+    open({ widget: "integer", nullable: true, default: "1" })
+    var field = findChild(form, "integerField")
+    tryCompare(field, "activeFocus", true)
+    keyClick(Qt.Key_N, Qt.ControlModifier)
+    compare(form.nullSelected, true)
+    compare(form.touched, true)
+    keyClick(Qt.Key_N, Qt.ControlModifier)
+    compare(form.nullSelected, false)
+    verify(walk(form, function (o) { return o.text && o.text.indexOf("CTRL+N") >= 0 }).length > 0)
+  }
+
+  function test_forced_multiline_scaffold_has_scaffold_hint() {
+    open({ widget: "string", multiline: true, current: { state: "set", value: "lib.mkDefault \"x\"" } })
+    compare(form.widget, "scaffold")
+    verify(walk(form, function (o) {
+      return o.visible && o.text && o.text.indexOf("This type has no one-word answer") >= 0
+    }).length > 0)
   }
 
   function test_string_field_keys() {
