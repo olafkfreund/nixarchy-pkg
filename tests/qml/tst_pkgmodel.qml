@@ -12,6 +12,7 @@ TestCase {
   when: windowShown
 
   PkgModel { id: m }
+  property var boundRows: m.rows()
 
   function cleanup() {
     m.busy = false
@@ -54,6 +55,8 @@ TestCase {
     m.neverApplied = false
     m._pending.running = false
     m._check.running = false
+    m._inspector.running = false
+    m._inspector.command = []
     m._apply.command = []
     m.optionsSource = ""
     m.optionsStale = false
@@ -738,6 +741,91 @@ TestCase {
     m.state = { flakeDir: "/f", flakeFound: true, flakes: [] }
     compare(m.flakeRows().length, 1)
     compare(m.flakeRows()[0].kind, "head")
+  }
+
+  function test_declared_return_inspects_under_its_name() {
+    m.setTab(5)
+    m.state = { flakeDir: "/f", flakeFound: true, flakes:
+      [{ name: "t", url: "path:/t", mine: true, locked: true, inspectable: true, flake: true }] }
+    m.cursor = 1
+    m.activate()
+    compare(m._inspector.command, [m.script, "flake", "show", "path:/t"])
+    m._inspector.deliver(JSON.stringify({ ok: true, ref: "path:/t", nixosModules: [] }))
+    compare(m.inspected.declaredAs, "t")
+    compare(m.flakeRows()[0].label, "inputs.t = path:/t")
+  }
+
+  function test_declared_inspection_updates_bound_rows() {
+    m.setTab(5)
+    m.state = { flakeDir: "/f", flakeFound: true, flakes:
+      [{ name: "tool", url: "path:/t", mine: true, locked: true, inspectable: true, flake: true }] }
+    m.cursor = 1
+    m.activate()
+    m._inspector.deliver(JSON.stringify({ ok: true, ref: "path:/t", nixosModules: ["default"] }))
+    tryCompare(boundRows[0], "label", "inputs.tool = path:/t")
+    compare(boundRows.filter(function (r) { return r.kind === "declare" }).length, 0)
+    compare(boundRows.filter(function (r) { return r.kind === "module" })[0].label,
+            "inputs.tool.nixosModules.default")
+  }
+
+  function test_typing_ref_discards_declared_inspection() {
+    m.setTab(5)
+    m.inspected = { ok: true, ref: "path:/old", declaredAs: "tool", nixosModules: ["default"] }
+    m.setQuery("path:/new")
+    compare(m.inspected, null)
+  }
+
+  function test_declared_inspection_waits_for_previous_process() {
+    m.setTab(5)
+    m.setQuery("path:/a")
+    m.inspect()
+    m.clearInspection()
+    m.state = { flakeDir: "/f", flakeFound: true, flakes:
+      [{ name: "b", url: "path:/b", mine: true, locked: true, inspectable: true, flake: true }] }
+    m.cursor = 1
+    m.activate()
+    compare(m.message, "still reading the last flake -- try again in a moment")
+    compare(m._inspector.command.slice(1), ["flake", "show", "path:/a"])
+  }
+
+  function test_flake_rows_and_lines() {
+    m.setTab(5)
+    m.inspected = { ok: true, ref: "path:/t", declaredAs: "foo.bar", nixosModules: ["foo.bar"],
+                    packages: ["same"], overlays: ["same"], otherCount: 1 }
+    var rows = m.flakeRows()
+    compare(rows.filter(function (r) { return r.kind === "declare" }).length, 0)
+    compare(rows.filter(function (r) { return r.kind === "package" }).length, 1)
+    compare(rows[2].label, "same (package)")
+    compare(rows[3].label, "same (overlay)")
+    m.cursor = 1
+    m.activate()
+    verify(m.message.indexOf('inputs."foo.bar".nixosModules."foo.bar"') >= 0)
+    m.cursor = 2
+    m.activate()
+    verify(m.message.indexOf('inputs."foo.bar".packages.${pkgs.stdenv.hostPlatform.system}.same') >= 0)
+    m.cursor = 3
+    m.activate()
+    verify(m.message.indexOf('inputs."foo.bar".overlays.same') >= 0)
+    compare(m.attrName("foo.bar"), '"foo.bar"')
+    compare(m.attrName("same"), "same")
+  }
+
+  function test_unowned_input_cannot_be_removed_but_can_be_updated() {
+    m.setTab(5)
+    m.state = { flakeDir: "/f", flakeFound: true, flakes:
+      [{ name: "t", url: "path:/t", mine: false, locked: true, inspectable: true, flake: true }] }
+    m.cursor = 1
+    compare(m.armFlake("remove"), false)
+    compare(m.armFlake("update"), true)
+  }
+
+  function test_follows_input_cannot_be_updated() {
+    m.setTab(5)
+    m.state = { flakeDir: "/f", flakeFound: true, flakes:
+      [{ name: "t", follows: "nixpkgs", mine: false, locked: true }] }
+    m.cursor = 1
+    compare(m.armFlake("update"), false)
+    verify(m.message.indexOf("follows nixpkgs") >= 0)
   }
 
   function test_armFlake_removes_on_the_second_press() {
