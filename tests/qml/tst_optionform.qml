@@ -86,6 +86,135 @@ TestCase {
     list.forceActiveFocus()
   }
 
+  function openTemplate(path) {
+    form.begin({ path: path })
+    describeProc().deliver(JSON.stringify({ ok: true, path: path, template: null,
+      widget: "boolean", default: "false", current: { state: "absent" } }))
+    wait(20)
+    return walk(form, function (o) { return o.placeholderText && o.placeholderText.indexOf("name for ") === 0 })[0]
+  }
+
+  function test_template_names_and_concrete_current() {
+    var field = openTemplate("users.users.<name>.shell")
+    verify(field !== undefined)
+    verify(field.activeFocus)
+    keyClick(Qt.Key_Return)
+    compare(form.error, "name every <name> first")
+    field.text = "alice"
+    form.touched = true
+    form.commit()
+    compare(form.path, "users.users.alice.shell")
+    compare(describeProc().command.slice(-1)[0], form.path)
+    compare(writeProc(), null)
+    describeProc().deliver(JSON.stringify({ ok: true, path: form.path,
+      template: "users.users.<name>.shell", widget: "boolean",
+      current: { state: "set", value: "false" } }))
+    compare(writeProc().command.slice(1).join(" "), "opt replace users.users.alice.shell false")
+  }
+
+  function test_quoted_and_keyword_names() {
+    var field = openTemplate("fileSystems.<name>.options")
+    field.text = "/mnt/usb drive"; form.touched = true; form.commit()
+    compare(form.path, 'fileSystems."/mnt/usb drive".options')
+    describeProc().deliver(JSON.stringify({ ok: true, path: form.path,
+      template: "fileSystems.<name>.options", widget: "boolean", current: { state: "absent" } }))
+    init()
+    field = openTemplate("users.users.<name>.shell")
+    field.text = "if"; form.touched = true; form.commit()
+    compare(form.path, 'users.users."if".shell')
+  }
+
+  function test_invalid_name_refuses() {
+    var field = openTemplate("users.users.<name>.shell")
+    field.text = "a$b"; form.touched = true; form.commit()
+    verify(form.error.indexOf("cannot contain") >= 0)
+    compare(form.path, "users.users.<name>.shell")
+    compare(writeProc(), null)
+    for (var i = 0; i < 3; i++) {
+      field.text = "a" + ["\u0001", "\r", "\u007f"][i] + "b"
+      form.commit()
+      verify(form.error.indexOf("cannot contain") >= 0)
+      compare(form.path, "users.users.<name>.shell")
+      compare(writeProc(), null)
+    }
+  }
+
+  function test_name_tab_reaches_value_and_backtab_returns() {
+    var field = openTemplate("users.users.<name>.shell")
+    compare(field.placeholderText, "name for <name> 1 of 1: users")
+    field.text = "alice"
+    keyClick(Qt.Key_Tab)
+    verify(form.activeFocus)
+    keyClick(Qt.Key_Backtab)
+    verify(field.activeFocus)
+    keyClick(Qt.Key_Tab)
+    keyClick(Qt.Key_Space)
+    verify(form.touched, "SPACE touched the boolean after leaving the name field")
+    keyClick(Qt.Key_Return)
+    compare(form.path, "users.users.alice.shell")
+    describeProc().deliver(JSON.stringify({ ok: true, path: form.path,
+      template: "users.users.<name>.shell", widget: "boolean", current: { state: "absent" } }))
+    compare(writeProcess().command.slice(1).join(" "), "opt set users.users.alice.shell true")
+  }
+
+  function test_two_name_placeholders_show_position_and_context() {
+    var first = openTemplate("services.nginx.virtualHosts.<name>.locations.<name>.proxyPass")
+    var fields = walk(form, function (o) { return o.placeholderText && o.placeholderText.indexOf("name for ") === 0 })
+    compare(fields.length, 2)
+    compare(first.placeholderText, "name for <name> 1 of 2: virtualHosts")
+    compare(fields[1].placeholderText, "name for <name> 2 of 2: locations")
+    first.text = "example"
+    keyClick(Qt.Key_Tab)
+    verify(fields[1].activeFocus)
+  }
+
+  function test_return_waits_for_concrete_describe() {
+    var field = openTemplate("users.users.<name>.shell")
+    field.text = "alice"
+    form.boolValue = true
+    form.touched = true
+    form.commit()
+    verify(form.awaitingConcrete)
+    keyClick(Qt.Key_Return)
+    compare(writeProcess().command.length, 0)
+  }
+
+  function test_failed_concrete_describe_drops_held_value() {
+    var field = openTemplate("users.users.<name>.shell")
+    field.text = "alice"
+    form.boolValue = true
+    form.touched = true
+    form.commit()
+    verify(form.awaitingConcrete)
+    describeProc().deliver('{broken')
+    compare(form.awaitingConcrete, false)
+    compare(form.concreteValue, null)
+    compare(form.path, "users.users.<name>.shell")
+    keyClick(Qt.Key_Return)
+    compare(writeProcess().command.length, 0)
+  }
+
+  function test_string_value_tab_and_backtab() {
+    form.begin({ path: "users.users.<name>.description" })
+    describeProc().deliver(JSON.stringify({ ok: true, path: form.path, template: null,
+      widget: "string", current: { state: "absent" } }))
+    var name = walk(form, function (o) { return o.placeholderText && o.placeholderText.indexOf("name for ") === 0 })[0]
+    var value = findChild(form, "textField")
+    wait(20)
+    name.text = "alice"
+    keyClick(Qt.Key_Tab)
+    verify(value.activeFocus)
+    keyClick(Qt.Key_Backtab)
+    verify(name.activeFocus)
+    keyClick(Qt.Key_Tab)
+    for (var i = 0; i < 5; i++) keyClick([Qt.Key_H, Qt.Key_E, Qt.Key_L, Qt.Key_L, Qt.Key_O][i])
+    keyClick(Qt.Key_Return)
+    compare(form.path, "users.users.alice.description")
+    describeProc().deliver(JSON.stringify({ ok: true, path: form.path,
+      template: "users.users.<name>.description", widget: "string", current: { state: "absent" } }))
+    compare(writeProcess().command.slice(1).join(" "), 'opt set users.users.alice.description "hello"')
+  }
+
   function test_opens_and_seeds_a_boolean() {
     form.begin({ path: "t.bool" })
     verify(form.open)

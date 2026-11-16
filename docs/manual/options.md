@@ -63,6 +63,13 @@ containing newlines or colons` constraints before writing. The adapter also
 checks these constraints on single string literals and lists of string
 literals. Other Nix expressions still use the scaffold editor.
 
+Options with `<name>` or `*` in their path ask for each name above the value
+field. Fill every name before writing; an empty field says `name every <name> first`.
+Names such as `alice` are written directly. A name with spaces or `/` is
+written as a quoted key, such as `fileSystems."/mnt/usb drive".options`.
+Nix keywords such as `if` are quoted too. A name containing `"`, `\`, `$`,
+a tab, newline, or `#@` is refused.
+
 ## An untouched field writes nothing
 
 This is the rule worth internalising, and it is deliberate.

@@ -29,6 +29,9 @@ FocusScope {
   property bool open: false
   property var option: ({})
   property string path: ""
+  property string templatePath: ""
+  property bool awaitingConcrete: false
+  property var concreteValue: null
   property string error: ""
   property bool armedRemove: false
   property bool nullSelected: false
@@ -89,12 +92,19 @@ FocusScope {
         if (!root.open || (data && data.path && data.path !== root.path)) return
         if (!data || data.ok === false) {
           root.error = data && data.error ? String(data.error) : "could not read that option"
+          root.awaitingConcrete = false
+          root.concreteValue = null
+          root.path = root.templatePath
           root.option = ({})
+          root.touched = false
           return
         }
         root.error = ""
         root.option = data
-        root.seed()
+        if (root.awaitingConcrete) {
+          root.awaitingConcrete = false
+          root.commit()
+        } else root.seed()
       }
     }
     // Same reason as writeProc: without this a describe that never answers
@@ -189,6 +199,9 @@ FocusScope {
     var p = row ? (row.path || row.name || "") : ""
     if (!p) return
     root.path = p
+    root.templatePath = p
+    root.awaitingConcrete = false
+    root.concreteValue = null
     root.forceScaffold = false
     root.armedRemove = false
     root.error = ""
@@ -211,6 +224,8 @@ FocusScope {
     // arrived after the form closed still matched once the SAME option was
     // reopened, and closed the form the user was typing into (#43).
     root.writingPath = ""
+    root.awaitingConcrete = false
+    root.concreteValue = null
     // Let go of the keyboard. A hidden Item keeps focus and still gets keys,
     // so a form closed while focused went on eating ESC (#27).
     textField.focus = false
@@ -313,7 +328,8 @@ FocusScope {
       // Closed in the meantime: taking the keyboard now would take it
       // from the list the form was closed back to.
       if (!root.open) return
-      if (root.widget === "string" && root.option.multiline === true) scaffoldField.forceActiveFocus()
+      if (root.nameSlots.length > 0 && root.option.template === null) nameFields.itemAt(0).forceActiveFocus()
+      else if (root.widget === "string" && root.option.multiline === true) scaffoldField.forceActiveFocus()
       else if (root.widget === "string")   textField.forceActiveFocus()
       else if (root.widget === "integer") integerField.forceActiveFocus()
       else if (root.widget === "package") packageField.forceActiveFocus()
@@ -329,6 +345,19 @@ FocusScope {
   property bool touched: false
 
   readonly property var choices: option.choices || []
+  readonly property var nameSlots: templatePath.split(".").map(function (part, i, parts) {
+    return part === "<name>" || part === "*" ? (parts[i - 1] || "option") : null
+  }).filter(function (part) { return part !== null })
+
+  function concretePath() {
+    var i = 0
+    return templatePath.replace(/(^|\.)(<name>|\*)(?=\.|$)/g, function (whole, prefix) {
+      var name = nameFields.itemAt(i++).text
+      if (/^[A-Za-z_][A-Za-z0-9_'-]*$/.test(name) &&
+          !/^(if|then|else|assert|with|let|in|rec|inherit|or)$/.test(name)) return prefix + name
+      return prefix + '"' + name + '"'
+    })
+  }
 
   function quoteString(s) {
     return "\"" + s.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")
@@ -405,6 +434,27 @@ FocusScope {
   }
 
   function commit() {
+    if (root.awaitingConcrete) return
+    if (root.path === root.templatePath && root.option.template === null && root.nameSlots.length > 0) {
+      for (var i = 0; i < root.nameSlots.length; i++) {
+        var name = nameFields.itemAt(i).text
+        if (!name) { root.error = "name every <name> first"; return }
+        if (/["\\$\x00-\x1f\x7f]/.test(name) || name.indexOf("#@") >= 0) {
+          root.error = "that name cannot contain a quote, backslash, dollar sign, control character or #@"
+          return
+        }
+      }
+      if (!touched) { root.finish(); return }
+      if (root.model.applying) { root.error = "an apply is running \u2014 wait for it to finish"; return }
+      if (root.model.busy) { root.error = "still writing \u2014 try again in a moment"; return }
+      root.concreteValue = nixValue()
+      root.path = root.concretePath()
+      root.writingPath = root.path
+      root.awaitingConcrete = true
+      describe.command = [root.model.script, "opt", "describe", "--scope", root.option.scope || "system", root.path]
+      describe.running = true
+      return
+    }
     // Read-only options are declared by their module and cannot be set.
     // Writing one produces a line that parses, queues, and is refused only
     // by the rebuild -- minutes later, with no clue which line did it.
@@ -412,7 +462,8 @@ FocusScope {
       root.error = "this option is read-only: its module sets it, and a value here would only fail the rebuild"
       return
     }
-    var value = nixValue()
+    var value = root.concreteValue === null ? nixValue() : root.concreteValue
+    root.concreteValue = null
     if (widget === "package" && touched && !nullSelected && !packageAttr) {
       root.error = "choose a package from the search results. Nothing was changed."
       return
@@ -545,6 +596,11 @@ FocusScope {
   Keys.onPressed: function (event) {
     // A closed form handles nothing: every key belongs to the list.
     if (!root.open) return
+    if (event.key === Qt.Key_Backtab && root.path === root.templatePath && nameFields.count > 0) {
+      nameFields.itemAt(nameFields.count - 1).forceActiveFocus()
+      event.accepted = true
+      return
+    }
     if (root.removeKey(event)) return
     root.disarmRemove()
     if (root.option.nullable === true && event.key === Qt.Key_N && (event.modifiers & Qt.ControlModifier)) {
@@ -692,6 +748,28 @@ FocusScope {
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
         color: root.dim
+      }
+
+      Repeater {
+        id: nameFields
+        model: root.option.template === null ? root.nameSlots.length : 0
+        delegate: TextField {
+          width: column.width
+          placeholderText: "name for <name> " + (index + 1) + " of " + nameFields.count + ": " + root.nameSlots[index]
+          Keys.onReturnPressed: root.commit()
+          Keys.onEnterPressed: root.commit()
+          Keys.onTabPressed: {
+            if (index + 1 < nameFields.count) nameFields.itemAt(index + 1).forceActiveFocus()
+            else {
+              focus = false
+              if (root.widget === "string" && root.option.multiline !== true) textField.forceActiveFocus()
+              else if (root.widget === "integer") integerField.forceActiveFocus()
+              else if (root.widget === "package") packageField.forceActiveFocus()
+              else if (root.widget === "scaffold" || root.widget === "list" || root.option.multiline === true) scaffoldField.forceActiveFocus()
+              else root.forceActiveFocus()
+            }
+          }
+        }
       }
 
       // ---- the widget ---------------------------------------------------

@@ -60,6 +60,17 @@ Other Nix expressions are left to the usual parse check. A refusal leaves
 
 ## A worked example
 
+Quote a path for the shell when a key contains spaces or punctuation:
+
+```bash
+nixarchy-pkg opt set 'fileSystems."/mnt/usb drive".options' '[ "nofail" ]'
+nixarchy-pkg opt replace 'fileSystems."/mnt/usb drive".options' '[ "nofail" "noauto" ]'
+```
+
+`opt set` refuses a path already marked in `apps.nix`; `opt replace` requires
+one. Both refuse invalid paths, including an unfilled `<name>` or `*`, and
+reject values that would make the file fail Nix's parse check.
+
 `flake add` answers with `name`, `url`, `follows`, and `message`. It does not
 return an `import` field: inspect the source with `flake show` to see its
 modules. `flake list` returns `dir`, `stale`, and `inputs`. Each input has
