@@ -68,6 +68,7 @@ GUARDED=false        # true only while pkg-recovery/open belongs to this call
 ROLLBACK_NOTE=""
 WRITING=false        # true from begin_write on, so on_exit can answer for it
 SETTLE_FAILED=false
+HOME_MODE=""
 
 readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/nixarchy"
 readonly CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/nixarchy"
@@ -360,22 +361,66 @@ searched() {
   sed -n "s/^${var}=\\(.*\\)$/\\1/p" "$path" | head -1
 }
 
-apply_has_home() {
+# First matching marker in the installed apply selects its home contract.
+home_mode() {
   local apply
-  apply=$(command -v nixarchy-apply 2>/dev/null) || return 1
-  grep -qE '^for part in .*\bhome\b' "$apply"
+  [ -z "$HOME_MODE" ] || return 0
+  HOME_MODE=none
+  apply=$(command -v nixarchy-apply 2>/dev/null) || return 0
+  if grep -qE '^[[:space:]]*--home-plan\)' "$apply"; then HOME_MODE=plan
+  elif grep -qE '^for part in .*\bhome\b' "$apply"; then HOME_MODE=legacy
+  elif grep -qE '^home_decide\(\)' "$apply"; then HOME_MODE=blind
+  fi
 }
+apply_has_home() { home_mode; [ "$HOME_MODE" != none ]; }
 
 home_template() { printf '%s' "${NIXARCHY_HOME_TEMPLATE:-/etc/nixarchy/home-apps-template.nix}"; }
 
+home_plan() {
+  local out rc=0
+  home_mode
+  case "$HOME_MODE" in
+    blind) jq -nc --arg u 'this nixarchy cannot say who owns home.nix; update nixarchy' '{unavailable:$u}'; return ;;
+    plan) ;;
+    *) return ;;
+  esac
+  out=$(NIXARCHY_FLAKE=${NIXARCHY_FLAKE:-/etc/nixos} timeout 10 nixarchy-apply --home-plan --json </dev/null 9>&- 8>&- 2>/dev/null) || rc=$?
+  if [ "$rc" = 0 ] && jq -se '
+    length == 1 and (.[0] |
+      .version == 1 and (.caller | type == "string")
+      and (.state | IN("seed","edited","absent")) and (.action | IN("claim","copy","keep","refuse"))
+      and has("owner") and has("renderUser") and has("message")
+      and (.owner == null or (.owner | type == "string"))
+      and (.renderUser == null or (.renderUser | type == "string"))
+      and (.message == null or (.message | type == "string"))
+      and (if .action == "claim" then .owner == null and .state == "edited" and .renderUser == .caller and .message == null
+           elif .action == "copy" then .owner == .caller and .renderUser == .caller and .message == null
+           elif .action == "keep" then .renderUser == .owner and .message == null
+           else (.owner | type == "string") and .owner != .caller and .state == "edited" and .renderUser == null and (.message | type == "string") end))
+    ' <<<"$out" >/dev/null 2>&1; then
+    jq -sc '.[0] | {version,owner,caller,state,action,renderUser,message}' <<<"$out"
+  elif [ "$rc" = 1 ] && jq -se 'length == 1 and (.[0] | .version == 1 and (.error | type == "string") and ((keys | sort) == ["error","version"]))' <<<"$out" >/dev/null 2>&1; then
+    jq -sc '.[0] | {version,error}' <<<"$out"
+  else
+    jq -nc --arg u "nixarchy-apply --home-plan gave no usable answer (exit $rc); update nixarchy or nixarchy-pkg" '{unavailable:$u}'
+  fi
+}
+
 # Empty means the installed apply and this host can handle home.nix.
 user_scope() {
-  local meta user
+  local meta user plan text
   if ! apply_has_home; then
     printf '%s' 'this nixarchy has no Home Manager part; update nixarchy first'
     return
   fi
   [ -f "$(home_template)" ] && [ -r "$(home_template)" ] || { printf '%s' "$NO_HOME_TEMPLATE"; return; }
+  case "$HOME_MODE" in
+    plan|blind)
+      plan=$(home_plan)
+      text=$(jq -r '.unavailable // .error // (select(.owner != null and .owner != .caller)
+        | "home.nix belongs to \(.owner); ask \(.owner) to apply, or run nixarchy-apply --release-home to give the host up") // empty' <<<"$plan")
+      if [ -n "$text" ]; then printf '%s' "$text"; return; fi ;;
+  esac
   options_resolve
   meta=${OPT_DIR:+$OPT_DIR/meta.json}
   if [ -z "$meta" ] || [ ! -f "$meta" ]; then
@@ -397,11 +442,19 @@ user_scope() {
 }
 
 user_scope_note() {
+  local out="" n
+  home_mode
   options_resolve
-  [ -n "$OPT_DIR" ] && [ -f "$OPT_DIR/meta.json" ] || return 0
-  if jq -e '.homeManager == true and (has("useGlobalPkgs") | not)' "$OPT_DIR/meta.json" >/dev/null 2>&1; then
-    printf '%s' 'options were read before useGlobalPkgs was recorded; run options refresh'
+  if [ -n "$OPT_DIR" ] && [ -f "$OPT_DIR/meta.json" ] &&
+    jq -e '.homeManager == true and (has("useGlobalPkgs") | not)' "$OPT_DIR/meta.json" >/dev/null 2>&1; then
+    n='options were read before useGlobalPkgs was recorded; run options refresh'
+    out=${out:+$out; }$n
   fi
+  if [ "$HOME_MODE" = plan ] && home_plan | jq -e '.owner == null and has("action")' >/dev/null 2>&1; then
+    n='the first apply with an edited home.nix makes you the owner'
+    out=${out:+$out; }$n
+  fi
+  printf '%s' "$out"
 }
 
 scope_args() {
@@ -1904,6 +1957,14 @@ snapshot_selection() {
     [ -r "$f" ] || die "cannot read $f"
     cp -L "$f" "$1/$p.nix" 9>&- 8>&- || die "could not copy $f"
   done
+  home_mode
+  if [ "$HOME_MODE" = plan ] || [ "$HOME_MODE" = blind ]; then
+    home_plan >"$1/home-plan.json" || die "cannot write $1/home-plan.json"
+    if [ "$HOME_MODE" = plan ] && jq -e '.action == "keep" and .renderUser != null' "$1/home-plan.json" >/dev/null 2>&1 &&
+      [ -f "$(flake_base)/nixarchy/home.nix" ]; then
+      cp -L "$(flake_base)/nixarchy/home.nix" "$1/flake-home.nix" 9>&- 8>&- || die "could not copy the flake's home.nix"
+    fi
+  fi
   for f in "$CONFIG_DIR"/packages/*.nix; do
     [ -e "$f" ] || continue
     [ -r "$f" ] || die "cannot read $f"
@@ -1913,8 +1974,15 @@ snapshot_selection() {
 
 # fingerprint DIR -- one sha256 over every .nix in DIR, names included.
 fingerprint() {
-  ( cd "$1" && find . -type f -name '*.nix' -print0 | sort -z | xargs -0r sha256sum ) |
+  ( cd "$1" && find . -type f \( -name '*.nix' -o -name home-plan.json \) -print0 | sort -z | xargs -0r sha256sum ) |
     sha256sum | cut -d' ' -f1
+}
+
+# Whether apply will copy the caller's home.nix for this snapshot.
+home_applies() {
+  home_mode
+  [ "$HOME_MODE" = legacy ] && return 0
+  jq -e '.action == "claim" or .action == "copy"' "$1/home-plan.json" >/dev/null 2>&1
 }
 
 # pins_json DIR -- hashes or empty strings for each part in a snapshot.
@@ -2037,7 +2105,7 @@ cmd_pending() {
   : >"$READDIR/lines.jsonl"
 
   for p in apps services advanced flatsnap home; do
-    [ "$p" != home ] || apply_has_home || continue
+    [ "$p" != home ] || home_applies "$READDIR" || continue
     src=$READDIR/$p.nix
     dst=$base/nixarchy/$p.nix
     live=""; [ -e "$CONFIG_DIR/$p.nix" ] && live=$CONFIG_DIR/$p.nix
@@ -2407,7 +2475,7 @@ cmd_check() {
   local flake=${NIXARCHY_FLAKE:-/etc/nixos} host base br copy cb root="" p f name imports rc=0 \
     verdict=unknown reason="" drvPath="" summary="" error="" at=null dry_run="" dry_error="" \
     dry_set=false check_error="" fingerprint="" pins='{}' unpinned='{"drafts":[],"flake":true}' \
-    blocked='[]' note="" dry_requested=false reads_rev=false tpl home_user
+    blocked='[]' note="" dry_requested=false reads_rev=false tpl render_user plan
   case "${1-}" in
     "") [ "$#" = 0 ] || die "check takes only --dry-run" ;;
     --dry-run) [ "$#" = 1 ] || die "check takes only --dry-run"; dry_requested=true ;;
@@ -2435,7 +2503,21 @@ cmd_check() {
   fingerprint=$(fingerprint "$CHECKDIR/snap")
   pins=$(pins_json "$CHECKDIR/snap")
   tpl=$(home_template)
-  if [ -f "$CHECKDIR/snap/home.nix" ] && { [ ! -f "$tpl" ] || [ ! -r "$tpl" ]; }; then
+  home_mode
+  render_user=""
+  case "$HOME_MODE" in
+    legacy) [ ! -f "$CHECKDIR/snap/home.nix" ] || render_user=$(id -un) ;;
+    plan|blind)
+      plan=$(cat "$CHECKDIR/snap/home-plan.json")
+      if [ "$(jq -r 'has("error")' <<<"$plan")" = true ]; then
+        verdict=fails; error=$(jq -r .error <<<"$plan"); check_answer
+      elif [ "$(jq -r '.action == "refuse"' <<<"$plan")" = true ]; then
+        verdict=fails; error=$(jq -r .message <<<"$plan"); check_answer
+      elif [ "$(jq -r 'has("unavailable")' <<<"$plan")" = true ]; then
+        if [ -f "$CHECKDIR/snap/home.nix" ]; then reason=$(jq -r .unavailable <<<"$plan"); check_answer; fi
+      else render_user=$(jq -r '.renderUser // ""' <<<"$plan"); fi ;;
+  esac
+  if [ -n "$render_user" ] && { [ ! -f "$tpl" ] || [ ! -r "$tpl" ]; }; then
     reason=$NO_HOME_TEMPLATE
     check_answer
   fi
@@ -2502,20 +2584,26 @@ cmd_check() {
   for p in apps services advanced flatsnap home; do
     f=$CHECKDIR/snap/$p.nix
     [ -f "$f" ] || continue
+    [ "$p" != home ] || home_applies "$CHECKDIR/snap" || continue
     rm -f "$cb/nixarchy/$p.nix" || die "cannot replace $cb/nixarchy/$p.nix"
     cp "$f" "$cb/nixarchy/$p.nix" 9>&- 8>&- || die "cannot copy $f"
     [ "$p" = home ] || imports="$imports ./nixarchy/$p.nix"
   done
+  if [ "$HOME_MODE" = plan ] && [ -n "$render_user" ] && ! home_applies "$CHECKDIR/snap"; then
+    rm -f "$cb/nixarchy/home.nix" || die "cannot replace $cb/nixarchy/home.nix"
+    if [ -f "$CHECKDIR/snap/flake-home.nix" ]; then
+      cp "$CHECKDIR/snap/flake-home.nix" "$cb/nixarchy/home.nix" 9>&- 8>&- || die "cannot copy the flake's home.nix"
+    fi
+  fi
   for f in "$CHECKDIR/snap/packages"/*.nix; do
     [ -f "$f" ] || continue
     rm -f "$cb/nixarchy/packages/${f##*/}" || die "cannot replace ${f##*/}"
     cp "$f" "$cb/nixarchy/packages/${f##*/}" 9>&- 8>&- || die "cannot copy $f"
   done
   rm -f "$cb/nixarchy-apps.nix" || die "cannot replace $cb/nixarchy-apps.nix"
-  if [ -f "$CHECKDIR/snap/home.nix" ]; then
-    home_user=$(id -un)
-    [[ $home_user =~ $USER_RE ]] || die "invalid user name: $home_user"
-    sed -e "s|@USER@|$home_user|g" -e "s|@IMPORTS@|$imports|g" "$tpl" >"$cb/nixarchy-apps.nix" \
+  if [ -n "$render_user" ]; then
+    [[ $render_user =~ $USER_RE ]] || die "invalid user name: $render_user"
+    sed -e "s|@USER@|$render_user|g" -e "s|@IMPORTS@|$imports|g" "$tpl" >"$cb/nixarchy-apps.nix" \
       || die "cannot write $cb/nixarchy-apps.nix"
   else
     printf '# Generated by nixarchy-apply. Do not edit -- your files\n# are ~/.config/nixarchy/{apps,services,advanced,flatsnap}.nix and\n# this is regenerated from them on every apply.\n{\n  imports = [%s ];\n}\n' \

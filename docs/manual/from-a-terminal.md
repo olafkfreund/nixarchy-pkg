@@ -116,7 +116,7 @@ Its object carries:
 | `changes[]` | `{marker, file, line, change, lineNo}` where `change` is `on`, `off`, `added`, `removed`, or `modified` (a marked value changed in place), and `lineNo` is the line number in the live file (or `null` for `off` and `removed`) |
 | `files[]` | `{file, label, path, status, unmarked, hunk, conflict, explained}` for each changed part or draft. `status` is `new`, `modified`, or `dropped`; `conflict` is `overwrite`, `blocks`, or `null`; `explained` is `true` when `status` is `modified`, `unmarked` is `0`, and at least one `changes[]` row belongs to this file |
 | `total` | `count` plus the number of `files[]` entries with `explained: false` |
-| `fingerprint` | One 64-digit SHA-256 over every `.nix` file in the selection snapshot, names included |
+| `fingerprint` | One 64-digit SHA-256 over every `.nix` file in the selection snapshot, plus, on a host whose nixarchy handles `home.nix`, apply's home decision, names included |
 | `pins` | `{apps, services, advanced, flatsnap}` — each file's 64-digit SHA-256, or `""` when absent |
 | `sources` | `{apps, services, advanced, flatsnap}` — each live path in `~/.config/nixarchy`, or `null` when absent |
 | `unpinned` | `{drafts: ["packages/<name>.nix", …], flake: true}` |
@@ -139,7 +139,7 @@ When `ok` is `true`, the answer always carries:
 | --- | --- |
 | `host` | `uname -n` |
 | `verdict` | `evaluates`, `fails`, `superseded`, or `unknown` |
-| `fingerprint` | The selection snapshot's 64-digit SHA-256 |
+| `fingerprint` | The selection snapshot's 64-digit SHA-256, built as `pending`'s is |
 | `pins` | `{apps, services, advanced, flatsnap}` hashes from the checked snapshot |
 | `unpinned` | `{drafts: […], flake: true}` |
 | `blocked` | Drafts edited in the flake: `[{label, conflict: "blocks"}, …]` |

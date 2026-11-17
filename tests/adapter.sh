@@ -2499,13 +2499,29 @@ echo lock-one >"$O62/fl/flake.lock"; echo lock-one >"$O62/fl2/flake.lock"
 cat >"$O62/bin/nix" <<'NEOF'
 #!/usr/bin/env bash
 echo "run $*" >>"$O62/nix.calls"
+grab() { local p=${arg#path:} b
+  b=$p/hosts/$(uname -n); [ -d "$b" ] || b=$p
+  cp "$b/nixarchy-apps.nix" "$O62/generated.nix"
+  [ ! -f "$b/nixarchy/home.nix" ] || cp "$b/nixarchy/home.nix" "$O62/generated-home.nix"; }
 case "${NIX_MODE-ok}" in
   capture)
     for arg in "$@"; do
-      case "$arg" in path:*) cp "${arg#path:}/nixarchy-apps.nix" "$O62/generated.nix"; break ;; esac
+      case "$arg" in path:*) grab; break ;; esac
     done
     exit 1 ;;
   change-lock) echo lock-during-eval >"$O62/fl/flake.lock" ;;
+  pass|change-owner|change-home)
+    case "$*" in
+      *"config show"*) exit 0 ;;
+      *metadata*) for arg in "$@"; do case "$arg" in path:*) grab; break ;; esac; done; echo '{"path":"/nonexistent"}' ;;
+      *--apply*) echo true ;;
+      *--raw*)
+        [ ! -f "$O62/a103/home.orig" ] || cp "$O62/a103/home.orig" "$O62/a103/fl/nixarchy/home.nix"
+        [ "$NIX_MODE" = change-owner ] && printf 'home-manager.users."mallory".imports = [\n];\n' >"$O62/a103/fl/nixarchy-apps.nix"
+        [ "$NIX_MODE" = change-home ] && echo '# changed during eval' >"$O62/a103/fl/nixarchy/home.nix"
+        echo /nix/store/x.drv ;;
+    esac
+    exit 0 ;;
   fail)  echo "error: attribute 'x' missing" >&2; exit 1 ;;
   nohost) echo "error: flake does not provide attribute 'nixosConfigurations.\"h\"'" >&2; exit 1 ;;
   sleep) sleep 5 ;;
@@ -2554,6 +2570,7 @@ echo lock-one >"$O62/fl/flake.lock"
 opt62 options refresh >/dev/null
 check "describe reads the cached system.json" \
   jq -e '.ok and .source == "flake" and .scope == "system" and .default == "false"' <<<"$(opt62 opt describe programs.git.enable)"
+printf '#!/bin/sh\nexit 0\n' >"$O62/bin/nixarchy-apply"; chmod +x "$O62/bin/nixarchy-apply"
 check "user describe refuses while nixarchy C is absent" \
   jq -e '.ok == false and (.error | contains("no Home Manager part"))' <<<"$(opt62 opt describe --scope user programs.hm.enable)"
 check "search hides user options while C is absent" jq -e '.userScope.available == false and (.rows | length == 0)' <<<"$(opt62 search hm --kind opt)"
@@ -2898,7 +2915,8 @@ else
 fi
 
 # Each capability refusal has its own sentence and occurs before begin_write.
-mv "$O62/bin/nixarchy-apply" "$O62/bin/nixarchy-apply.saved"
+cp "$O62/bin/nixarchy-apply" "$O62/bin/nixarchy-apply.saved"
+printf '#!/bin/sh\nexit 0\n' >"$O62/bin/nixarchy-apply"; chmod +x "$O62/bin/nixarchy-apply"
 check "missing C refuses before a transaction" jq -e '.ok == false and (.error | contains("no Home Manager part"))' <<<"$(scope62 opt set --scope user p.q true)"
 check "missing C leaves no transaction" test ! -e "$O62/state/nixarchy/pkg-recovery/open"
 mv "$O62/bin/nixarchy-apply.saved" "$O62/bin/nixarchy-apply"
@@ -2906,6 +2924,211 @@ jq '.homeManager = false' "$OC/options/meta.json" >"$O62/meta.tmp"; mv "$O62/met
 check "missing Home Manager module has its own refusal" jq -e '.ok == false and (.error | contains("no Home Manager"))' <<<"$(scope62 opt set --scope user p.q true)"
 jq '.homeManager = true | .users = []' "$OC/options/meta.json" >"$O62/meta.tmp"; mv "$O62/meta.tmp" "$OC/options/meta.json"
 check "user absent from home-manager.users has its own refusal" jq -e '.ok == false and (.error | contains("not in home-manager.users"))' <<<"$(scope62 opt set --scope user p.q true)"
+
+echo "home owner (#103)"
+blk103() { awk '/^select_home_src\(\) \{/{f=1} f{print} f&&/^home_decide\(\) \{/{h=1} h&&/^}/{exit}' "$1"; }
+if apply103=$(command -v nixarchy-apply) && grep -q '^home_decide()' "$apply103"; then
+  check "fixture's home_decide block equals the installed apply's" cmp -s <(blk103 "$HERE/tests/fixtures/apply-1820.sh") <(blk103 "$apply103")
+else
+  echo "  skip  fixture drift (no installed nixarchy-apply with home_decide here)"
+fi
+A103=$O62/a103; export A103
+mkdir -p "$A103"/{plan,blind,legacy,none,idbin,cache/nixarchy,fl/nixarchy,cfg/nixarchy}
+touch "$A103/fl/flake.nix"; printf '{"nodes":{}}\n' >"$A103/fl/flake.lock"
+cp "$OC/index.tsv" "$A103/cache/nixarchy/"
+cp "$HERE/tests/fixtures/apply-1820.sh" "$A103/plan/nixarchy-apply"
+sed '/^#HOMEPLAN-BEGIN$/,/^#HOMEPLAN-END$/d' "$HERE/tests/fixtures/apply-1820.sh" >"$A103/blind/nixarchy-apply"
+cp "$O62/apply-with-home" "$A103/legacy/nixarchy-apply"
+sed 's/ flatsnap home;/ flatsnap;/' "$O62/apply-with-home" >"$A103/none/nixarchy-apply"
+chmod +x "$A103"/{plan,blind,legacy,none}/nixarchy-apply
+# shellcheck disable=SC2016 # the stub's own script
+printf '#!/bin/sh\n[ "$1" = -un ] && { echo "$CALLER103"; exit 0; }\nexec %s "$@"\n' "$(command -v id)" >"$A103/idbin/id"; chmod +x "$A103/idbin/id"
+own103() { local mode=$1; shift
+  env PATH="$A103/$mode:$A103/idbin:$O62/bin:$FIXSTUB:$PATH" CALLER103="${CALLER103:-bob}" \
+    XDG_CONFIG_HOME="$A103/cfg" XDG_STATE_HOME="$O62/state" XDG_CACHE_HOME="$A103/cache" \
+    NIXARCHY_FLAKE="${FLAKE103:-$A103/fl}" NIXARCHY_HOME_TEMPLATE="${TPL103:-$HERE/tests/fixtures/home-apps-template.nix}" "$ADAPTER" "$@"; }
+scene103() { # OWNER (name or "") FILE (seed|edited|absent)
+  rm -f "$A103/fl/nixarchy-apps.nix" "$A103/cfg/nixarchy/home.nix"
+  [ -z "$1" ] || printf '{ ... }: {\n  home-manager.users."%s".imports = [\n    ./nixarchy/home.nix\n  ];\n}\n' "$1" >"$A103/fl/nixarchy-apps.nix"
+  case $2 in
+    seed) cp "$HERE/tests/fixtures/home-apps-template.nix" "$A103/cfg/nixarchy/home.nix" ;;
+    edited) printf '# edited by the caller\n{ pkgs, ... }: { home.packages = with pkgs; [ ]; }\n' >"$A103/cfg/nixarchy/home.nix" ;;
+  esac
+  printf '{ ... }: { }\n' >"$A103/cfg/nixarchy/apps.nix"
+  printf '# the flake home.nix\n{ ... }: { }\n' >"$A103/fl/nixarchy/home.nix"; }
+scene103 "" edited
+own103 plan options refresh >/dev/null
+check "blind names unavailable owner" jq -e '.userScope.available == false and (.userScope.reason | contains("cannot say who owns"))' <<<"$(own103 blind state)"
+scene103 bob seed
+check "owner may use user scope" jq -e '.userScope.available == true and .userScope.note == ""' <<<"$(own103 plan state)"
+for kind in seed edited; do
+  scene103 alice "$kind"
+  check "other user is refused for $kind" jq -e '.userScope.available == false and (.userScope.reason | contains("belongs to alice") and contains("--release-home"))' <<<"$(own103 plan state)"
+done
+check "other user's package write is refused" jq -e '.ok == false and (.error | contains("belongs to alice"))' <<<"$(own103 plan pkg add --scope user git)"
+check "refusal leaves no transaction" test ! -e "$O62/state/nixarchy/pkg-recovery/open"
+for kind in seed edited; do
+  scene103 "" "$kind"
+  check "unowned $kind offers first-owner note" jq -e '.userScope.available and (.userScope.note | contains("makes you the owner"))' <<<"$(own103 plan state)"
+done
+scene103 alice seed
+rm -f "$O62/generated.nix" "$O62/generated-home.nix"
+check "keep renders owner" jq -e '.verdict == "fails" or .verdict == "evaluates"' <<<"$(NIX_MODE=capture own103 plan check)"
+check "keep imports owner" grep -q 'home-manager.users."alice"' "$O62/generated.nix"
+check "keep uses flake home" cmp -s "$O62/generated-home.nix" "$A103/fl/nixarchy/home.nix"
+check "keep does not use caller home" not cmp -s "$O62/generated-home.nix" "$A103/cfg/nixarchy/home.nix"
+scene103 alice absent
+rm -f "$O62/generated.nix" "$O62/generated-home.nix"
+NIX_MODE=capture own103 plan check >/dev/null
+check "owner keep without caller home imports owner" grep -q 'home-manager.users."alice"' "$O62/generated.nix"
+mkdir -p "$A103/tplguard"
+cat >"$A103/tplguard/nixarchy-apply" <<EOF
+#!/usr/bin/env bash
+case "\${1-}" in
+  --home-plan) NIXARCHY_HOME_TEMPLATE="$HERE/tests/fixtures/home-apps-template.nix" exec "$A103/plan/nixarchy-apply" "\$@" ;;
+esac
+exec "$A103/plan/nixarchy-apply" "\$@"
+EOF
+chmod +x "$A103/tplguard/nixarchy-apply"
+check "owner keep requires template" jq -e '.verdict == "unknown" and (.reason | contains("home template is not installed"))' <<<"$(TPL103="$O62/none.nix" own103 tplguard check)"
+scene103 alice edited
+before=$(wc -l <"$O62/nix.calls")
+check "refuse fails check" jq -e '.verdict == "fails" and (.error | contains("belongs to alice"))' <<<"$(NIX_MODE=capture own103 plan check)"
+check "refuse avoids flake work" not grep -qvE ' config show ' <(sed -n "$((before + 1)),\$p" "$O62/nix.calls")
+scene103 "" edited
+before=$(wc -l <"$O62/nix.calls")
+check "blind check is unknown" jq -e '.verdict == "unknown" and (.reason | contains("cannot say who owns"))' <<<"$(NIX_MODE=capture own103 blind check)"
+check "blind avoids flake work" not grep -qvE ' config show ' <(sed -n "$((before + 1)),\$p" "$O62/nix.calls")
+scene103 alice seed
+for kind in seed edited; do
+  scene103 alice "$kind"
+  hash=$(sha256sum <"$A103/cfg/nixarchy/home.nix"); hash=${hash%% *}
+  # shellcheck disable=SC2016 # jq's $h is passed with --arg
+  check "pending pins real $kind home" jq -e --arg h "$hash" '.pins.home == $h' <<<"$(own103 plan pending)"
+  check "pending skips $kind home" jq -e '(.files | all(.file != "home")) and (.changes | all(.file != "home"))' <<<"$(own103 plan pending)"
+done
+for malformed in exit2 text v2 noowner owner42 nullmsg twolines badstate badrender errkeys; do
+  scene103 alice edited
+  check "malformed $malformed check is unknown" jq -e '.verdict == "unknown" and (.reason | contains("no usable answer"))' <<<"$(NIXARCHY_FAKE_PLAN=$malformed own103 plan check)"
+  check "malformed $malformed disables scope" jq -e '.userScope.reason | contains("no usable answer")' <<<"$(NIXARCHY_FAKE_PLAN=$malformed own103 plan state)"
+done
+scene103 "" edited
+NIXARCHY_FAKE_PLAN=extra NIX_MODE=capture own103 plan check >/dev/null
+check "extra plan keys still allow claim" cmp -s "$O62/generated.nix" <(sed -e 's|@USER@|bob|g' -e 's|@IMPORTS@| ./nixarchy/apps.nix|g' "$HERE/tests/fixtures/home-apps-template.nix")
+check "extra plan keys leave scope available" jq -e '.userScope.reason == ""' <<<"$(NIXARCHY_FAKE_PLAN=extra own103 plan state)"
+scene103 "" absent
+NIX_MODE=capture own103 blind check >/dev/null
+check "blind without caller home renders stub" not grep -q home-manager "$O62/generated.nix"
+scene103 "" edited
+NIX_MODE=capture own103 plan check >/dev/null
+check "claim renders caller" cmp -s "$O62/generated.nix" <(sed -e 's|@USER@|bob|g' -e 's|@IMPORTS@| ./nixarchy/apps.nix|g' "$HERE/tests/fixtures/home-apps-template.nix")
+scene103 alice seed
+CALLER103=alice own103 plan options refresh >/dev/null
+NIX_MODE=capture CALLER103=alice own103 plan check >/dev/null
+check "copy renders owner caller" cmp -s "$O62/generated.nix" <(sed -e 's|@USER@|alice|g' -e 's|@IMPORTS@| ./nixarchy/apps.nix|g' "$HERE/tests/fixtures/home-apps-template.nix")
+check "copy uses caller home" cmp -s "$O62/generated-home.nix" "$A103/cfg/nixarchy/home.nix"
+scene103 alice seed
+first=$(own103 plan pending | jq -r .fingerprint)
+# shellcheck disable=SC2016 # jq's $fp is passed with --arg
+check "pending and check agree on keep fingerprint" jq -e --arg fp "$first" '.fingerprint == $fp' <<<"$(NIX_MODE=capture own103 plan check)"
+printf '# updated flake home\n' >"$A103/fl/nixarchy/home.nix"
+second=$(own103 plan pending | jq -r .fingerprint)
+check "flake home changes fingerprint" test "$first" != "$second"
+# shellcheck disable=SC2016 # jq's $fp is passed with --arg
+check "check sees changed flake home" jq -e --arg fp "$second" '.fingerprint == $fp' <<<"$(NIX_MODE=capture own103 plan check)"
+scene103 alice seed
+first=$(own103 plan pending | jq -r .fingerprint)
+# shellcheck disable=SC2016 # jq's $fp is passed with --arg
+check "owner fingerprint matches check" jq -e --arg fp "$first" '.fingerprint == $fp' <<<"$(NIX_MODE=capture own103 plan check)"
+sed 's/alice/carol/' "$A103/fl/nixarchy-apps.nix" >"$A103/fl/owner.tmp"
+mv "$A103/fl/owner.tmp" "$A103/fl/nixarchy-apps.nix"
+second=$(own103 plan pending | jq -r .fingerprint)
+check "owner change changes fingerprint" test "$first" != "$second"
+# shellcheck disable=SC2016 # jq's $fp is passed with --arg
+check "check sees changed owner" jq -e --arg fp "$second" '.fingerprint == $fp' <<<"$(NIX_MODE=capture own103 plan check)"
+scene103 alice seed
+printf 'home-manager.users."x".imports = [\n];\n' >>"$A103/fl/nixarchy-apps.nix"
+check "several owners fail check" jq -e '.verdict == "fails" and (.error | contains("several home owners"))' <<<"$(own103 plan check)"
+check "several owners disable scope" jq -e '.userScope.reason | contains("several home owners")' <<<"$(own103 plan state)"
+scene103 alice seed
+check "changed owner supersedes completed check" jq -e '.verdict == "superseded"' <<<"$(NIX_MODE=change-owner own103 plan check)"
+scene103 alice seed
+check "changed home supersedes completed check" jq -e '.verdict == "superseded"' <<<"$(NIX_MODE=change-home own103 plan check)"
+scene103 alice seed
+mkdir -p "$A103/gitshim" "$A103/fl/.git"
+cp "$A103/fl/nixarchy/home.nix" "$A103/home.orig"
+cat >"$A103/gitshim/git" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  *" grep "*) exit 1 ;;
+  *" ls-files -s"*) exit 0 ;;
+  *" ls-files -z"*) echo '# racing' >"$A103/fl/nixarchy/home.nix"; printf 'flake.nix\0'; exit 0 ;;
+esac
+exit 0
+EOF
+chmod +x "$A103/gitshim/git"
+race103() { env PATH="$A103/gitshim:$A103/plan:$A103/idbin:$O62/bin:$FIXSTUB:$PATH" CALLER103=bob \
+  XDG_CONFIG_HOME="$A103/cfg" XDG_STATE_HOME="$O62/state" XDG_CACHE_HOME="$A103/cache" \
+  NIXARCHY_FLAKE="$A103/fl" NIXARCHY_HOME_TEMPLATE="$HERE/tests/fixtures/home-apps-template.nix" NIX_MODE=pass "$ADAPTER" check; }
+check "racing flake home uses snapshot" jq -e '.verdict == "evaluates"' <<<"$(race103)"
+check "racing check rendered pre-race home" cmp -s "$O62/generated-home.nix" "$A103/home.orig"
+check "racing check did not render changed home" not grep -q racing "$O62/generated-home.nix"
+rm -f "$A103/home.orig"; rm -rf "$A103/fl/.git" "$A103/gitshim"
+scene103 alice seed
+host103=$A103/fl/hosts/$(uname -n)
+mkdir -p "$host103/nixarchy"
+cp "$A103/fl/nixarchy-apps.nix" "$host103/nixarchy-apps.nix"
+printf '# host home\n' >"$host103/nixarchy/home.nix"
+sed 's/alice/mallory/' "$host103/nixarchy-apps.nix" >"$A103/fl/nixarchy-apps.nix"
+check "host layout names host owner" jq -e '.userScope.reason | contains("belongs to alice")' <<<"$(own103 plan state)"
+rm -f "$O62/generated.nix" "$O62/generated-home.nix"
+NIX_MODE=capture own103 plan check >/dev/null
+check "host layout imports host owner" grep -q 'home-manager.users."alice"' "$O62/generated.nix"
+check "host layout copies host home" cmp -s "$O62/generated-home.nix" "$host103/nixarchy/home.nix"
+rm -rf "$A103/fl/hosts"
+scene103 "" edited
+check "invalid caller disables scope" jq -e '.userScope.reason | contains("invalid user name")' <<<"$(CALLER103='Bad;User' own103 plan state)"
+check "invalid caller fails check" jq -e '.verdict == "fails" and (.error | contains("invalid user name"))' <<<"$(CALLER103='Bad;User' own103 plan check)"
+check "missing flake disables scope" jq -e '.userScope.reason | contains("no flake at")' <<<"$(FLAKE103="$O62/nonexistent" own103 plan state)"
+scene103 alice edited
+mkdir -p "$A103/prec" "$A103/prec2"
+sed 's/home_decide/home_pick/g' "$A103/plan/nixarchy-apply" >"$A103/prec/nixarchy-apply"
+cp "$A103/plan/nixarchy-apply" "$A103/prec2/nixarchy-apply"
+printf 'for part in apps services advanced flatsnap home; do :; done\n' >>"$A103/prec2/nixarchy-apply"
+chmod +x "$A103"/{prec,prec2}/nixarchy-apply
+check "plan marker precedes blind marker" jq -e '.userScope.reason | contains("belongs to alice")' <<<"$(own103 prec state)"
+check "plan marker precedes legacy marker" jq -e '.userScope.reason | contains("belongs to alice")' <<<"$(own103 prec2 state)"
+scene103 "" seed
+saved=$(sha256sum <"$A103/fl/nixarchy/home.nix")
+NIX_MODE=capture own103 plan check >/dev/null
+check "unowned seed renders stub" not grep -q home-manager "$O62/generated.nix"
+check "unowned seed leaves flake home" test "$(sha256sum <"$A103/fl/nixarchy/home.nix")" = "$saved"
+scene103 alice absent
+check "dropped home is skipped" jq -e '.files | all(.file != "home")' <<<"$(own103 plan pending)"
+scene103 "" seed
+own103 plan options refresh >/dev/null
+jq 'del(.useGlobalPkgs)' "$A103/cache/nixarchy/options/meta.json" >"$A103/meta.tmp"
+mv "$A103/meta.tmp" "$A103/cache/nixarchy/options/meta.json"
+check "owner note joins cache note" jq -e '.userScope.note | contains("run options refresh; the first apply")' <<<"$(own103 plan state)"
+own103 plan options refresh >/dev/null
+scene103 "" edited
+NIX_MODE=capture own103 legacy check >/dev/null
+check "legacy renders caller" cmp -s "$O62/generated.nix" <(sed -e 's|@USER@|bob|g' -e 's|@IMPORTS@| ./nixarchy/apps.nix|g' "$HERE/tests/fixtures/home-apps-template.nix")
+NIX_MODE=capture own103 none check >/dev/null
+check "none renders stub" not grep -q home-manager "$O62/generated.nix"
+rm -f "$O62/apply.args"
+own103 legacy state >/dev/null; own103 legacy pending >/dev/null; NIX_MODE=capture own103 legacy check >/dev/null
+own103 none state >/dev/null; own103 none pending >/dev/null; NIX_MODE=capture own103 none check >/dev/null
+check "legacy and none never call home-plan" not grep -q -- --home-plan "$O62/apply.args"
+for mode in legacy none; do
+  d=$(mktemp -d)
+  cp "$A103/cfg/nixarchy/apps.nix" "$d/apps.nix"
+  [ "$mode" != legacy ] || cp "$A103/cfg/nixarchy/home.nix" "$d/home.nix"
+  exp=$(cd "$d" && find . -type f -name '*.nix' -print0 | sort -z | xargs -0r sha256sum | sha256sum | cut -d' ' -f1)
+  # shellcheck disable=SC2016 # jq's $fp is passed with --arg
+  check "$mode fingerprint is unchanged" jq -e --arg fp "$exp" '.fingerprint == $fp' <<<"$(own103 "$mode" pending)"
+  rm -rf "$d"
+done
 rm -rf "$O62"
 
 echo "failure is a value, not an exit code"
