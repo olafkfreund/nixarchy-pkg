@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 103
 spec: spec/2026-11-17-103-follow-home-owner.md
 coders:
