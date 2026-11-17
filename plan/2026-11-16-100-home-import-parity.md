@@ -497,6 +497,21 @@ Do not merge without the owner.
 - Against main's `bin/nixarchy-pkg` the "must fail" list fails (step 5.2).
 - The three mutations fail the named tests (step 5.3).
 
+## Deviations
+
+- `check evaluates merged list definitions` fails on the tests-only commit,
+  though step 2 listed it as unchanged: the nix-gated stub now supplies the
+  `pkgsOther` argument the template expects, and main's hand-written stub
+  does not. The fix commit makes it pass.
+- `missing home template skips flake evaluation` passes on the tests-only
+  commit, vacuously: the old code never reaches a template. It is a guard for
+  the new code, not a test-first case.
+- Shellcheck covered `bin/nixarchy-pkg` and `tests/adapter.sh`; step 5.1
+  also names `bin/nixarchy-pkg-keys`, which this change does not touch.
+- The fixture-drift mutation could not run here (no `/etc/nixarchy`); a
+  one-off `cmp` against nixarchy's template shows the difference. The real
+  proof is the nixarchy follow-up case (F3).
+
 ## Rollback
 
 Nothing is applied by this change: `check` is read-only and the writers are

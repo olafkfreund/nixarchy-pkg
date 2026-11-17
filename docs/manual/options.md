@@ -124,6 +124,6 @@ to its default, which is what it was before you touched it.
 
 ## User scope
 
-Home Manager options appear with a **user** badge. They are written to `home.nix` for the account running the panel. This requires Home Manager as a NixOS module, that account in `home-manager.users`, and a nixarchy version with the Home Manager part. A disabled row shows the reason.
+Home Manager options appear with a **user** badge. They are written to `home.nix` for the account running the panel. This requires Home Manager as a NixOS module, that account in `home-manager.users`, `home-manager.useGlobalPkgs = true`, and a nixarchy version with the Home Manager part and its installed home template (`/etc/nixarchy/home-apps-template.nix`). A disabled row shows the reason.
 
-Removing a selection can leave a declaration elsewhere in the flake in effect. `check` evaluates the combined configuration and reports conflicting option values.
+Removing a selection can leave a declaration elsewhere in the flake in effect. `check` evaluates the combined configuration and reports conflicting option values. For user scope `check` evaluates the same file `nixarchy-apply` will write (filled from that template), so a failed assertion (`useGlobalPkgs`, a non-normal user, no Home Manager configuration of your own) is reported with nix's message.
