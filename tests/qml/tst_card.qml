@@ -35,7 +35,11 @@ TestCase {
       version: "1.0", flags: ["unfree", "broken", "curated:steam"] },
     { attr: "nosuchpkg", channel: "default" },
     { attr: "searchrow", flags: ["unfree"], summary: "no channel on a search row" },
-    { attr: "version-only", channel: "default", version: "2.0", flags: [] }
+    { attr: "version-only", channel: "default", version: "2.0", flags: [] },
+    { attr: "openssl_1_1", channel: "default", summary: "an insecure package",
+      version: "1.1.1w", flags: ["unfree", "insecure"] },
+    { attr: "insecure-search", flags: ["insecure"],
+      summary: "a search row, no channel" }
   ]
   // A QtObject, so a test can set tab and cursor and Card sees it change.
   QtObject {
@@ -802,6 +806,17 @@ TestCase {
     verify(Qt.colorEqual(steam[0].color, Commons.Color.accent), "unfree stays accent")
     verify(Qt.colorEqual(steam[1].color, Commons.Color.urgent), "broken stays urgent")
     verify(Qt.colorEqual(steam[3].color, card.dim), "default stays dim")
+  }
+
+  function test_insecure_tag_is_urgent() {
+    useRows(selRows, 2)
+    var lv = find(card, "QQuickListView")
+    var sel = tagsIn(lv.itemAtIndex(6))
+    var srch = tagsIn(lv.itemAtIndex(7))
+    compare(sel.map(t => t.text), ["unfree", "insecure", "default"])
+    verify(Qt.colorEqual(sel[1].color, Commons.Color.urgent), "insecure selection row is urgent")
+    compare(srch.map(t => t.text), ["insecure"])
+    verify(Qt.colorEqual(srch[0].color, Commons.Color.urgent), "insecure search row is urgent")
   }
 
   function test_selection_summary_fits_at_800_and_700() {
