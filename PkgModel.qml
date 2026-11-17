@@ -38,6 +38,7 @@ QtObject {
 
   // What the catalogue tabs draw, straight from `state`.
   property var state: ({})
+  property var userScope: ({ available: false, reason: "user scope is not available yet" })
   // What the search tabs draw, from `search`. Kept apart from `state` so
   // that typing a query never disturbs what is known about the selection.
   property var results: []
@@ -542,6 +543,7 @@ QtObject {
     // not; take them before any branch returns.
     if (data.indexStale !== undefined) root.indexStale = data.indexStale
     if (data.index !== undefined) root.index = data.index
+    if (data.userScope !== undefined) root.userScope = data.userScope
     if (isWrite && pendingDeclare
         && (data.ok !== true || data.name !== pendingDeclare.name || data.url !== pendingDeclare.ref))
       pendingDeclare = null
@@ -794,9 +796,13 @@ QtObject {
     disarm()
     var row = rowAt(cursor)
     if (!row) return
+    if (row.scope === "user" && !userScope.available) {
+      message = userScope.reason
+      return
+    }
     if (indexTab && searching) {
       // A search row is not yet in the selection, so RETURN adds it.
-      if (tab === 2) write(["pkg", "add", row.name])
+      if (tab === 2) write(["pkg", "add", "--scope", "system", row.name])
       return
     }
     // A `.settings` row is not an app and has no enable to flip: it is the
@@ -813,8 +819,8 @@ QtObject {
     switch (tab) {
       case 0: write(["toggle", "app", row.id]); break
       case 1: write(["toggle", "service", row.id]); break
-      case 2: write(["pkg", "remove", row.attr]); break
-      case 3: write(["opt", "remove", row.path]); break
+      case 2: write(["pkg", "remove", "--scope", row.scope || "system", row.attr]); break
+      case 3: write(["opt", "remove", "--scope", row.scope || "system", row.path]); break
       case 4: write(["draft", "undraft", row.name]); break
       case 5:
         if (row.kind === "declared") inspectRow(row)
@@ -830,6 +836,13 @@ QtObject {
         }
         break
     }
+  }
+
+  function addInUserScope() {
+    if (tab !== 2 || !searching) return
+    if (!userScope.available) { message = userScope.reason; return }
+    var row = rowAt(cursor)
+    if (row) write(["pkg", "add", "--scope", "user", row.name])
   }
 
   // SHIFT+RETURN on a search row: the same add, from the other channel.
@@ -865,7 +878,7 @@ QtObject {
 
     if (armedChannel === row.name) {
       armedChannel = ""
-      write(["pkg", "add", "--" + other, row.name])
+      write(["pkg", "add", "--scope", "system", "--" + other, row.name])
       return
     }
 

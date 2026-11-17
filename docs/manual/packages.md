@@ -113,3 +113,7 @@ to in the file.
 
 And see the top of this page: that removes it from the selection. If the
 package is also declared in your own configuration, it stays.
+
+## User scope
+
+On the Packages search, **Return** adds a package for the system; **Ctrl+Return** adds it for your user. User scope writes `home.nix` and needs Home Manager as a NixOS module, your account in `home-manager.users`, `home-manager.useGlobalPkgs = true`, and a nixarchy version with the Home Manager part and its installed home template (`/etc/nixarchy/home-apps-template.nix`). The panel shows the reason when it is unavailable.
