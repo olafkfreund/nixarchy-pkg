@@ -49,7 +49,7 @@ not open on something whose description happens to mention it.
 
 ![unfree, broken and the curated warning](../img/05-packages-unfree.png)
 
-Three things a row can be marked with, all shown before anything is queued:
+Four things a row can be marked with, all shown before anything is queued:
 
 **`unfree`** — the package has a licence that is not free. Whether that
 matters depends on your machine's policy. If `allowUnfree` is on, which is
@@ -61,6 +61,11 @@ switch. Read the message line after you add one.
 **`broken`** — nixpkgs itself marks this as not building. You can still add
 it. It will still not build.
 
+**`insecure`** — nixpkgs lists a known vulnerability for this package, or
+marks it insecure. You can still add it, and it will usually refuse to
+build until you permit it by name and version. On a search result, the
+detail pane beside the row says "Marked INSECURE in nixpkgs."
+
 **`curated: <name>`** — the app catalogue already covers this name. Worth
 heeding: the app row gets you the NixOS module with its policies and
 defaults, and the bare package gets you a binary. Same software, different
@@ -68,8 +73,10 @@ amount of it.
 
 ### A flag you do not see is not a "no"
 
-If the search index is stale, it carries **no flags at all**, and every
-package reads as free. The footer says when the index was built and what
+If the search index is stale, a **Selection** row carries no flags at all,
+so every package reads as free, and a **search** row can show flags that
+are outdated, or missing one such as `insecure`.
+The footer says when the index was built and what
 changed since, for example **index built 14 days ago — r to rebuild —
 nixpkgs and 4 more changed**, and it means it. `r` rebuilds the index; it takes
 about 45 seconds.
@@ -90,7 +97,7 @@ So the key asks twice. The first press tells you which channel it would come
 from and what it will cost; the second does it. Anything else you press
 cancels.
 
-It also tells you that `unfree` and `broken` are **not known** for that
+It also tells you that `unfree`, `broken` and `insecure` are **not known** for that
 channel, and that is exact rather than cautious: the flags on the row
 describe the package on the channel you are *on*, which is a different build
 of it. There is no evidence for the other one without fetching it, so the

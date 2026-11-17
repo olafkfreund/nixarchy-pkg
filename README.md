@@ -42,7 +42,7 @@ same version, so a package taken this way brings its own closure.
 `nixarchy doctor` reports what that has cost.
 
 The key asks twice. The first press says which channel, and that the
-`unfree` and `broken` flags on the row are *not* known for it -- they
+`unfree`, `broken` and `insecure` flags on the row are *not* known for it -- they
 describe the package on the channel you are on, which is a different build
 of it. The second press adds it.
 ## Flakes

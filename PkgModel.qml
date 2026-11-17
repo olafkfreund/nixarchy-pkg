@@ -852,7 +852,7 @@ QtObject {
   // (nixarchy-doctor measures vlc at 1.5 GB). The first press says what
   // will happen; the second does it. Anything that moves the list disarms.
   //
-  // It says the licence and broken status are NOT KNOWN rather than
+  // It says the licence, broken and insecure status are NOT KNOWN rather than
   // showing the row's flags, because those flags are about a different
   // package: nixarchy-pkg-add probes the system's own nixpkgs (its :246)
   // and its other-channel branch returns before the flag block (:301-318)
@@ -885,7 +885,7 @@ QtObject {
     armedChannel = row.name
     message = row.name + " from the " + other + " channel."
       + " It brings its own closure: the two channels share no store paths,"
-      + " even at the same version. unfree and broken are not known for that"
+      + " even at the same version. unfree, broken and insecure are not known for that"
       + " channel. SHIFT+RETURN again to add it."
   }
 
