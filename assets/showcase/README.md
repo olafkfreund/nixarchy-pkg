@@ -41,7 +41,7 @@ packages buries the obvious answer.
 
 ![Searching nixpkgs](06-packages-search.png)
 
-`unfree` and `broken` are flagged before anything is queued, and
+`unfree`, `broken` and `insecure` are flagged before anything is queued, and
 `curated:` warns that the app list already covers a name: the app row gets
 you the module, policies and defaults, where the bare package gets you a
 binary.

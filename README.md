@@ -21,7 +21,7 @@ widget, all driven from the keyboard on a real machine.
 - **Apps and Services** — the curated catalogue by category, with each entry's
   note, showing what is on, off and queued. `SPACE` toggles.
 - **Selection** — the packages nixarchy manages, and `/` to search the whole
-  nixpkgs index for more, with `unfree` and `broken` flagged
+  nixpkgs index for more, with `unfree`, `broken` and `insecure` flagged
   before anything is queued, and a warning when the curated app list already
   covers a name (the app row gets you the module; the bare package gets you a
   binary).

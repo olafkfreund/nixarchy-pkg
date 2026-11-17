@@ -42,7 +42,10 @@ PATH="$QUIET:$PATH"; export PATH
 FIXSTUB=$(mktemp -d)
 printf '#!/bin/sh\noptionsjson=%s\n' "$HERE/tests/fixtures/options.json" >"$FIXSTUB/nixarchy-search"
 chmod +x "$FIXSTUB/nixarchy-search"
-fx() { PATH="$FIXSTUB:$PATH" "$ADAPTER" "$@"; }
+# Its own empty cache too: a real options cache (from `options refresh`) would
+# answer before the fixture catalogue and fail every fixture-option check.
+FIXCACHE=$(mktemp -d)
+fx() { XDG_CACHE_HOME="$FIXCACHE" PATH="$FIXSTUB:$PATH" "$ADAPTER" "$@"; }
 
 # A selection of this machine's own catalogue, in a directory that is thrown
 # away afterwards.
@@ -3179,6 +3182,6 @@ echo
 check "no catalogue toggle wrote into HOME" \
   test -z "$(find "$THOME" -mindepth 1 -print -quit)"
 find "$THOME" -mindepth 1 -printf '  in the scratch HOME: %P\n'
-rm -rf "$XDG_STATE_HOME" "$THOME" "$QUIET" "$FIXSTUB"
+rm -rf "$XDG_STATE_HOME" "$THOME" "$QUIET" "$FIXSTUB" "$FIXCACHE"
 if [ "$fails" -gt 0 ]; then echo "$fails failed"; exit 1; fi
 echo "all passed"
