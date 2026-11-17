@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 94
 spec: spec/2026-11-16-94-insecure-rows.md
 coders:
