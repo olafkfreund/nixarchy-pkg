@@ -318,6 +318,14 @@ not run), and the reviews with their classified findings.
   missing-template reason on a host with no template (up to 10 s if apply
   hangs there). Accepted.
 
+## Deviations
+
+- Step 5c: removing one `HOME_PLAN=` line, or reverting `user_scope_note` to call
+  `home_plan` again, fails the `bob` count rows as well as the unowned ones.
+- The 49-row fixture-option baseline did not appear with a fresh
+  `XDG_CACHE_HOME`; it came from the host's real options cache, and PR #112
+  fixes it on main.
+
 ## Rollback
 
 Plain edits to six files and a new fixture, no state: `git revert` the fix

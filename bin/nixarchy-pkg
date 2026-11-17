@@ -45,6 +45,7 @@
 # and the panel parses whatever this prints.
 
 set -euo pipefail
+unset HOME_PLAN
 umask 077
 
 readonly STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/nixarchy"
@@ -416,7 +417,7 @@ user_scope() {
   [ -f "$(home_template)" ] && [ -r "$(home_template)" ] || { printf '%s' "$NO_HOME_TEMPLATE"; return; }
   case "$HOME_MODE" in
     plan|blind)
-      plan=$(home_plan)
+      plan=${HOME_PLAN-$(home_plan)}
       text=$(jq -r '.unavailable // .error // (select(.owner != null and .owner != .caller)
         | "home.nix belongs to \(.owner); ask \(.owner) to apply, or run nixarchy-apply --release-home to give the host up") // empty' <<<"$plan")
       if [ -n "$text" ]; then printf '%s' "$text"; return; fi ;;
@@ -450,7 +451,7 @@ user_scope_note() {
     n='options were read before useGlobalPkgs was recorded; run options refresh'
     out=${out:+$out; }$n
   fi
-  if [ "$HOME_MODE" = plan ] && home_plan | jq -e '.owner == null and has("action")' >/dev/null 2>&1; then
+  if [ "$HOME_MODE" = plan ] && printf '%s' "${HOME_PLAN-$(home_plan)}" | jq -e '.owner == null and has("action")' >/dev/null 2>&1; then
     n='the first apply with an edited home.nix makes you the owner'
     out=${out:+$out; }$n
   fi
@@ -679,6 +680,7 @@ cmd_search() {
   facts=$(index_facts)
   stale=$(jq -r '.status != "fresh"' <<<"$facts")
   options_resolve
+  HOME_PLAN=$(home_plan)
   user_reason=$(user_scope)
   if [ -z "$user_reason" ]; then user_note=$(user_scope_note); fi
   [ -n "$user_reason" ] || user_available=true
@@ -1947,6 +1949,8 @@ private_dir() {
   printf -v "$1" '%s' "$d"
 }
 
+# shortcut: apply reads the live home.nix, the snapshot copy is earlier, so an edit between them can give a
+# wrong refuse that check answers before the probe; the panel drops it as stale, upgrade if that stops being enough.
 # snapshot_selection DIR -- cp -L every existing part to DIR/<p>.nix and draft to DIR/packages/.
 snapshot_selection() {
   local p f
@@ -2515,7 +2519,7 @@ cmd_check() {
       elif [ "$(jq -r '.action == "refuse"' <<<"$plan")" = true ]; then
         verdict=fails; error=$(jq -r .message <<<"$plan"); check_answer
       elif [ "$(jq -r 'has("unavailable")' <<<"$plan")" = true ]; then
-        if [ -f "$CHECKDIR/snap/home.nix" ]; then reason=$(jq -r .unavailable <<<"$plan"); check_answer; fi
+        if [ "$HOME_MODE" = plan ] || [ -f "$CHECKDIR/snap/home.nix" ]; then reason=$(jq -r .unavailable <<<"$plan"); check_answer; fi
       else render_user=$(jq -r '.renderUser // ""' <<<"$plan"); fi ;;
   esac
   if [ -n "$render_user" ] && { [ ! -f "$tpl" ] || [ ! -r "$tpl" ]; }; then
@@ -2773,6 +2777,7 @@ cmd_state() {
   facts=$(index_facts)
   stale=$(jq -r '.status != "fresh"' <<<"$facts")
   options_resolve
+  HOME_PLAN=$(home_plan)
   user_reason=$(user_scope)
   if [ -z "$user_reason" ]; then user_note=$(user_scope_note); fi
   [ -n "$user_reason" ] || user_available=true
