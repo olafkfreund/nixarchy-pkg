@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 105
 spec: spec/2026-11-17-105-search-version.md
 coders:
