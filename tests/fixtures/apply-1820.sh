@@ -4,6 +4,7 @@
 # tests/adapter.sh diffs it against the installed apply when there is one. The
 # part loop, the --release-home label and the --home-plan arm are stand-ins
 # (the arm is the contract in spec/2026-11-17-103-follow-home-owner.md, section 1).
+# The seed it classifies against comes from NIXARCHY_FAKE_SEED (tests/fixtures/home-seed.nix).
 set -o errexit
 set -o nounset
 set -o pipefail
@@ -107,8 +108,8 @@ home_plan_arm() {
   caller=$(id -un)
   valid_user "$caller" || { err_json "nixarchy-apply: invalid user name: $caller"; return 1; }
   snapshot_home || { err_json "nixarchy-apply: cannot read $srcdir/home.nix"; return 1; }
-  [ -r "${NIXARCHY_HOME_TEMPLATE:?}" ] || { err_json "nixarchy-apply: cannot read the home seed"; return 1; }
-  classify_home "$NIXARCHY_HOME_TEMPLATE"
+  [ -r "${NIXARCHY_FAKE_SEED:?}" ] || { err_json "nixarchy-apply: cannot read the home seed"; return 1; }
+  classify_home "$NIXARCHY_FAKE_SEED"
   read_owner 2>"$pinned/err" || { err_json "$(sed -n '1p' "$pinned/err")"; return 1; }
   action=$(home_decide "$owner" "$caller" "$home_state")
   case "$action" in

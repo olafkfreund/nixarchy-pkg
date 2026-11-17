@@ -2952,6 +2952,11 @@ if apply103=$(command -v nixarchy-apply) && grep -q '^home_decide()' "$apply103"
 else
   echo "  skip  fixture drift (no installed nixarchy-apply with home_decide and --home-plan here)"
 fi
+if [ -r "$TEMPLATES/home-template.nix" ]; then
+  check "fixture's home seed equals the installed home template" cmp -s "$HERE/tests/fixtures/home-seed.nix" "$TEMPLATES/home-template.nix"
+else
+  echo "  skip  home seed drift (no installed home template here)"
+fi
 A103=$O62/a103; export A103
 mkdir -p "$A103"/{plan,blind,legacy,none,idbin,cache/nixarchy,fl/nixarchy,cfg/nixarchy}
 touch "$A103/fl/flake.nix"; printf '{"nodes":{}}\n' >"$A103/fl/flake.lock"
@@ -2966,12 +2971,12 @@ printf '#!/bin/sh\n[ "$1" = -un ] && { echo "$CALLER103"; exit 0; }\nexec %s "$@
 own103() { local mode=$1; shift
   env PATH="$A103/$mode:$A103/idbin:$O62/bin:$FIXSTUB:$PATH" CALLER103="${CALLER103:-bob}" \
     XDG_CONFIG_HOME="$A103/cfg" XDG_STATE_HOME="$O62/state" XDG_CACHE_HOME="$A103/cache" \
-    NIXARCHY_FLAKE="${FLAKE103:-$A103/fl}" NIXARCHY_HOME_TEMPLATE="${TPL103:-$HERE/tests/fixtures/home-apps-template.nix}" "$ADAPTER" "$@"; }
+    NIXARCHY_FLAKE="${FLAKE103:-$A103/fl}" NIXARCHY_FAKE_SEED="$HERE/tests/fixtures/home-seed.nix" NIXARCHY_HOME_TEMPLATE="${TPL103:-$HERE/tests/fixtures/home-apps-template.nix}" "$ADAPTER" "$@"; }
 scene103() { # OWNER (name or "") FILE (seed|edited|absent)
   rm -f "$A103/fl/nixarchy-apps.nix" "$A103/cfg/nixarchy/home.nix"
   [ -z "$1" ] || printf '{ ... }: {\n  home-manager.users."%s".imports = [\n    ./nixarchy/home.nix\n  ];\n}\n' "$1" >"$A103/fl/nixarchy-apps.nix"
   case $2 in
-    seed) cp "$HERE/tests/fixtures/home-apps-template.nix" "$A103/cfg/nixarchy/home.nix" ;;
+    seed) cp "$HERE/tests/fixtures/home-seed.nix" "$A103/cfg/nixarchy/home.nix" ;;
     edited) printf '# edited by the caller\n{ pkgs, ... }: { home.packages = with pkgs; [ ]; }\n' >"$A103/cfg/nixarchy/home.nix" ;;
   esac
   printf '{ ... }: { }\n' >"$A103/cfg/nixarchy/apps.nix"
@@ -3001,16 +3006,7 @@ scene103 alice absent
 rm -f "$O62/generated.nix" "$O62/generated-home.nix"
 NIX_MODE=capture own103 plan check >/dev/null
 check "owner keep without caller home imports owner" grep -q 'home-manager.users."alice"' "$O62/generated.nix"
-mkdir -p "$A103/tplguard"
-cat >"$A103/tplguard/nixarchy-apply" <<EOF
-#!/usr/bin/env bash
-case "\${1-}" in
-  --home-plan) NIXARCHY_HOME_TEMPLATE="$HERE/tests/fixtures/home-apps-template.nix" exec "$A103/plan/nixarchy-apply" "\$@" ;;
-esac
-exec "$A103/plan/nixarchy-apply" "\$@"
-EOF
-chmod +x "$A103/tplguard/nixarchy-apply"
-check "owner keep requires template" jq -e '.verdict == "unknown" and (.reason | contains("home template is not installed"))' <<<"$(TPL103="$O62/none.nix" own103 tplguard check)"
+check "owner keep requires template" jq -e '.verdict == "unknown" and (.reason | contains("home template is not installed"))' <<<"$(TPL103="$O62/none.nix" own103 plan check)"
 scene103 alice edited
 before=$(wc -l <"$O62/nix.calls")
 check "refuse fails check" jq -e '.verdict == "fails" and (.error | contains("belongs to alice"))' <<<"$(NIX_MODE=capture own103 plan check)"
@@ -3032,6 +3028,28 @@ for malformed in exit2 text v2 noowner owner42 nullmsg twolines badstate badrend
   check "malformed $malformed check is unknown" jq -e '.verdict == "unknown" and (.reason | contains("no usable answer"))' <<<"$(NIXARCHY_FAKE_PLAN=$malformed own103 plan check)"
   check "malformed $malformed disables scope" jq -e '.userScope.reason | contains("no usable answer")' <<<"$(NIXARCHY_FAKE_PLAN=$malformed own103 plan state)"
 done
+# an unusable --home-plan answer is unknown even with no caller home.nix (#110)
+scene103 alice absent
+before=$(wc -l <"$O62/nix.calls")
+check "unusable plan without caller home is unknown" jq -e '.verdict == "unknown" and (.reason | contains("no usable answer"))' <<<"$(NIXARCHY_FAKE_PLAN=exit2 NIX_MODE=capture own103 plan check)"
+check "unusable plan avoids flake work" not grep -qvE ' config show ' <(sed -n "$((before + 1)),\$p" "$O62/nix.calls")
+# one --home-plan call per command: a copy of the plan fake that counts them
+mkdir -p "$A103/count"
+# shellcheck disable=SC2016 # the fake expands A103 when it runs
+sed '1a [ "${1-}" != --home-plan ] || echo x >>"$A103/count.log"' "$A103/plan/nixarchy-apply" >"$A103/count/nixarchy-apply"
+chmod +x "$A103/count/nixarchy-apply"
+plancalls() { : >"$A103/count.log"; NIX_MODE=pass own103 count "$@" >/dev/null; wc -l <"$A103/count.log"; }
+for who in alice bob ""; do
+  scene103 "$who" edited
+  check "state makes one plan call (owner '$who')" test "$(plancalls state)" = 1
+  check "search makes one plan call (owner '$who')" test "$(plancalls search git)" = 1
+  check "pending makes one plan call (owner '$who')" test "$(plancalls pending)" = 1
+done
+scene103 "" edited
+check "check makes two plan calls" test "$(plancalls check)" = 2
+# an inherited HOME_PLAN must not stand in for the live answer
+scene103 alice seed
+check "inherited HOME_PLAN does not skip the owner check" jq -e '.ok == false and (.error | contains("belongs to alice"))' <<<"$(HOME_PLAN='{}' own103 plan pkg add --scope user git)"
 scene103 "" edited
 NIXARCHY_FAKE_PLAN=extra NIX_MODE=capture own103 plan check >/dev/null
 check "extra plan keys still allow claim" cmp -s "$O62/generated.nix" <(sed -e 's|@USER@|bob|g' -e 's|@IMPORTS@| ./nixarchy/apps.nix|g' "$HERE/tests/fixtures/home-apps-template.nix")
@@ -3089,7 +3107,7 @@ EOF
 chmod +x "$A103/gitshim/git"
 race103() { env PATH="$A103/gitshim:$A103/plan:$A103/idbin:$O62/bin:$FIXSTUB:$PATH" CALLER103=bob \
   XDG_CONFIG_HOME="$A103/cfg" XDG_STATE_HOME="$O62/state" XDG_CACHE_HOME="$A103/cache" \
-  NIXARCHY_FLAKE="$A103/fl" NIXARCHY_HOME_TEMPLATE="$HERE/tests/fixtures/home-apps-template.nix" NIX_MODE=pass "$ADAPTER" check; }
+  NIXARCHY_FLAKE="$A103/fl" NIXARCHY_FAKE_SEED="$HERE/tests/fixtures/home-seed.nix" NIXARCHY_HOME_TEMPLATE="$HERE/tests/fixtures/home-apps-template.nix" NIX_MODE=pass "$ADAPTER" check; }
 check "racing flake home uses snapshot" jq -e '.verdict == "evaluates"' <<<"$(race103)"
 check "racing check rendered pre-race home" cmp -s "$O62/generated-home.nix" "$A103/home.orig"
 check "racing check did not render changed home" not grep -q racing "$O62/generated-home.nix"
