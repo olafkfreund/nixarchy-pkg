@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 105
 intent: intent/2026-11-17-105-search-version.md
 ---
