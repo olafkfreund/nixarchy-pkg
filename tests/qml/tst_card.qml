@@ -41,6 +41,11 @@ TestCase {
     { attr: "insecure-search", flags: ["insecure"],
       summary: "a search row, no channel" }
   ]
+  property var versionedSearch: [
+    { kind: "pkg", name: "ripgrep", summary: "Utility that combines usability", type: "",
+      flags: ["unfree"], scope: "system", version: "15.2.0",
+      preview: "ripgrep  15.2.0\nctrl-t tries it now\nversion:  15.2.0" }
+  ]
   // A QtObject, so a test can set tab and cursor and Card sees it change.
   QtObject {
     id: fakeModel
@@ -793,6 +798,23 @@ TestCase {
     compare(second(5), "2.0  ")
     compare(second(1), "")
     compare(second(3), "")
+  }
+
+  function test_search_row_shows_its_version() {
+    failOnWarning(/Binding loop detected/)
+    useRows(versionedSearch, 2)
+    var pane = byName(card, "preview")
+    var lv = find(card, "QQuickListView")
+    for (var width of [800, 700]) {
+      win.width = width
+      tryCompare(pane, "visible", width >= 760); wait(150)
+      var delegate = lv.itemAtIndex(0)
+      var row = find(delegate, "QQuickRow")
+      var ts = elidables(delegate, [])
+      var summary = ts[ts.length - 1]
+      compare(summary.text, "15.2.0  Utility that combines usability")
+      verify(summary.x + summary.width - row.width <= 0.5, "row fits at " + width + " px")
+    }
   }
 
   function test_channel_tag_tones() {
