@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 110
 intent: intent/2026-11-17-110-home-plan-followups.md
 ---
