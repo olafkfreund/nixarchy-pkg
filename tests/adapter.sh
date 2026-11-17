@@ -2978,6 +2978,7 @@ check "keep imports owner" grep -q 'home-manager.users."alice"' "$O62/generated.
 check "keep uses flake home" cmp -s "$O62/generated-home.nix" "$A103/fl/nixarchy/home.nix"
 check "keep does not use caller home" not cmp -s "$O62/generated-home.nix" "$A103/cfg/nixarchy/home.nix"
 scene103 alice absent
+rm -f "$O62/generated.nix" "$O62/generated-home.nix"
 NIX_MODE=capture own103 plan check >/dev/null
 check "owner keep without caller home imports owner" grep -q 'home-manager.users."alice"' "$O62/generated.nix"
 mkdir -p "$A103/tplguard"
@@ -3080,6 +3081,7 @@ cp "$A103/fl/nixarchy-apps.nix" "$host103/nixarchy-apps.nix"
 printf '# host home\n' >"$host103/nixarchy/home.nix"
 sed 's/alice/mallory/' "$host103/nixarchy-apps.nix" >"$A103/fl/nixarchy-apps.nix"
 check "host layout names host owner" jq -e '.userScope.reason | contains("belongs to alice")' <<<"$(own103 plan state)"
+rm -f "$O62/generated.nix" "$O62/generated-home.nix"
 NIX_MODE=capture own103 plan check >/dev/null
 check "host layout imports host owner" grep -q 'home-manager.users."alice"' "$O62/generated.nix"
 check "host layout copies host home" cmp -s "$O62/generated-home.nix" "$host103/nixarchy/home.nix"

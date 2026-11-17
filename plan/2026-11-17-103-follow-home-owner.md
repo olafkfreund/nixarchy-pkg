@@ -821,6 +821,24 @@ Do not merge without the owner.
   (`shellcheck`, `qml-tests`, `qml-syntax`, `manifest`, `no-text-multiplier`,
   `no-hardcoded-colours`, `adapter`) was built explicitly instead: all rc 0.
 
+### After review (2026-11-17)
+
+- Fresh Opus found row 14 (`owner keep without caller home imports owner`)
+  and `host layout imports host owner` reading a `generated.nix` left by the
+  run before. Both now clear it first; a mutation that drops the owner render
+  without a caller `home.nix` now fails row 14.
+- The plan validator also checks the relations between fields: `claim` needs
+  no owner and an edited file, `copy` needs owner == caller, `refuse` needs an
+  edited file.
+- The manuals' "older nixarchy" sentence now says `check` is `unknown` only
+  when you have a `home.nix` (Decision 3).
+- Left as is, recorded for #1825's follow-up: a malformed `--home-plan`
+  answer with no caller `home.nix` still renders the plain stub (the plan's
+  table row); `state` and `check` each call `--home-plan` twice (10 s timeout
+  each); the test fake compares "seed" against the apps template rather than
+  apply's `nixarchy-home.nix`.
+- agy was not obtained: provider 503 ("No capacity available").
+
 ## Rollback
 
 Nothing is applied by this change: `check`, `state` and `pending` are

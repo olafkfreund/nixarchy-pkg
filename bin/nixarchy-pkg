@@ -393,9 +393,10 @@ home_plan() {
       and (.owner == null or (.owner | type == "string"))
       and (.renderUser == null or (.renderUser | type == "string"))
       and (.message == null or (.message | type == "string"))
-      and (if .action == "claim" or .action == "copy" then .renderUser == .caller and .message == null
+      and (if .action == "claim" then .owner == null and .state == "edited" and .renderUser == .caller and .message == null
+           elif .action == "copy" then .owner == .caller and .renderUser == .caller and .message == null
            elif .action == "keep" then .renderUser == .owner and .message == null
-           else (.owner | type == "string") and .owner != .caller and .renderUser == null and (.message | type == "string") end))
+           else (.owner | type == "string") and .owner != .caller and .state == "edited" and .renderUser == null and (.message | type == "string") end))
     ' <<<"$out" >/dev/null 2>&1; then
     jq -sc '.[0] | {version,owner,caller,state,action,renderUser,message}' <<<"$out"
   elif [ "$rc" = 1 ] && jq -se 'length == 1 and (.[0] | .version == 1 and (.error | type == "string") and ((keys | sort) == ["error","version"]))' <<<"$out" >/dev/null 2>&1; then
