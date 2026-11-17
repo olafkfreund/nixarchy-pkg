@@ -2821,6 +2821,13 @@ for setting62 in absent true false; do
   # shellcheck disable=SC2016 # jq receives expected through --argjson.
   check "DISCOVER records useGlobalPkgs $setting62" jq -e --argjson expected "$([ "$setting62" = true ] && printf true || printf false)" '.useGlobalPkgs == $expected' <<<"$out"
 done
+# A name ending in `$` comes back quoted from showOption; the prefix must still strip.
+discover62d=$(awk '/^readonly DISCOVER=/{f=1; sub(/^readonly DISCOVER=\047/, ""); print; next} f && /^}\047$/ {sub(/\047$/, ""); print; exit} f {print}' "$HERE/bin/nixarchy-pkg")
+discover62d=${discover62d//@USER@/svc\$}
+# shellcheck disable=SC2016 # the quoted text is Nix source.
+expr62d="let lib = (import $np62 {}).lib; c0 = lib.evalModules { modules = [ ({ lib, ... }: { options.home-manager.users = lib.mkOption { default = {}; type = lib.types.attrsOf (lib.types.submodule { options.demo = lib.mkOption { default = false; }; }); }; options.home-manager.useGlobalPkgs = lib.mkOption { type = lib.types.bool; }; config.home-manager.users.\"svc\\\$\" = {}; config.home-manager.useGlobalPkgs = true; }) ]; }; c = c0 // { pkgs = { inherit lib; }; }; in ($discover62d) c"
+out=$(nix eval --impure --json --expr "$expr62d" 2>/dev/null || printf '{}')
+check "DISCOVER strips the prefix for a user ending in dollar" jq -e '.perUser == true and ([.home[].name] | index("demo") != null)' <<<"$out"
 mkdir -p "$O62/apply-only"
 cp "$O62/bin/nixarchy-apply" "$O62/apply-only/nixarchy-apply"
 cat >"$O62/check-flake/flake.nix" <<EOF

@@ -107,7 +107,7 @@ in {
   inherit perUser;
   inherit useGlobalPkgs;
   home = if hm == null then null
-    else if perUser then doc "home-manager.users.${user}." hm.valueMeta.attrs.${user}.configuration.options
+    else if perUser then doc (lib.showOption [ "home-manager" "users" user ] + ".") hm.valueMeta.attrs.${user}.configuration.options
     else doc "<name>." (hm.type.getSubOptions [ ]);
 }'
 

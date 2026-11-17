@@ -511,6 +511,13 @@ Do not merge without the owner.
   branch was not exercised (agy). It now passes the user as a `printf`
   argument; all three cases fail against main's code.
 - `missing62` set `NIXARCHY_HOME_TEMPLATE` twice; the dead first assignment is gone.
+- Owner-approved addition after review (agy): with `$` names allowed, option
+  discovery missed the prefix for such a user, because `showOption` quotes the
+  name (`home-manager.users."svc$".x`). `DISCOVER` now builds the prefix with
+  `lib.showOption`; a new real-Nix case fails on the old prefix.
+- Out of scope, owner decision: nixarchy #1820 moved home handling out of
+  apply's part loop into a one-owner model, so `apply_has_home` no longer
+  detects it and `check` does not follow apply's owner choice. Follow-up issue.
 - Shellcheck covered `bin/nixarchy-pkg` and `tests/adapter.sh`; step 5.1
   also names `bin/nixarchy-pkg-keys`, which this change does not touch.
 - The fixture-drift mutation could not run here (no `/etc/nixarchy`); a
