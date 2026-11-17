@@ -343,7 +343,7 @@ Item {
             model: root.tagsOf(modelData)
             Rectangle {
               required property string modelData
-              readonly property color tone: modelData === "broken" ? Commons.Color.urgent
+              readonly property color tone: (modelData === "broken" || modelData === "insecure") ? Commons.Color.urgent
                                           : (modelData === "unfree" || modelData === "other") ? Commons.Color.accent
                                           : root.dim
               anchors.verticalCenter: parent.verticalCenter
@@ -577,9 +577,11 @@ Item {
         color: root.model && root.model.queued > 0 ? Commons.Color.menu.selectedText : root.dim
       }
 
-      // A stale index has no unfree or broken flags in it at all, so every
-      // package on it reads as free. Said plainly, with the key that fixes
-      // it, rather than left for the user to discover after a rebuild.
+      // A stale index may be missing flags (unfree, broken, insecure), or carry
+      // outdated ones: a Selection row gets none from it, a search row keeps
+      // what it cached. Either way an unmarked package is not known to be safe.
+      // Said plainly, with the key that fixes it, rather than left for the user to
+      // discover after a rebuild.
       Text {
         id: indexAge
         objectName: "indexAge"

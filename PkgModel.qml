@@ -885,7 +885,7 @@ QtObject {
     armedChannel = row.name
     message = row.name + " from the " + other + " channel."
       + " It brings its own closure: the two channels share no store paths,"
-      + " even at the same version. unfree and broken are not known for that"
+      + " even at the same version. unfree, broken and insecure are not known for that"
       + " channel. SHIFT+RETURN again to add it."
   }
 
