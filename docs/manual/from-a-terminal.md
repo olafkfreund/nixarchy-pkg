@@ -225,6 +225,11 @@ optional fields are omitted when the index is stale or missing, when it lacks
 the package, and for every `other` package; they are not part of the relied-on
 shape. An indexed package with no flags carries `flags: []`.
 
+A `search` row for a package may also carry `version`, from the index. It is
+omitted when the index has none (an index written by an older `nixarchy-search`,
+an unknown version) and on every `opt` and `app` row. It is not part of the
+relied-on shape.
+
 **Not relied on:** the exact wording of any `message` or `error` string.
 Those are a writer's own words, passed through unaltered, and the writers
 belong to nixarchy rather than to this plugin — they will improve their
