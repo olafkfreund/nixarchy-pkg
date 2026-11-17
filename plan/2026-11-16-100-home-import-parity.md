@@ -503,9 +503,14 @@ Do not merge without the owner.
   though step 2 listed it as unchanged: the nix-gated stub now supplies the
   `pkgsOther` argument the template expects, and main's hand-written stub
   does not. The fix commit makes it pass.
-- `missing home template skips flake evaluation` passes on the tests-only
-  commit, vacuously: the old code never reaches a template. It is a guard for
-  the new code, not a test-first case.
+- `missing home template skips flake evaluation` could never fail: the `nix`
+  stub logged a bare `run`. Review (Opus, agy) caught it. The stub now logs
+  its arguments, and the test allows only `check_answer`'s `nix config show`;
+  it fails against main's code and passes on the fix.
+- The DISCOVER test never expanded `$user62` (single quotes), so the per-user
+  branch was not exercised (agy). It now passes the user as a `printf`
+  argument; all three cases fail against main's code.
+- `missing62` set `NIXARCHY_HOME_TEMPLATE` twice; the dead first assignment is gone.
 - Shellcheck covered `bin/nixarchy-pkg` and `tests/adapter.sh`; step 5.1
   also names `bin/nixarchy-pkg-keys`, which this change does not touch.
 - The fixture-drift mutation could not run here (no `/etc/nixarchy`); a

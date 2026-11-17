@@ -2498,7 +2498,7 @@ touch "$O62/fl/flake.nix" "$O62/fl2/flake.nix"
 echo lock-one >"$O62/fl/flake.lock"; echo lock-one >"$O62/fl2/flake.lock"
 cat >"$O62/bin/nix" <<'NEOF'
 #!/usr/bin/env bash
-echo run >>"$O62/nix.calls"
+echo "run $*" >>"$O62/nix.calls"
 case "${NIX_MODE-ok}" in
   capture)
     for arg in "$@"; do
@@ -2758,12 +2758,13 @@ check "check generates the C import form" cmp -s "$O62/expected.nix" "$O62/gener
 rm -f "$O62/generated.nix"
 before=$(wc -l <"$O62/nix.calls")
 missing62() { env PATH="$O62/bin:$FIXSTUB:$PATH" XDG_CONFIG_HOME="$O62/config" XDG_STATE_HOME="$O62/state" \
-  XDG_CACHE_HOME="$O62/cache" NIXARCHY_FLAKE="$O62/fl" NIXARCHY_HOME_TEMPLATE="$HERE/tests/fixtures/home-apps-template.nix" \
+  XDG_CACHE_HOME="$O62/cache" NIXARCHY_FLAKE="$O62/fl" \
   NIXARCHY_HOME_TEMPLATE="$O62/none.nix" "$ADAPTER" "$@"; }
 out=$(NIX_MODE=capture missing62 check)
 check "missing home template makes check unknown" jq -e '.verdict == "unknown" and (.reason | contains("home template is not installed"))' <<<"$out"
 check "missing home template creates no generated module" test ! -e "$O62/generated.nix"
-check "missing home template skips flake evaluation" not grep -qE 'eval|build|flake' <(sed -n "$((before + 1)),\$p" "$O62/nix.calls")
+# check_answer's own `nix config show` query is allowed; any other call is flake work.
+check "missing home template skips flake evaluation" not grep -qvE ' config show ' <(sed -n "$((before + 1)),\$p" "$O62/nix.calls")
 out=$(missing62 state)
 check "missing home template disables user scope" jq -e '.userScope.available == false and (.userScope.reason | contains("home template is not installed"))' <<<"$out"
 mv "$O62/config/nixarchy/home.nix" "$O62/home.saved"
@@ -2815,7 +2816,7 @@ discover62=$(awk '/^readonly DISCOVER=/{f=1; sub(/^readonly DISCOVER=\047/, "");
 discover62=${discover62//@USER@/$user62}
 for setting62 in absent true false; do
   # shellcheck disable=SC2016 # the quoted text is Nix source.
-  expr62="let lib = (import $np62 {}).lib; enabled = $([ "$setting62" = true ] && printf 'true' || printf 'false'); c0 = lib.evalModules { modules = [ ({ lib, ... }: { options.demo = lib.mkOption { default = false; }; $([ "$setting62" = absent ] || printf 'options.home-manager.users = lib.mkOption { default = {}; type = lib.types.attrsOf (lib.types.submodule { options.demo = lib.mkOption { default = false; }; }); }; options.home-manager.useGlobalPkgs = lib.mkOption { type = lib.types.bool; }; config.home-manager.users.\"$user62\" = {}; config.home-manager.useGlobalPkgs = enabled;') }) ]; }; c = c0 // { pkgs = { inherit lib; }; }; in ($discover62) c"
+  expr62="let lib = (import $np62 {}).lib; enabled = $([ "$setting62" = true ] && printf 'true' || printf 'false'); c0 = lib.evalModules { modules = [ ({ lib, ... }: { options.demo = lib.mkOption { default = false; }; $([ "$setting62" = absent ] || printf 'options.home-manager.users = lib.mkOption { default = {}; type = lib.types.attrsOf (lib.types.submodule { options.demo = lib.mkOption { default = false; }; }); }; options.home-manager.useGlobalPkgs = lib.mkOption { type = lib.types.bool; }; config.home-manager.users.\"%s\" = {}; config.home-manager.useGlobalPkgs = enabled;' "$user62") }) ]; }; c = c0 // { pkgs = { inherit lib; }; }; in ($discover62) c"
   out=$(nix eval --impure --json --expr "$expr62" 2>/dev/null || printf '{}')
   # shellcheck disable=SC2016 # jq receives expected through --argjson.
   check "DISCOVER records useGlobalPkgs $setting62" jq -e --argjson expected "$([ "$setting62" = true ] && printf true || printf false)" '.useGlobalPkgs == $expected' <<<"$out"
