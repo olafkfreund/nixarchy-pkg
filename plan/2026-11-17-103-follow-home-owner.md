@@ -803,6 +803,24 @@ Do not merge without the owner.
 - Spec Verification 3 (drift against nixarchy `origin/main`): step 1's two
   extraction routes agree, recorded in the PR.
 
+### Deviations found while implementing (2026-11-17)
+
+- **Row 5(i):** `TPL103=$O62/none.nix` alone gives `fails`, not `unknown`,
+  because the fake apply checks the template itself. A test-only `tplguard`
+  wrapper gives the fake a valid template for `--home-plan` while `check`
+  sees the missing one.
+- **Fixture lock:** `fl/flake.lock` is `{"nodes":{}}`, not `lock-one`. Harmless.
+- **M7 is two mutations.** Reverting the template guard fails row 5(i) only;
+  reverting the fill guard (M7b) fails row 14 and `unowned seed renders stub`.
+- **M1, M2, M3** also fail related supersede, race and host-layout tests, as
+  expected from fingerprint-based checks.
+- **Three row-5 assertions** (`keep uses flake home`, `keep does not use caller
+  home`, `check sees changed flake home`) pass on main vacuously; the row's
+  failing assertion on main is `keep imports owner`, and M1/M3 make them bite.
+- `nix flake check` in a fresh git-init copy ran no build checks; each check
+  (`shellcheck`, `qml-tests`, `qml-syntax`, `manifest`, `no-text-multiplier`,
+  `no-hardcoded-colours`, `adapter`) was built explicitly instead: all rc 0.
+
 ## Rollback
 
 Nothing is applied by this change: `check`, `state` and `pending` are
