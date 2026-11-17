@@ -2509,18 +2509,18 @@ case "${NIX_MODE-ok}" in
   fail)  echo "error: attribute 'x' missing" >&2; exit 1 ;;
   nohost) echo "error: flake does not provide attribute 'nixosConfigurations.\"h\"'" >&2; exit 1 ;;
   sleep) sleep 5 ;;
-  nohm)  echo '{"nixos":[{"name":"programs.git.enable","type":"boolean","description":"","default":null,"example":null,"declarations":[],"readOnly":false}],"homeManager":false,"users":[],"perUser":false,"home":null}'; exit 0 ;;
+  nohm)  echo '{"nixos":[{"name":"programs.git.enable","type":"boolean","description":"","default":null,"example":null,"declarations":[],"readOnly":false}],"homeManager":false,"users":[],"perUser":false,"useGlobalPkgs":false,"home":null}'; exit 0 ;;
 esac
 cat <<JSON
 {"nixos":[{"name":"programs.git.enable","type":"boolean","description":"Whether to\nenable git","default":{"_type":"literalExpression","text":"false"},"example":null,"declarations":["/m.nix"],"readOnly":false}],
- "homeManager":true,"users":["$(command id -un)"],"perUser":true,
+ "homeManager":true,"users":["$(command id -un)"],"perUser":true,"useGlobalPkgs":true,
  "home":[{"name":"programs.hm.enable","type":"boolean","description":"hm","default":null,"example":null,"declarations":[],"readOnly":false}]}
 JSON
 NEOF
 chmod +x "$O62/bin/nix"
 export O62
 opt62() { env PATH="$O62/bin:$PATH" XDG_STATE_HOME="$O62/state" XDG_CACHE_HOME="${CACHE62:-$O62/cache}" \
-  NIXARCHY_FLAKE="${FLAKE62:-$O62/fl}" "$ADAPTER" "$@"; }
+  NIXARCHY_FLAKE="${FLAKE62:-$O62/fl}" NIXARCHY_HOME_TEMPLATE="$HERE/tests/fixtures/home-apps-template.nix" "$ADAPTER" "$@"; }
 mkdir -p "$O62/cache/nixarchy"
 printf 'pkg\tgit\tthe git\tflags\tprev\nopt\tprograms.git.enable\tstale row\tboolean\tOLD\n' >"$O62/cache/nixarchy/index.tsv"
 OC=$O62/cache/nixarchy
@@ -2531,6 +2531,8 @@ check "without a cache, search says source system and keeps the index rows" \
 
 out=$(opt62 options refresh)
 check "refresh answers ok from the flake" jq -e '.ok and .source == "flake" and .counts.system == 1 and .counts.user == 1 and .homeManager' <<<"$out"
+check "refresh answer records useGlobalPkgs" jq -e '.useGlobalPkgs == true' <<<"$out"
+check "refresh cache records useGlobalPkgs" jq -e '.useGlobalPkgs == true' "$OC/options/meta.json"
 check "it publishes system.json, user.json, rows.tsv and meta.json" \
   test -f "$OC/options/system.json" -a -f "$OC/options/user.json" -a -f "$OC/options/rows.tsv" -a -f "$OC/options/meta.json"
 # shellcheck disable=SC2016 # awk program, not shell
@@ -2579,7 +2581,8 @@ check "neither moves the published cache" test "$before" = "$(readlink "$OC/opti
 out=$(NIX_MODE=nohost opt62 options refresh)
 check "a flake without the host is named" jq -e '.ok == false and (.error | contains("nixosConfigurations"))' <<<"$out"
 mkdir -p "$O62/fl3"; touch "$O62/fl3/flake.nix"
-FLAKE62=$O62/fl3 NIX_MODE=nohm opt62 options refresh >/dev/null
+out=$(FLAKE62=$O62/fl3 NIX_MODE=nohm opt62 options refresh)
+check "no Home Manager refresh records useGlobalPkgs false" jq -e '.useGlobalPkgs == false' <<<"$out"
 # The installed apply supports home here, so describe must reach meta.json.
 cat >"$O62/bin/nixarchy-apply" <<'EOF'
 #!/bin/sh
@@ -2587,7 +2590,7 @@ for part in apps services advanced flatsnap home; do :; done
 EOF
 chmod +x "$O62/bin/nixarchy-apply"
 cache62=$(readlink -f "$OC/options")
-jq --arg u "$(id -un)" '.homeManager = true | .users = [$u]' "$cache62/meta.json" >"$O62/meta.json"
+jq --arg u "$(id -un)" '.homeManager = true | .users = [$u] | .useGlobalPkgs = true' "$cache62/meta.json" >"$O62/meta.json"
 mv "$O62/meta.json" "$cache62/meta.json"
 check "the user cache has no user.json" test ! -e "$cache62/user.json"
 check "describe --scope user with no user.json refuses, saying why" \
@@ -2691,8 +2694,13 @@ sed -i "/#@opt $1$/d" "$XDG_CONFIG_HOME/nixarchy/home.nix"
 EOF
 chmod +x "$O62/bin/nixarchy-apply" "$O62/bin/nixarchy-pkg-add" "$O62/bin/nixarchy-pkg-remove" "$O62/bin/nixarchy-opt-remove"
 scope62() { env PATH="$O62/bin:$FIXSTUB:$PATH" XDG_CONFIG_HOME="$O62/config" XDG_STATE_HOME="$O62/state" \
-  XDG_CACHE_HOME="$O62/cache" NIXARCHY_FLAKE="$O62/fl" "$ADAPTER" "$@"; }
+  XDG_CACHE_HOME="$O62/cache" NIXARCHY_FLAKE="$O62/fl" NIXARCHY_HOME_TEMPLATE="$HERE/tests/fixtures/home-apps-template.nix" "$ADAPTER" "$@"; }
 opt62 options refresh >/dev/null
+if [ -f /etc/nixarchy/home-apps-template.nix ]; then
+  check "template fixture equals the installed template" cmp -s "$HERE/tests/fixtures/home-apps-template.nix" /etc/nixarchy/home-apps-template.nix
+else
+  echo "  skip  template fixture vs /etc (no /etc/nixarchy/home-apps-template.nix here)"
+fi
 # A selection file alone must not enable a part missing from installed apply.
 cp "$O62/bin/nixarchy-apply" "$O62/apply-with-home"
 sed -i 's/ flatsnap home;/ flatsnap;/' "$O62/bin/nixarchy-apply"
@@ -2702,7 +2710,7 @@ check "check omits the home import without the installed apply part" not grep -q
 cp "$O62/apply-with-home" "$O62/bin/nixarchy-apply"
 check "pending includes home with the installed apply part" jq -e '.files | any(.file == "home")' <<<"$(scope62 pending)"
 NIX_MODE=capture scope62 check >/dev/null
-check "check includes the home import with the installed apply part" grep -q 'home-manager.users.*home.nix' "$O62/generated.nix"
+check "check includes the home import with the installed apply part" grep -qF ./nixarchy/home.nix "$O62/generated.nix"
 jq '. + {"programs.git.enable": {type:"boolean",description:"",default:null,example:null,declarations:[],readOnly:false}}' \
   "$OC/options/user.json" >"$O62/user.tmp"; mv "$O62/user.tmp" "$OC/options/user.json"
 printf 'opt\tprograms.git.enable\thm git\tboolean\tpreview\tuser\n' >>"$OC/options/rows.tsv"
@@ -2745,8 +2753,48 @@ check "state scopes every selection row" jq -e '([.apps[], .services[], .package
 check "pending pins include home" jq -e '.pins.home | length == 64' <<<"$(scope62 pending)"
 check "pending home rows carry user scope" jq -e '(.changes | any(.file == "home" and .scope == "user")) and (.files | any(.file == "home" and .scope == "user"))' <<<"$(scope62 pending)"
 NIX_MODE=capture scope62 check >/dev/null
-sed "s/@USER@/$(id -un)/" "$HERE/tests/fixtures/nixarchy-apps-home.nix" >"$O62/expected.nix"
+sed -e "s|@USER@|$(id -un)|g" -e 's|@IMPORTS@| ./nixarchy/apps.nix|g' "$HERE/tests/fixtures/home-apps-template.nix" >"$O62/expected.nix"
 check "check generates the C import form" cmp -s "$O62/expected.nix" "$O62/generated.nix"
+rm -f "$O62/generated.nix"
+before=$(wc -l <"$O62/nix.calls")
+missing62() { env PATH="$O62/bin:$FIXSTUB:$PATH" XDG_CONFIG_HOME="$O62/config" XDG_STATE_HOME="$O62/state" \
+  XDG_CACHE_HOME="$O62/cache" NIXARCHY_FLAKE="$O62/fl" NIXARCHY_HOME_TEMPLATE="$HERE/tests/fixtures/home-apps-template.nix" \
+  NIXARCHY_HOME_TEMPLATE="$O62/none.nix" "$ADAPTER" "$@"; }
+out=$(NIX_MODE=capture missing62 check)
+check "missing home template makes check unknown" jq -e '.verdict == "unknown" and (.reason | contains("home template is not installed"))' <<<"$out"
+check "missing home template creates no generated module" test ! -e "$O62/generated.nix"
+check "missing home template skips flake evaluation" not grep -qE 'eval|build|flake' <(sed -n "$((before + 1)),\$p" "$O62/nix.calls")
+out=$(missing62 state)
+check "missing home template disables user scope" jq -e '.userScope.available == false and (.userScope.reason | contains("home template is not installed"))' <<<"$out"
+mv "$O62/config/nixarchy/home.nix" "$O62/home.saved"
+NIX_MODE=capture missing62 check >/dev/null
+# shellcheck disable=SC2016 # the shell script receives its filename as $1.
+check "no home selection uses the plain stub with missing template" sh -c '! grep -qE "home-manager.users|@" "$1" && grep -qF "{apps,services,advanced,flatsnap}.nix" "$1"' sh "$O62/generated.nix"
+mv "$O62/home.saved" "$O62/config/nixarchy/home.nix"
+before=$(sha256sum <"$O62/config/nixarchy/home.nix")
+jq --arg u "$(id -un)" '.homeManager = true | .users = [$u] | .useGlobalPkgs = false' "$OC/options/meta.json" >"$O62/meta.tmp"; mv "$O62/meta.tmp" "$OC/options/meta.json"
+check "useGlobalPkgs false disables user scope" jq -e '.userScope.available == false and (.userScope.reason | contains("useGlobalPkgs"))' <<<"$(scope62 state)"
+out=$(scope62 pkg add --scope user git)
+check "useGlobalPkgs false refuses user package" jq -e '.ok == false and (.error | contains("useGlobalPkgs"))' <<<"$out"
+check "useGlobalPkgs refusal creates no transaction" test ! -e "$O62/state/nixarchy/pkg-recovery/open"
+check "useGlobalPkgs refusal leaves home alone" test "$before" = "$(sha256sum <"$O62/config/nixarchy/home.nix")"
+jq 'del(.useGlobalPkgs)' "$OC/options/meta.json" >"$O62/meta.tmp"; mv "$O62/meta.tmp" "$OC/options/meta.json"
+check "old options cache leaves user scope available with a note" jq -e '.userScope.available == true and (.userScope.note | contains("run options refresh"))' <<<"$(scope62 state)"
+check "old options cache notes refresh in search" jq -e '.userScope.note | contains("run options refresh")' <<<"$(scope62 search hm --kind opt)"
+opt62 options refresh >/dev/null
+real_id=$(command -v id)
+mkdir -p "$O62/idbin"
+cat >"$O62/idbin/id" <<EOF
+#!/bin/sh
+[ "\$1" = -un ] && { printf 'svc\$\\n'; exit 0; }
+exec "$real_id" "\$@"
+EOF
+chmod +x "$O62/idbin/id"
+out=$(PATH="$O62/idbin:$PATH" opt62 options refresh)
+check "user ending in dollar can refresh options" jq -e '.ok == true' <<<"$out"
+PATH="$O62/idbin:$PATH" NIX_MODE=capture scope62 check >/dev/null
+check "user ending in dollar fills home import" grep -qF 'home-manager.users."svc$"' "$O62/generated.nix"
+opt62 options refresh >/dev/null
 pin=$(sha256sum <"$O62/config/nixarchy/home.nix"); pin=${pin%% *}
 out=$(scope62 apply --pin "home=$pin")
 check "home pin accepted and forwarded" jq -e '.nixarchyPkgApply.ok' <<<"$out"
@@ -2758,36 +2806,82 @@ check "changed home pin refuses before copying" jq -e '.nixarchyPkgApply.ok == f
 # fixture and the local nixpkgs store path. No nixarchy writer is involved.
 mkdir -p "$O62/check-config/nixarchy" "$O62/check-flake"
 printf '{ ... }: { }\n' >"$O62/check-config/nixarchy/apps.nix"
-printf '{ ... }: { demo.flag = true; demo.list = [ "b" ]; }\n' >"$O62/check-config/nixarchy/home.nix"
+printf '{ pkgsOther, ... }: { demo.flag = true; demo.list = [ (if pkgsOther == null then "off" else "on") ]; }\n' >"$O62/check-config/nixarchy/home.nix"
 printf '{ ... }: { demo.flag = true; demo.list = [ "a" ]; }\n' >"$O62/check-flake/handwritten.nix"
 # Needs a working nix with a nixpkgs registry; the flake-check sandbox has neither.
 if np62=$(nix eval --raw nixpkgs#path 2>/dev/null) && [ -n "$np62" ]; then
 host62=$(uname -n); user62=$(id -un)
+discover62=$(awk '/^readonly DISCOVER=/{f=1; sub(/^readonly DISCOVER=\047/, ""); print; next} f && /^}\047$/ {sub(/\047$/, ""); print; exit} f {print}' "$HERE/bin/nixarchy-pkg")
+discover62=${discover62//@USER@/$user62}
+for setting62 in absent true false; do
+  # shellcheck disable=SC2016 # the quoted text is Nix source.
+  expr62="let lib = (import $np62 {}).lib; enabled = $([ "$setting62" = true ] && printf 'true' || printf 'false'); c0 = lib.evalModules { modules = [ ({ lib, ... }: { options.demo = lib.mkOption { default = false; }; $([ "$setting62" = absent ] || printf 'options.home-manager.users = lib.mkOption { default = {}; type = lib.types.attrsOf (lib.types.submodule { options.demo = lib.mkOption { default = false; }; }); }; options.home-manager.useGlobalPkgs = lib.mkOption { type = lib.types.bool; }; config.home-manager.users.\"$user62\" = {}; config.home-manager.useGlobalPkgs = enabled;') }) ]; }; c = c0 // { pkgs = { inherit lib; }; }; in ($discover62) c"
+  out=$(nix eval --impure --json --expr "$expr62" 2>/dev/null || printf '{}')
+  # shellcheck disable=SC2016 # jq receives expected through --argjson.
+  check "DISCOVER records useGlobalPkgs $setting62" jq -e --argjson expected "$([ "$setting62" = true ] && printf true || printf false)" '.useGlobalPkgs == $expected' <<<"$out"
+done
 mkdir -p "$O62/apply-only"
 cp "$O62/bin/nixarchy-apply" "$O62/apply-only/nixarchy-apply"
 cat >"$O62/check-flake/flake.nix" <<EOF
 { inputs.nixpkgs.url = "path:$np62"; outputs = { self, nixpkgs }: let
   lib = nixpkgs.lib;
   selection = lib.evalModules { modules = [
-    { options.home-manager.users = lib.mkOption { type = lib.types.attrsOf (lib.types.submodule {
-      options.imports = lib.mkOption { type = lib.types.listOf lib.types.path; default = []; };
-    }); }; }
+    ({ lib, ... }: let k = import ./knobs.nix; in {
+      options.home-manager.useGlobalPkgs = lib.mkOption { type = lib.types.bool; };
+      options.home-manager.users = lib.mkOption { default = {}; type = lib.types.attrsOf (lib.types.submodule {
+        options.imports = lib.mkOption { type = lib.types.listOf lib.types.raw; default = []; }; }); };
+      options.users.users = lib.mkOption { default = {}; type = lib.types.attrsOf lib.types.raw; };
+      options.assertions = lib.mkOption { type = lib.types.listOf lib.types.raw; default = []; };
+      options.programs.nixarchy.otherChannel.flake = lib.mkOption { default = null; };
+      options._module.args = lib.mkOption { type = lib.types.lazyAttrsOf lib.types.raw; };
+      config.home-manager.useGlobalPkgs = k.useGlobalPkgs;
+      config.users.users."$user62".isNormalUser = k.isNormalUser;
+      config.home-manager.users = lib.mkIf k.configuredElsewhere { "$user62".imports = []; };
+      config.programs.nixarchy.otherChannel.flake = k.otherFlake;
+      config._module.args = lib.mkIf (k.otherFlake != null) { pkgsOther = { sentinel = true; }; };
+    })
     ./nixarchy-apps.nix
   ]; };
   evaluated = lib.evalModules { modules = [
     { options.demo.flag = lib.mkOption { type = lib.types.bool; };
       options.demo.list = lib.mkOption { type = lib.types.listOf lib.types.str; }; }
-    (builtins.head selection.config.home-manager.users."$user62".imports)
+  ] ++ selection.config.home-manager.users."$user62".imports ++ [
     ./handwritten.nix
   ]; };
 in { nixosConfigurations."$host62".config.system.build.toplevel.drvPath =
-  if evaluated.config.demo.flag then toString (builtins.length evaluated.config.demo.list) else "0";
+  let failed = lib.filter (a: !a.assertion) selection.config.assertions;
+  in if failed != [] then throw (builtins.head failed).message
+     else if evaluated.config.demo.flag then lib.concatStringsSep "," evaluated.config.demo.list else "0";
 }; }
 EOF
+printf '{ useGlobalPkgs = true; isNormalUser = true; configuredElsewhere = true; otherFlake = null; }\n' >"$O62/check-flake/knobs.nix"
 check62() { env PATH="$O62/apply-only:$PATH" XDG_CONFIG_HOME="$O62/check-config" XDG_STATE_HOME="$O62/state" \
-  XDG_CACHE_HOME="$O62/cache" NIXARCHY_FLAKE="$O62/check-flake" "$ADAPTER" check; }
+  XDG_CACHE_HOME="$O62/cache" NIXARCHY_FLAKE="$O62/check-flake" NIXARCHY_HOME_TEMPLATE="$HERE/tests/fixtures/home-apps-template.nix" "$ADAPTER" check; }
 out=$(check62)
 check "check evaluates merged list definitions" jq -e '.verdict == "evaluates"' <<<"$out"
+for key62 in useGlobalPkgs isNormalUser configuredElsewhere; do
+  sed "s/$key62 = true/$key62 = false/" "$O62/check-flake/knobs.nix" >"$O62/check-flake/knobs.tmp"
+  mv "$O62/check-flake/knobs.tmp" "$O62/check-flake/knobs.nix"
+  out=$(check62)
+  case $key62 in
+    useGlobalPkgs) message62='home.nix needs home-manager.useGlobalPkgs = true' ;;
+    isNormalUser) message62='is not a normal user on this machine' ;;
+    configuredElsewhere) message62='has no Home Manager configuration of their own' ;;
+  esac
+  # shellcheck disable=SC2016 # jq receives message through --arg.
+  check "check reports $key62 assertion" jq -e --arg message "$message62" '.verdict == "fails" and (.error | contains($message))' <<<"$out"
+  sed "s/$key62 = false/$key62 = true/" "$O62/check-flake/knobs.nix" >"$O62/check-flake/knobs.tmp"
+  mv "$O62/check-flake/knobs.tmp" "$O62/check-flake/knobs.nix"
+done
+out=$(check62)
+check "check evaluates when home assertions pass" jq -e '.verdict == "evaluates"' <<<"$out"
+check "pkgsOther is off without another channel" jq -e '.verdict == "evaluates" and (.drvPath | contains("off"))' <<<"$out"
+sed 's/otherFlake = null/otherFlake = "x"/' "$O62/check-flake/knobs.nix" >"$O62/check-flake/knobs.tmp"
+mv "$O62/check-flake/knobs.tmp" "$O62/check-flake/knobs.nix"
+out=$(check62)
+check "pkgsOther is on with another channel" jq -e '.verdict == "evaluates" and (.drvPath | contains("on"))' <<<"$out"
+sed 's/otherFlake = "x"/otherFlake = null/' "$O62/check-flake/knobs.nix" >"$O62/check-flake/knobs.tmp"
+mv "$O62/check-flake/knobs.tmp" "$O62/check-flake/knobs.nix"
 printf '{ ... }: { demo.flag = false; demo.list = [ "a" ]; }\n' >"$O62/check-flake/handwritten.nix"
 out=$(check62)
 check "check reports a boolean conflict" jq -e '.verdict == "fails" and (.error | contains("conflicting definition values"))' <<<"$out"
