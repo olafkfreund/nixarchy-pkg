@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test fake of nixarchy-apply at nixarchy 74000e98 (modules/apps.nix). The block
+# Test fake of nixarchy-apply at nixarchy 2731c9cc (after #1829) (modules/apps.nix). The block
 # from select_home_src() to the end of home_decide() is copied verbatim, and
 # tests/adapter.sh diffs it against the installed apply when there is one. The
 # part loop, the --release-home label and the --home-plan arm are stand-ins
@@ -32,11 +32,22 @@ snapshot_home() {
 
 classify_home() {
   home_state=absent
-  if [ -n "$home_snap" ] && [ -f "$home_snap" ]; then
+  if [ -n "$home_snap" ]; then
+    if [ ! -f "$home_snap" ]; then
+      echo "nixarchy-apply: cannot compare home.nix with the seed" >&2
+      return 1
+    fi
+    local rc
     if cmp -s "$home_snap" "$1"; then
       home_state=seed
     else
-      home_state=edited
+      rc=$?
+      if [ "$rc" -eq 1 ]; then
+        home_state=edited
+      else
+        echo "nixarchy-apply: cannot compare home.nix with the seed" >&2
+        return 1
+      fi
     fi
   fi
 }
@@ -48,9 +59,13 @@ valid_user() {
 read_owner() {
   owner=""
   [ -f "$dest" ] || return 0
-  local candidates exact
-  candidates=$(grep -cE '^[[:space:]]*home-manager\.users\.' "$dest" || true)
-  exact=$(grep -cE '^[[:space:]]*home-manager\.users\."[^"]+"\.imports[[:space:]]*=' "$dest" || true)
+  local candidates exact rc
+  rc=0
+  candidates=$(grep -cE '^[[:space:]]*home-manager\.users\.' "$dest" 2>/dev/null) || rc=$?
+  [ "$rc" -le 1 ] || { echo "nixarchy-apply: cannot read $dest" >&2; return 1; }
+  rc=0
+  exact=$(grep -cE '^[[:space:]]*home-manager\.users\."[^"]+"\.imports[[:space:]]*=' "$dest" 2>/dev/null) || rc=$?
+  [ "$rc" -le 1 ] || { echo "nixarchy-apply: cannot read $dest" >&2; return 1; }
   if [ "$candidates" -eq 0 ]; then
     return 0
   fi

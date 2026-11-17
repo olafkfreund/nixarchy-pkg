@@ -2927,10 +2927,12 @@ check "user absent from home-manager.users has its own refusal" jq -e '.ok == fa
 
 echo "home owner (#103)"
 blk103() { awk '/^select_home_src\(\) \{/{f=1} f{print} f&&/^home_decide\(\) \{/{h=1} h&&/^}/{exit}' "$1"; }
-if apply103=$(command -v nixarchy-apply) && grep -q '^home_decide()' "$apply103"; then
+# Compare only with an apply as new as the fixture (it has --home-plan): an
+# older installed nixarchy is not drift, just a host that has not updated.
+if apply103=$(command -v nixarchy-apply) && grep -q '^home_decide()' "$apply103" && grep -qE '^[[:space:]]*--home-plan\)' "$apply103"; then
   check "fixture's home_decide block equals the installed apply's" cmp -s <(blk103 "$HERE/tests/fixtures/apply-1820.sh") <(blk103 "$apply103")
 else
-  echo "  skip  fixture drift (no installed nixarchy-apply with home_decide here)"
+  echo "  skip  fixture drift (no installed nixarchy-apply with home_decide and --home-plan here)"
 fi
 A103=$O62/a103; export A103
 mkdir -p "$A103"/{plan,blind,legacy,none,idbin,cache/nixarchy,fl/nixarchy,cfg/nixarchy}
