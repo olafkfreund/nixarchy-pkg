@@ -581,6 +581,22 @@ check "spaces around a word keep its ranking" jq -e --argjson other "$(stub_sear
 check "all search words must match" jq -e '.rows | length == 0' \
   <<<"$(stub_search -- "ssh nothinglikethis")"
 check "a blank search is refused" jq -e '.ok == false' <<<"$(stub_search -- "   ")"
+VCACHE=$(mktemp -d); mkdir -p "$VCACHE/nixarchy"
+printf 'pkg\tvfoo\tFoo\tunfree\tprev\t1.2.3\npkg\tvbar\tBar\t\tprev\t\npkg\tvold\tOld five\t\tprev\napp\tvapp\tApp\t\tprev\tLEAK\nopt\tvopt.enable\tOpt\tboolean\tprev\tLEAK\nflatpak\tvflat\tFlat\t\tprev\tLEAK\nnew\tvnew\tNew\t\tprev\tLEAK\n' \
+  > "$VCACHE/nixarchy/index.tsv"
+printf 'no-such-stamp\n' > "$VCACHE/nixarchy/stamp"
+out=$(XDG_CACHE_HOME="$VCACHE" "$ADAPTER" search -- v)
+check "a six-field package row carries its version" \
+  jq -e '.rows | map(select(.name == "vfoo"))[0].version == "1.2.3"' <<<"$out"
+check "an empty sixth field gives no version key" \
+  jq -e '.rows | map(select(.name == "vbar")) | length == 1 and (.[0] | has("version") | not)' <<<"$out"
+check "a five-field row gives no version key" \
+  jq -e '.rows | map(select(.name == "vold")) | length == 1 and (.[0] | has("version") | not)' <<<"$out"
+check "a row that is not a package never gets a version, whatever its sixth field" \
+  jq -e '.rows | map(select(.kind != "pkg")) | length == 4 and all(has("version") | not)' <<<"$out"
+check "a stale index keeps the version (a stamp that cannot match, so stale)" \
+  jq -e '.indexStale == true and (.rows | map(select(.name == "vfoo"))[0].version == "1.2.3")' <<<"$out"
+rm -rf "$VCACHE"
 SEARCHCFG=$(mktemp -d)
 mkdir -p "$SEARCHCFG/nixarchy"
 printf '{ ... }:\n{\n  x.y = true;  #@opt x.y\n  # x.z = ;  #@opt x.z\n}\n' >"$SEARCHCFG/nixarchy/apps.nix"
@@ -2560,6 +2576,8 @@ check "meta.json carries the stamp, flake, host and user" \
 out=$(opt62 search git --kind opt)
 check "search takes option rows from the cache, not the index" \
   jq -e '.options.source == "flake" and (.rows | length == 1) and .rows[0].summary == "Whether to enable git" and .rows[0].scope == "system"' <<<"$out"
+check "an option row from the cache never carries a version" \
+  jq -e '.rows | all(has("version") | not)' <<<"$out"
 check "state reports where the options came from" \
   jq -e '.optionsInfo.source == "flake" and .optionsInfo.stale == false' <<<"$(opt62 state)"
 out=$(NIX_MODE=change-lock opt62 options refresh)

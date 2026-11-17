@@ -704,7 +704,7 @@ cmd_search() {
             if (r < best) best = r
           }
           # Shorter names first within a rank: "git" beats "gitAndTools.git-extras"
-          print best, length($2), $1, $2, $3, $4, $5, (FILENAME == idx ? "system" : $6)
+          print best, length($2), $1, $2, $3, $4, $5, (FILENAME == idx ? "system" : $6), (FILENAME == idx && $1 == "pkg" ? $6 : "")
         }
       ' "$INDEX" ${rowsfile:+"$rowsfile"} | sort -t"$(printf '\t')" -k1,1n -k2,2n | head -n "$limit" | cut -f3-
     ) \
@@ -748,7 +748,8 @@ cmd_search() {
         # could not afford to look one up. Unescaped here; the panel draws
         # it as plain text.
         preview: ((.[4] // "") | gsub("\\\\n"; "\n"))
-      } + (if .[0] == "opt" then
+      } + (if (.[6] // "") != "" then {version: .[6]} else {} end)
+        + (if .[0] == "opt" then
         {set: (if $m[(.[5] // "system") + "\t" + .[1]] == null then null else $m[(.[5] // "system") + "\t" + .[1]].set end),
          current: (if $m[(.[5] // "system") + "\t" + .[1]] == null then null else $m[(.[5] // "system") + "\t" + .[1]].line end)}
         else {} end)))
