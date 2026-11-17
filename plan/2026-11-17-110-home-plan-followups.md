@@ -326,6 +326,13 @@ not run), and the reviews with their classified findings.
   `XDG_CACHE_HOME`; it came from the host's real options cache, and PR #112
   fixes it on main.
 
+- Step 8's call-count grep `execve(".*nixarchy-apply".*--home-plan` also matches
+  the `timeout` launch line (where `nixarchy-apply` is an argv element) and counts
+  2; `execve("[^"]*nixarchy-apply".*--home-plan` counts the real execs (1 for
+  `state` and `search`). The live check used the corrected pattern.
+- After merging main (#112), the suite has zero FAIL rows on this host; the
+  "49 baseline" wording in steps 0, 3 and 5 is historical.
+
 ## Rollback
 
 Plain edits to six files and a new fixture, no state: `git revert` the fix
