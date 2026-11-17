@@ -582,7 +582,7 @@ check "all search words must match" jq -e '.rows | length == 0' \
   <<<"$(stub_search -- "ssh nothinglikethis")"
 check "a blank search is refused" jq -e '.ok == false' <<<"$(stub_search -- "   ")"
 VCACHE=$(mktemp -d); mkdir -p "$VCACHE/nixarchy"
-printf 'pkg\tvfoo\tFoo\tunfree\tprev\t1.2.3\npkg\tvbar\tBar\t\tprev\t\npkg\tvold\tOld five\t\tprev\napp\tvapp\tApp\t\tprev\tLEAK\nopt\tvopt.enable\tOpt\tboolean\tprev\tLEAK\n' \
+printf 'pkg\tvfoo\tFoo\tunfree\tprev\t1.2.3\npkg\tvbar\tBar\t\tprev\t\npkg\tvold\tOld five\t\tprev\napp\tvapp\tApp\t\tprev\tLEAK\nopt\tvopt.enable\tOpt\tboolean\tprev\tLEAK\nflatpak\tvflat\tFlat\t\tprev\tLEAK\nnew\tvnew\tNew\t\tprev\tLEAK\n' \
   > "$VCACHE/nixarchy/index.tsv"
 printf 'no-such-stamp\n' > "$VCACHE/nixarchy/stamp"
 out=$(XDG_CACHE_HOME="$VCACHE" "$ADAPTER" search -- v)
@@ -592,8 +592,8 @@ check "an empty sixth field gives no version key" \
   jq -e '.rows | map(select(.name == "vbar")) | length == 1 and (.[0] | has("version") | not)' <<<"$out"
 check "a five-field row gives no version key" \
   jq -e '.rows | map(select(.name == "vold")) | length == 1 and (.[0] | has("version") | not)' <<<"$out"
-check "an app or option index row never gets a version, whatever its sixth field" \
-  jq -e '.rows | map(select(.kind != "pkg")) | length == 2 and all(has("version") | not)' <<<"$out"
+check "a row that is not a package never gets a version, whatever its sixth field" \
+  jq -e '.rows | map(select(.kind != "pkg")) | length == 4 and all(has("version") | not)' <<<"$out"
 check "a stale index keeps the version (a stamp that cannot match, so stale)" \
   jq -e '.indexStale == true and (.rows | map(select(.name == "vfoo"))[0].version == "1.2.3")' <<<"$out"
 rm -rf "$VCACHE"

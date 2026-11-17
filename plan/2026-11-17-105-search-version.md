@@ -289,6 +289,17 @@ it did not run).
 - `nix flake check` green.
 - Proof of failure on main and the three mutations: step 5.
 
+## Deviations (after review)
+
+- Fresh Opus: step 1 said the index writes flatpak rows as `app`; they are
+  kind `flatpak`, and `new` rows exist too (nixarchy `modules/apps.nix`
+  292-324). The fixture now has `flatpak` and `new` rows with `LEAK` in `$6`,
+  and the check covers every row that is not a package (4 rows). A guard that
+  excludes only `opt` and `app` now fails it.
+- The manual says `version` is omitted "on every row that is not a package",
+  not "on every `opt` and `app` row".
+- agy was not obtained: provider 503 ("No capacity available").
+
 ## Rollback
 
 Plain edits to four files and no state: `git revert` the fix commit (the two

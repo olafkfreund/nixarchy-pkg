@@ -227,7 +227,7 @@ shape. An indexed package with no flags carries `flags: []`.
 
 A `search` row for a package may also carry `version`, from the index. It is
 omitted when the index has none (an index written by an older `nixarchy-search`,
-an unknown version) and on every `opt` and `app` row. It is not part of the
+an unknown version) and on every row that is not a package. It is not part of the
 relied-on shape.
 
 **Not relied on:** the exact wording of any `message` or `error` string.
