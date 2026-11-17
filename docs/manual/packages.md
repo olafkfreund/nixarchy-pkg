@@ -63,8 +63,8 @@ it. It will still not build.
 
 **`insecure`** — nixpkgs lists a known vulnerability for this package, or
 marks it insecure. You can still add it, and it will usually refuse to
-build until you permit it by name. The detail pane beside the row says
-"Marked INSECURE in nixpkgs."
+build until you permit it by name and version. On a search result, the
+detail pane beside the row says "Marked INSECURE in nixpkgs."
 
 **`curated: <name>`** — the app catalogue already covers this name. Worth
 heeding: the app row gets you the NixOS module with its policies and

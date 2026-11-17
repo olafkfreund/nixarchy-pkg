@@ -251,6 +251,18 @@ steps Codex did (1-4), lists the failing-on-main line from step 5a.
 - `nix flake check` green.
 - Proof of failure on main and mutation proof: step 5.
 
+## Deviations (after review)
+
+- Review (Opus, agy) found four sentences the plan missed, all fixed:
+  `README.md:44` (the other-channel confirmation now lists `insecure`, as
+  `PkgModel.qml:888` does); `packages.md:66` (the detail pane shows the
+  INSECURE line on a search result only, since Selection rows carry no
+  preview); "permit it by name and version" (`permittedInsecurePackages`
+  takes `name-version`); and the comment above `addFromOtherChannel()`.
+- Commit subjects differ in wording from step 6; order and file split match.
+- Left alone, owner's call: `README.md:23-24` and `assets/showcase/README.md:44`
+  ("`unfree` and `broken` flagged", incomplete rather than false).
+
 ## Rollback
 
 Plain edits to four files and no state: `git revert` the fix commit (the test
