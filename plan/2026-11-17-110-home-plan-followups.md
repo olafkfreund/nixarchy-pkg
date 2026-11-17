@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 110
 spec: spec/2026-11-17-110-home-plan-followups.md
 coders:
