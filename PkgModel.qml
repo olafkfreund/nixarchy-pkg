@@ -471,6 +471,58 @@ Singleton {
     }
   }
 
+  // A NixOS option write, started by OptionForm. It lives here, not in the
+  // form, so unloading the menu cannot kill it or strand `busy`.
+  signal optionWritten(string path, string scope, bool ok, string error)
+  property string _optPath: ""
+  property string _optScope: ""
+  property bool _optAnswered: true
+
+  function writeOption(command, path, scope) {
+    busy = true
+    _optPath = path; _optScope = scope; _optAnswered = false
+    _optWriter.command = command
+    _optWriter.running = true
+  }
+
+  property Process _optWriter: Process {
+    stdout: StdioCollector {
+      onStreamFinished: {
+        root.busy = false
+        root._optAnswered = true
+        var data
+        try { data = JSON.parse(text) } catch (e) { data = null }
+        if (data === null) {
+          // No answer is not a yes (#28).
+          root.optionWritten(root._optPath, root._optScope, false,
+                             "the adapter gave no answer; nothing is known to be written")
+        } else if (data.ok === false) {
+          // The adapter parse-checks the file and restores its backup, so a
+          // refusal means nothing was written.
+          root.optionWritten(root._optPath, root._optScope, false,
+                             String(data.error || data.message || "that value was refused"))
+        } else {
+          // The file is written whether or not anyone is watching: the panel
+          // must not keep showing pre-write state (#43).
+          if (data.message) root.message = String(data.message)
+          root.refresh()
+          root.optionWritten(root._optPath, root._optScope, true, "")
+        }
+      }
+    }
+    // An adapter that never answers -- missing, not executable, killed --
+    // must not leave busy set (#43). Unblocking is not reporting success.
+    onExited: function (code, status) {
+      root.busy = false
+      if (!root._optAnswered) {
+        root._optAnswered = true
+        root.optionWritten(root._optPath, root._optScope, false,
+                           "the adapter ended without answering (exit " + code
+                           + "); nothing is known to be written")
+      }
+    }
+  }
+
   // Reindex only writes the cache; its own process leaves the writer free.
   // The answer carries indexStale, so no state read races with _reader.
   property Process _reindexer: Process {

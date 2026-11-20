@@ -265,6 +265,22 @@ TestCase {
     compare(PkgModel._apply.running, true); compare(PkgModel._writer.running, true)
     compare(PkgModel.applying, true)
   }
+  function test_s4_armed_state_is_dropped_on_close_and_a_late_result_survives() {
+    fresh()
+    pkg.armingState = "armed"; pkg.armedKind = "here"; pkg.armedApply = "here"; pkg.message = "press a again"
+    menu.close()
+    compare(pkg.armingState, ""); compare(pkg.armedApply, ""); compare(pkg.message, "")
+    pkg.message = "applied"
+    menu.open("{}"); wait(30)
+    compare(pkg.message, "applied", "open's reset does not disarm over a late result")
+  }
+  function test_s5_unload_without_close_drops_view_state() {
+    fresh()
+    pkg.armingState = "armed"; pkg.armedKind = "here"; pkg.armedApply = "here"; pkg.message = "press a again"
+    panel.contentItem.parent = null; menu.destroy(); menu = null
+    wait(30)
+    compare(PkgModel.armingState, ""); compare(PkgModel.message, "")
+  }
   function test_t_shift_a_starts_terminal_apply() {
     fresh()
     verify(keys.activeFocus && !search.activeFocus)

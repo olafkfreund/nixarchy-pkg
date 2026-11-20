@@ -111,18 +111,21 @@ Item {
     // deaf to every key with nothing on screen to explain why.
     if (form.open) form.finish()
     // Cleared on the way out, so what is left is only what arrives after.
-    // An armed or reading message belongs to this view and goes with it.
+    // Armed state and its message belong to this view and go with it; if
+    // they stayed, the reset in open() would disarm and wipe a late result.
+    pkg.disarm()
     pkg.message = ""
     root.opened = false
   }
+
+  // Unloaded without close(): drop this view's armed state and message the
+  // same way. Skipped after close(), so a late result is kept.
+  Component.onDestruction: if (root.opened) { pkg.disarm(); pkg.message = "" }
 
   function toggle() {
     if (root.opened) root.close()
     else root.open("{}")
   }
-
-  // A row's file, opened the way the rest of Omarchy opens one.
-  Process { id: editor }
 
   // The terminal apply closes the menu only once it has really started: it
   // may be waiting for a running check to stop.
@@ -570,8 +573,8 @@ Item {
     }
     if (pkg.queueTab) {
       if (row.path) {
-        editor.command = ["omarchy-launch-editor", String(row.path)]
-        editor.running = true
+        // Detached, so unloading the menu cannot kill the editor launch.
+        Quickshell.execDetached(["omarchy-launch-editor", String(row.path)])
       } else if (row.detail) {
         detailView.contentY = 0
         pkg.detailText = String(row.detail)

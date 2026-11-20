@@ -109,7 +109,7 @@ FocusScope {
         } else root.seed()
       }
     }
-    // Same reason as writeProc: without this a describe that never answers
+    // Without this a describe that never answers
     // leaves the form open showing neither an option nor a reason (#43).
     onExited: function (code, status) {
       if (root.open && root.error === "" && !root.option.path)
@@ -118,50 +118,17 @@ FocusScope {
     }
   }
 
-  Process {
-    id: writeProc
-    stdout: StdioCollector {
-      onStreamFinished: {
-        // First, whatever happens next: a form closed mid-write must not
-        // leave the whole panel busy.
-        if (root.model) root.model.busy = false
-        var data
-        try { data = JSON.parse(text) } catch (e) { data = null }
-        if (!root.open || root.writingPath !== root.path || root.writingScope !== root.scope) {
-          // The form moved on, but the write still happened -- the adapter
-          // had written the file before this answer was sent. The panel
-          // must not go on showing pre-write state just because nobody is
-          // watching it any more (#43).
-          if (data && data.ok !== false && root.model) root.model.refresh()
-          return
-        }
-        if (data === null) {
-          // No answer is not a yes (#28).
-          root.error = "the adapter gave no answer; nothing is known to be written"
-          return
-        }
-        if (data.ok === false) {
-          // The adapter parse-checks the file and restores its backup, so
-          // a refusal here means nothing was written.
-          root.error = String(data.error || data.message || "that value was refused")
-          return
-        }
-        if (root.model) {
-          if (data && data.message) root.model.message = String(data.message)
-          root.model.refresh()
-        }
-        root.finish()
-      }
-    }
-    // stdout finishing is the only thing the handler above waits on, so an
-    // adapter that never writes -- missing, not executable, killed -- left
-    // model.busy true and every later write refused "still writing" (#43).
-    // Unblocking is not reporting success: the wording keeps #28's rule.
-    onExited: function (code, status) {
-      if (root.model) root.model.busy = false
-      if (root.open && root.writingPath === root.path && root.error === "")
-        root.error = "the adapter ended without answering (exit " + code
-                   + "); nothing is known to be written"
+  // The write itself runs in PkgModel, which the engine owns, so closing the
+  // menu mid-write cannot kill it or leave `busy` set. This only reports the
+  // answer, and only to the form that is still showing that option.
+  Connections {
+    target: root.model
+    ignoreUnknownSignals: true
+    function onOptionWritten(path, scope, ok, error) {
+      if (!root.open || root.writingPath !== path || root.writingScope !== scope
+          || root.path !== path || root.scope !== scope) return
+      if (!ok) { root.error = error; return }
+      root.finish()
     }
   }
 
@@ -529,11 +496,10 @@ FocusScope {
     // A line that is already there is changed in place, atomically; `set`
     // refuses it ("remove it first"), which is what `replace` exists for.
     var verb = (current.state === "set" || current.state === "scaffold") ? "replace" : "set"
-    root.model.busy = true
     root.writingPath = root.path
     root.writingScope = root.scope
-    writeProc.command = [root.model.script, "opt", verb, "--scope", root.scope, root.path, value]
-    writeProc.running = true
+    root.model.writeOption([root.model.script, "opt", verb, "--scope", root.scope, root.path, value],
+                           root.path, root.scope)
   }
 
   function decimalLess(a, b) {
@@ -586,11 +552,10 @@ FocusScope {
     if (!armedRemove) { armRemove(); return true }
     if (root.model.applying) { root.error = "an apply is running \u2014 wait for it to finish"; return true }
     if (root.model.busy) { root.error = "still writing \u2014 try again in a moment"; return true }
-    root.model.busy = true
     root.writingPath = root.path
     root.writingScope = root.scope
-    writeProc.command = [root.model.script, "opt", "remove", "--scope", root.scope, root.path]
-    writeProc.running = true
+    root.model.writeOption([root.model.script, "opt", "remove", "--scope", root.scope, root.path],
+                           root.path, root.scope)
     return true
   }
 

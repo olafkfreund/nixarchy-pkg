@@ -8,14 +8,9 @@ TestCase {
   when: windowShown
   visible: true
 
-  QtObject {
-    id: fakeModel
-    property string script: "nixarchy-pkg"
-    property bool applying: false
-    property bool busy: false
-    property string message: ""
-    function refresh() {}
-  }
+  // The real singleton: the option write lives there, so the form's answers
+  // are the model's. cleanup in init() puts it back between cases.
+  property var fakeModel: PkgModel
 
   // In the TestCase's own window: keyClick sends keys there, not to a Window
   // of the test's making.
@@ -35,11 +30,8 @@ TestCase {
   }
 
   function writeProc() {
-    for (var i = 0; i < form.data.length; i++) {
-      var c = form.data[i]
-      if (c && c.deliver && c.command.length > 2 && c.command[1] === "opt" && c.command[2] !== "describe") return c
-    }
-    return null
+    var w = PkgModel._optWriter
+    return (w.command.length > 2 && w.command[1] === "opt") ? w : null
   }
   function searchProc() {
     for (var i = 0; i < form.data.length; i++) {
@@ -69,17 +61,12 @@ TestCase {
     describeProc().deliver(JSON.stringify(o))
     wait(20)
   }
-  function writeProcess() {
-    for (var i = 0; i < form.data.length; i++) {
-      var c = form.data[i]
-      if (c && c.command !== undefined && c.deliver && c !== describeProc()) return c
-    }
-    return null
-  }
+  function writeProcess() { return PkgModel._optWriter }
 
   function init() {
     fakeModel.applying = false; fakeModel.busy = false
-    var w = writeProc(); if (w) w.command = []
+    PkgModel._optWriter.running = false; PkgModel._optWriter.command = []; PkgModel._optAnswered = true
+    PkgModel.message = ""
 
     if (form.open) form.finish()
     var s = searchProc(); if (s) { s.running = false; s.command = [] }
@@ -307,6 +294,35 @@ TestCase {
     verify(!form.open)
   }
 
+  // The write belongs to the model, so a form that goes away mid-write cannot
+  // kill it or strand `busy` (#3144).
+  Component { id: formC; OptionForm { anchors.fill: parent; model: PkgModel } }
+  function test_unloading_the_form_mid_write_completes_it() {
+    var f = formC.createObject(this)
+    f.begin({ path: "p.q" })
+    var d = null
+    for (var i = 0; i < f.data.length; i++)
+      if (f.data[i] && f.data[i].deliver && String(f.data[i].command).indexOf("describe") >= 0) d = f.data[i]
+    d.deliver(JSON.stringify({ ok: true, path: "p.q", widget: "boolean", default: "false", current: { state: "absent" } }))
+    wait(20)
+    f.boolValue = true; f.touched = true
+    f.commit()
+    compare(PkgModel.busy, true)
+    compare(PkgModel._optWriter.running, true)
+    f.destroy(); wait(20)
+    compare(PkgModel._optWriter.running, true, "the write outlives the form")
+    var done = []
+    PkgModel.optionWritten.connect(function (p, sc, ok, e) { done.push(ok) })
+    PkgModel._optWriter.deliver(JSON.stringify({ ok: true, message: "set p.q" }))
+    compare(PkgModel.busy, false); compare(done, [true]); compare(PkgModel.message, "set p.q")
+  }
+  function test_a_write_that_dies_unloaded_clears_busy() {
+    PkgModel.writeOption(["x", "opt", "set"], "p.q", "system")
+    compare(PkgModel.busy, true)
+    PkgModel._optWriter.finish(1)
+    compare(PkgModel.busy, false)
+  }
+
   function test_untouched_writes_nothing() {
     open({ widget: "boolean", default: "false" })
     keyClick(Qt.Key_Return)
@@ -476,7 +492,7 @@ TestCase {
     wait(350)
     var search = searchProc()
     verify(search !== null)
-    compare(search.command.join(" "), "nixarchy-pkg search --kind pkg --limit 20 -- hel")
+    compare(search.command.slice(1).join(" "), "search --kind pkg --limit 20 -- hel")
     search.deliver(JSON.stringify({ ok: true, rows: [
       { kind: "pkg", name: "hello", summary: "Greeting" },
       { kind: "pkg", name: "python3Packages.hello", summary: "Another greeting" }
@@ -582,10 +598,10 @@ TestCase {
   // #62: scope travels with the row, and defaults to system.
   function test_describe_passes_the_rows_scope() {
     form.begin({ path: "programs.git.enable", scope: "user" })
-    compare(describeProc().command.join(" "), "nixarchy-pkg opt describe --scope user programs.git.enable")
+    compare(describeProc().command.slice(1).join(" "), "opt describe --scope user programs.git.enable")
     form.finish()
     form.begin({ path: "programs.git.enable" })
-    compare(describeProc().command.join(" "), "nixarchy-pkg opt describe --scope system programs.git.enable")
+    compare(describeProc().command.slice(1).join(" "), "opt describe --scope system programs.git.enable")
   }
 
   function test_late_describe_matches_scope_and_path() {

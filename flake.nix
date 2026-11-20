@@ -86,6 +86,7 @@
               and (.kinds | index("menu"))
               and (.entryPoints.menu == "Menu.qml")
               and (.entryPoints.barWidget == "Panel.qml")
+              and (has("keepLoaded") | not)
             ' ${./manifest.json} > /dev/null
             touch "$out"
           '';
