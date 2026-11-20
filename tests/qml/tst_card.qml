@@ -86,6 +86,9 @@ TestCase {
     compare(card.previewText, "Home Manager part is missing")
   }
 
+  // The shell's singleton, the same object the real menu hands its Card.
+  property var realModel: PkgModel
+
   Window {
     id: win
     width: 800; height: 400
@@ -93,7 +96,6 @@ TestCase {
     Card { id: card; anchors.fill: parent; model: fakeModel }
     // The real model, for #75: the fake's rows binding hid the trigger.
     // Hidden, so it never takes the pointer from the hover tests.
-    PkgModel { id: realModel }
     Card { id: realCard; width: 800; height: 400; model: realModel; visible: false }
   }
   Component { id: busyCardComponent; Card {} }

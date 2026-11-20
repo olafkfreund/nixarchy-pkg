@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "nixarchy.pkg",
   "name": "nixarchy packages",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "olafkfreund",
   "license": "MIT",
   "description": "Search nixpkgs, turn apps and services on, set NixOS options, and apply -- from the shell, on the keyboard.",
@@ -18,6 +18,5 @@
     "category": "System",
     "allowMultiple": false,
     "defaultSection": "right"
-  },
-  "keepLoaded": true
+  }
 }

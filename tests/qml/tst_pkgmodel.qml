@@ -11,7 +11,8 @@ TestCase {
   name: "PkgModel"
   when: windowShown
 
-  PkgModel { id: m }
+  // The one singleton the shell owns; cleanup() puts it back between cases.
+  property var m: PkgModel
   property var boundRows: m.rows()
 
   function cleanup() {

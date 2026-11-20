@@ -1,4 +1,7 @@
+pragma Singleton
+
 import QtQuick
+import Quickshell
 import Quickshell.Io
 
 // Everything the card draws, and the only thing that talks to the machine.
@@ -14,10 +17,15 @@ import Quickshell.Io
 // nixarchy writers refuse things -- an unfree package under a policy that
 // forbids it, an id that drifted out of the catalogue -- and a panel that
 // assumed success would draw a lie.
-QtObject {
+//
+// A singleton (qmldir), so the engine owns it and a write, a reindex, a check
+// or an apply keeps running when the menu is unloaded. Menu sets `host` on
+// open; a result that lands while the menu is gone stays here for the next one.
+Singleton {
   id: root
 
-  // The surface that owns this model; it provides close().
+  // The surface showing this model; it provides startNaming(). Set by Menu on
+  // open, null (or a dead reference) while no menu is loaded.
   property var host: null
 
   // The adapter sits next to this file, so the plugin works from wherever
@@ -460,6 +468,58 @@ QtObject {
       if (code !== 0 && root.message === "")
         root.message = "the adapter ended without answering (exit " + code
                      + "); nothing is known to be written"
+    }
+  }
+
+  // A NixOS option write, started by OptionForm. It lives here, not in the
+  // form, so unloading the menu cannot kill it or strand `busy`.
+  signal optionWritten(string path, string scope, bool ok, string error)
+  property string _optPath: ""
+  property string _optScope: ""
+  property bool _optAnswered: true
+
+  function writeOption(command, path, scope) {
+    busy = true
+    _optPath = path; _optScope = scope; _optAnswered = false
+    _optWriter.command = command
+    _optWriter.running = true
+  }
+
+  property Process _optWriter: Process {
+    stdout: StdioCollector {
+      onStreamFinished: {
+        root.busy = false
+        root._optAnswered = true
+        var data
+        try { data = JSON.parse(text) } catch (e) { data = null }
+        if (data === null) {
+          // No answer is not a yes (#28).
+          root.optionWritten(root._optPath, root._optScope, false,
+                             "the adapter gave no answer; nothing is known to be written")
+        } else if (data.ok === false) {
+          // The adapter parse-checks the file and restores its backup, so a
+          // refusal means nothing was written.
+          root.optionWritten(root._optPath, root._optScope, false,
+                             String(data.error || data.message || "that value was refused"))
+        } else {
+          // The file is written whether or not anyone is watching: the panel
+          // must not keep showing pre-write state (#43).
+          if (data.message) root.message = String(data.message)
+          root.refresh()
+          root.optionWritten(root._optPath, root._optScope, true, "")
+        }
+      }
+    }
+    // An adapter that never answers -- missing, not executable, killed --
+    // must not leave busy set (#43). Unblocking is not reporting success.
+    onExited: function (code, status) {
+      root.busy = false
+      if (!root._optAnswered) {
+        root._optAnswered = true
+        root.optionWritten(root._optPath, root._optScope, false,
+                           "the adapter ended without answering (exit " + code
+                           + "); nothing is known to be written")
+      }
     }
   }
 

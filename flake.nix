@@ -46,6 +46,7 @@
               ''
                 mkdir -p "$out/bin"
                 cp ${./manifest.json} "$out/manifest.json"
+                cp ${./qmldir} "$out/qmldir"
                 for f in ${./Menu.qml} ${./Panel.qml} ${./Card.qml} \
                          ${./PkgModel.qml} ${./OptionForm.qml}; do
                   cp "$f" "$out/$(basename "$f" | sed 's/^[a-z0-9]*-//')"
@@ -85,6 +86,7 @@
               and (.kinds | index("menu"))
               and (.entryPoints.menu == "Menu.qml")
               and (.entryPoints.barWidget == "Panel.qml")
+              and (has("keepLoaded") | not)
             ' ${./manifest.json} > /dev/null
             touch "$out"
           '';
@@ -103,6 +105,12 @@
             pkgs.runCommand "nixarchy-pkg-qml-tests" { nativeBuildInputs = [ pkgs.qt6.qtdeclarative ]; }
               ''
                 cp ${./PkgModel.qml} PkgModel.qml
+                # The shipped qmldir lists only the singleton, which hides the
+                # other types from the tests' root files here. Add them to
+                # this copy only.
+                cp ${./qmldir} qmldir; chmod u+w qmldir
+                printf '%s\n' 'Card 1.0 Card.qml' 'OptionForm 1.0 OptionForm.qml' \
+                  'Panel 1.0 Panel.qml' 'Menu 1.0 Menu.qml' >> qmldir
                 cp ${./tests/qml/tst_pkgmodel.qml} tst_pkgmodel.qml
                 cp -r ${./tests/qml/imports} imports
                 # Qt's own modules are not on the path inside the sandbox --

@@ -41,17 +41,19 @@ Item {
 
   // Plugin lifecycle. The host calls open(payloadJson) after
   // `omarchy-shell shell summon nixarchy.pkg ...` and close() when hidden.
-  // Summoned fresh every time. The plugin is keepLoaded, so without this
-  // the menu comes back holding the last search, on the last tab, with the
-  // keyboard still in the search box -- and the first `l` meant to change
-  // tab types an l into a stale query instead.
+  // Summoned fresh every time. The model is a singleton and outlives this
+  // menu, so without this it comes back holding the last search, on the last
+  // tab, with the keyboard still in the search box -- and the first `l` meant
+  // to change tab types an l into a stale query instead. The message is NOT
+  // cleared here: a result that landed while the menu was unloaded is shown
+  // (close() clears it instead).
   function open(payloadJson) {
     root.targetScreen = root.focusedScreen()
     root.keysOpen = false
     search.text = ""
+    pkg.host = root
     pkg.setQuery("")
     pkg.setTab(0)
-    pkg.message = ""
     pkg.detailText = ""
     root.opened = true
     pkg.refresh()
@@ -108,16 +110,22 @@ Item {
     // `omarchy-shell shell hide` -- left it open, so the menu came back
     // deaf to every key with nothing on screen to explain why.
     if (form.open) form.finish()
+    // Cleared on the way out, so what is left is only what arrives after.
+    // Armed state and its message belong to this view and go with it; if
+    // they stayed, the reset in open() would disarm and wipe a late result.
+    pkg.disarm()
+    pkg.message = ""
     root.opened = false
   }
+
+  // Unloaded without close(): drop this view's armed state and message the
+  // same way. Skipped after close(), so a late result is kept.
+  Component.onDestruction: if (root.opened) { pkg.disarm(); pkg.message = "" }
 
   function toggle() {
     if (root.opened) root.close()
     else root.open("{}")
   }
-
-  // A row's file, opened the way the rest of Omarchy opens one.
-  Process { id: editor }
 
   // The terminal apply closes the menu only once it has really started: it
   // may be waiting for a running check to stop.
@@ -126,13 +134,16 @@ Item {
     function onTerminalStarted() { root.close() }
   }
 
-  PkgModel {
-    id: pkg
-    host: root
+  // The model is a singleton the engine owns, so a write or an apply started
+  // here survives this menu being unloaded. Menu only views it.
+  readonly property var pkg: PkgModel
+
+  Connections {
+    target: PkgModel
     // Only fired when naming was abandoned by leaving the tab. ESC goes
     // through the handler below, which puts the flakeref BACK in the field
     // on purpose -- so this cannot be a plain naming-changed watcher (#43).
-    onNamingAbandoned: { search.text = ""; pkg.setQuery("") }
+    function onNamingAbandoned() { search.text = ""; pkg.setQuery("") }
   }
 
   PanelWindow {
@@ -562,8 +573,8 @@ Item {
     }
     if (pkg.queueTab) {
       if (row.path) {
-        editor.command = ["omarchy-launch-editor", String(row.path)]
-        editor.running = true
+        // Detached, so unloading the menu cannot kill the editor launch.
+        Quickshell.execDetached(["omarchy-launch-editor", String(row.path)])
       } else if (row.detail) {
         detailView.contentY = 0
         pkg.detailText = String(row.detail)

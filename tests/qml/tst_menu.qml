@@ -23,13 +23,30 @@ TestCase {
     for (var i = 0; i < k.length; i++) walk(k[i], test, acc)
     return acc
   }
+  // The model is the shell's singleton, so the one test leaves behind is the
+  // next one's starting state: put back what the cases touch.
+  function resetModel() {
+    var m = PkgModel
+    m._writer.running = false; m._writer.command = []
+    m._apply.running = false; m._applyTerm.running = false
+    m._check.running = false; m._reader.running = false
+    m._pending.running = false; m._inspector.running = false
+    m.busy = false; m.applying = false; m.checkRunning = false
+    m.applyLog = []; m.logDetached = false
+    m.armingState = ""; m.armedKind = ""; m.armedApply = ""
+    m.detailText = ""; m.message = ""; m.inspected = null
+    m.pendingDeclare = null; m.checkResult = null
+    if (m.naming) m.cancelNaming()
+    m.setQuery(""); m.setTab(0); m.cursor = 0
+  }
   function fresh() {
+    resetModel()
     if (menu) { panel.contentItem.parent = null; menu.destroy() }
     menu = menuC.createObject(this)
     pkg = null; panel = null
+    pkg = PkgModel
     for (var i = 0; i < menu.data.length; i++) {
       var d = menu.data[i]
-      if (d && d.tabs !== undefined && d.rowAt) pkg = d
       if (d && d.contentItem !== undefined) panel = d
     }
     panel.contentItem.parent = this
@@ -44,6 +61,7 @@ TestCase {
   function cleanup() {
     if (menu) { panel.contentItem.parent = null; menu.destroy() }
     menu = null; pkg = null; panel = null; keys = null; search = null; form = null
+    resetModel()
   }
   function plainFlick() { return walk(keys, function (o) { return String(o).indexOf("QQuickFlickable") === 0 && o.visible && o.parent === keys })[0] }
   function longText() { var a = []; for (var i = 0; i < 120; i++) a.push("line " + i); return a.join("\n") }
@@ -213,11 +231,11 @@ TestCase {
     menu.close()
     verify(!keys.visible); compare(menu.opened, false)
     search.text = "x"; pkg.setQuery("x")
-    menu.keysOpen = true; pkg.detailText = "detail"; pkg.message = "message"
+    menu.keysOpen = true; pkg.detailText = "detail"
     compare(pkg.tab, 0); compare(pkg.query, "x")
     menu.open("{}"); wait(30)
     compare(pkg.tab, 0); compare(search.text, ""); compare(pkg.query, "")
-    compare(menu.keysOpen, false); compare(pkg.detailText, ""); compare(pkg.message, "")
+    compare(menu.keysOpen, false); compare(pkg.detailText, "")
     verify(keys.activeFocus); verify(!search.activeFocus)
 
     menu.close()
@@ -230,6 +248,38 @@ TestCase {
     pkg.setTab(1); compare(pkg.tab, 1)
     menu.open("{}"); wait(30)
     compare(pkg.tab, 0)
+  }
+  function test_s2_message_is_per_view_but_a_late_result_survives_unload() {
+    fresh()
+    pkg.message = "armed text"
+    menu.close(); compare(pkg.message, "", "a message belongs to the view that showed it")
+    pkg.message = "applied"            // arrives while the menu is unloaded
+    menu.open("{}"); wait(30)
+    compare(pkg.message, "applied", "the next open shows the late result")
+  }
+  function test_s3_work_outlives_the_menu() {
+    fresh()
+    pkg.applying = true; pkg._apply.running = true; pkg._writer.running = true
+    panel.contentItem.parent = null; menu.destroy(); menu = null
+    wait(30)
+    compare(PkgModel._apply.running, true); compare(PkgModel._writer.running, true)
+    compare(PkgModel.applying, true)
+  }
+  function test_s4_armed_state_is_dropped_on_close_and_a_late_result_survives() {
+    fresh()
+    pkg.armingState = "armed"; pkg.armedKind = "here"; pkg.armedApply = "here"; pkg.message = "press a again"
+    menu.close()
+    compare(pkg.armingState, ""); compare(pkg.armedApply, ""); compare(pkg.message, "")
+    pkg.message = "applied"
+    menu.open("{}"); wait(30)
+    compare(pkg.message, "applied", "open's reset does not disarm over a late result")
+  }
+  function test_s5_unload_without_close_drops_view_state() {
+    fresh()
+    pkg.armingState = "armed"; pkg.armedKind = "here"; pkg.armedApply = "here"; pkg.message = "press a again"
+    panel.contentItem.parent = null; menu.destroy(); menu = null
+    wait(30)
+    compare(PkgModel.armingState, ""); compare(PkgModel.message, "")
   }
   function test_t_shift_a_starts_terminal_apply() {
     fresh()
