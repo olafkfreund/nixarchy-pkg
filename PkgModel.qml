@@ -1,4 +1,7 @@
+pragma Singleton
+
 import QtQuick
+import Quickshell
 import Quickshell.Io
 
 // Everything the card draws, and the only thing that talks to the machine.
@@ -14,10 +17,15 @@ import Quickshell.Io
 // nixarchy writers refuse things -- an unfree package under a policy that
 // forbids it, an id that drifted out of the catalogue -- and a panel that
 // assumed success would draw a lie.
-QtObject {
+//
+// A singleton (qmldir), so the engine owns it and a write, a reindex, a check
+// or an apply keeps running when the menu is unloaded. Menu sets `host` on
+// open; a result that lands while the menu is gone stays here for the next one.
+Singleton {
   id: root
 
-  // The surface that owns this model; it provides close().
+  // The surface showing this model; it provides startNaming(). Set by Menu on
+  // open, null (or a dead reference) while no menu is loaded.
   property var host: null
 
   // The adapter sits next to this file, so the plugin works from wherever
